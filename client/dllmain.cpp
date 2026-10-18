@@ -977,6 +977,31 @@ static void connectServer()
 	}
 }
 
+static std::string GetEnv(const char *name)
+{
+	char *value = nullptr;
+	size_t length = 0;
+	if (_dupenv_s(&value, &length, name) != 0 || !value)
+		return std::string();
+
+	std::string out(value);
+	free(value);
+	return out;
+}
+
+static std::string SanitizeUsername(const std::string &user)
+{
+	std::string out = std::regex_replace(user, std::regex("[^A-Za-z0-9_]"), "");
+
+	if (out.length() > 16)
+		out.resize(16);
+
+	if (out.length() < 2 || out == "none")
+		out = "Player";
+
+	return out;
+}
+
 static void initScript()
 {
 	fs::path baseDir = getExecutablePath();
@@ -984,7 +1009,13 @@ static void initScript()
 
 	fs::create_directories(woDir);
 
-	wo_native::InitLog((woDir / "WitcherOnline.log").string());
+	// WO_USERNAME / WO_SERVER_IP / WO_SERVER_PORT override config.xml, so several game instances can share one install.
+	const std::string envUsername = GetEnv("WO_USERNAME");
+	const std::string envIp = GetEnv("WO_SERVER_IP");
+	const std::string envPort = GetEnv("WO_SERVER_PORT");
+
+	const std::string logName = envUsername.empty() ? "WitcherOnline.log" : "WitcherOnline_" + SanitizeUsername(envUsername) + ".log";
+	wo_native::InitLog((woDir / logName).string());
 
 	wo_native::DebugLog("startup");
 
@@ -998,19 +1029,20 @@ static void initScript()
 		pugi::xml_node xml = doc.child("Config");
 		if (xml)
 		{
-			std::string user = xml.child("Username").text().as_string();
-			username = std::regex_replace(user, std::regex("[^A-Za-z0-9_]"), "");
-
-			if (username.length() > 16)
-				username.resize(16);
-
+			username = SanitizeUsername(xml.child("Username").text().as_string());
 			ip = xml.child("ServerIP").text().as_string();
 			port = xml.child("Port").text().as_string();
-
-			if (username.length() < 2 || username == "none")
-				username = "Player";
 		}
 	}
+
+	if (!envUsername.empty())
+		username = SanitizeUsername(envUsername);
+	if (!envIp.empty())
+		ip = envIp;
+	if (!envPort.empty())
+		port = envPort;
+
+	wo_native::DebugLog("username=" + username + " server=" + ip + ":" + port);
 
 	wo_native::SetUsername(username);
 

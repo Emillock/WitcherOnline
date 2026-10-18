@@ -14,6 +14,9 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+
+#pragma comment(lib, "version.lib")
 
 namespace wo_native
 {
@@ -73,6 +76,29 @@ namespace wo_native
 	static std::string g_username;
 	static std::atomic<bool> g_connected{false};
 
+	// Remastered (5.x) script strings are UTF-8 bytes; Next-Gen (4.x) strings are UTF-16.
+	static bool g_utf8Strings = false;
+
+	static bool IsRemasteredHost()
+	{
+		wchar_t path[MAX_PATH]{};
+		if (GetModuleFileNameW(nullptr, path, MAX_PATH) == 0)
+			return false;
+
+		DWORD ignored = 0;
+		const DWORD bytes = GetFileVersionInfoSizeW(path, &ignored);
+		if (bytes == 0)
+			return false;
+
+		std::vector<uint8_t> data(bytes);
+		VS_FIXEDFILEINFO *info = nullptr;
+		UINT infoSize = 0;
+		if (!GetFileVersionInfoW(path, 0, bytes, data.data()) || !VerQueryValueW(data.data(), L"\\", reinterpret_cast<LPVOID *>(&info), &infoSize) || !info)
+			return false;
+
+		return HIWORD(info->dwFileVersionMS) >= 5;
+	}
+
 	static bool IsReplaceableInbound(InboundOpcode opcode)
 	{
 		return opcode == InboundOpcode::Move || opcode == InboundOpcode::Update1 || opcode == InboundOpcode::Update2 || opcode == InboundOpcode::Update3 || opcode == InboundOpcode::Update4;
@@ -110,6 +136,14 @@ namespace wo_native
 			return out;
 
 		const uint32_t length = LogicalLength(text);
+
+		if (g_utf8Strings)
+		{
+			const char *bytes = reinterpret_cast<const char *>(text.data);
+			out.assign(bytes, bytes + length);
+			return out;
+		}
+
 		out.reserve(length);
 
 		for (uint32_t i = 0; i < length; ++i)
@@ -120,15 +154,29 @@ namespace wo_native
 		return out;
 	}
 
+	static std::wstring WidenPayload(const std::string &text)
+	{
+		if (!g_utf8Strings || text.empty())
+			return std::wstring(text.begin(), text.end());
+
+		const int chars = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+		if (chars <= 0)
+			return std::wstring(text.begin(), text.end());
+
+		std::wstring wide(static_cast<size_t>(chars), L'\0');
+		MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), chars);
+		return wide;
+	}
+
 	static bool ReturnString(void *frame, void *result, const std::string &text)
 	{
-		const std::wstring wide(text.begin(), text.end());
+		const std::wstring wide = WidenPayload(text);
 		return WNB_ReturnString(frame, result, wide.c_str(), static_cast<uint32_t>(wide.size()));
 	}
 
 	static void ReturnName(void *frame, void *result, const std::string &text)
 	{
-		const std::wstring wide(text.begin(), text.end());
+		const std::wstring wide = WidenPayload(text);
 		WNB_ReturnNameFromString(frame, result, wide.c_str());
 	}
 
@@ -444,6 +492,9 @@ namespace wo_native
 			DebugLog("WitcherNativeBridge API is too old: found " + std::to_string(apiVersion) + ", need " + std::to_string(WNB_API_VERSION));
 			return false;
 		}
+
+		g_utf8Strings = IsRemasteredHost();
+		DebugLog(std::string("script string encoding: ") + (g_utf8Strings ? "UTF-8 (Remastered)" : "UTF-16 (Next-Gen)"));
 
 		struct NativeRegistration
 		{

@@ -18,7 +18,7 @@ struct WNB_String
 	uint32_t padding;
 };
 
-inline constexpr uint32_t WNB_API_VERSION = 1;
+inline constexpr uint32_t WNB_API_VERSION = 2;
 
 extern "C"
 {
@@ -31,8 +31,6 @@ extern "C"
 	WNB_API WNB_Name WNB_ReadNameParameter(void* frame);
 	WNB_API int WNB_ReadStringParameter(void* frame, WNB_String* text);
 
-	// Finish a native callback with one of these helpers.
-	// Each helper finalizes the WitcherScript argument frame exactly once.
 	WNB_API void WNB_ReturnVoid(void* frame);
 	WNB_API void WNB_ReturnInt(void* frame, void* result, int value);
 	WNB_API void WNB_ReturnBool(void* frame, void* result, bool value);
