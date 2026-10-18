@@ -16,7 +16,8 @@ namespace wo_native
 		UsernameTaken = 6,
 		Kicked = 7,
 		Banned = 8,
-		NotWhitelisted = 9
+		NotWhitelisted = 9,
+		Coop = 10
 	};
 
 	struct InboundMessage

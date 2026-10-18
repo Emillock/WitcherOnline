@@ -1,5 +1,7 @@
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class PlayerSession
 {
@@ -14,6 +16,9 @@ public class PlayerSession
     public volatile List<String> update2BFields = Collections.emptyList();
     public volatile List<String> update3Fields = Collections.emptyList();
     public volatile List<String> update4Fields = Collections.emptyList();
+
+    // co-op state by channel (first field): latest value, rebroadcast like the updates above
+    public final Map<String, List<String>> coopFields = new ConcurrentHashMap<>();
 
     public PlayerSession(int playerId, String username, ClientEndpoint endpoint, long lastSeen)
     {

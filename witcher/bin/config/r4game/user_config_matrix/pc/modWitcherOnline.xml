@@ -13,6 +13,7 @@
 				<Entry varId="MPGhosts_HorseAppearance" value="0"/>
 				<Entry varId="MPGhosts_AutoDeclineTrade" value="false"/>
 				<Entry varId="MPGhosts_AutoDeclineGwent" value="false"/>
+				<Entry varId="MPGhosts_LocalEnemiesOnly" value="false"/>
 			</Preset>
 		</PresetsArray>
 		<VisibleVars>
@@ -47,6 +48,7 @@
 			</Var>
 			<Var id="MPGhosts_AutoDeclineTrade" displayName="MPGhosts_AutoDeclineTrade" displayType="TOGGLE"/>
 			<Var id="MPGhosts_AutoDeclineGwent" displayName="MPGhosts_AutoDeclineGwent" displayType="TOGGLE"/>
+			<Var id="MPGhosts_LocalEnemiesOnly" displayName="MPGhosts_LocalEnemiesOnly" displayType="TOGGLE"/>
 		</VisibleVars>
 		
 	</Group>

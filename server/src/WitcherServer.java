@@ -50,6 +50,7 @@ public class WitcherServer
     private static final long PLAYER_TIMEOUT_NANOS = 5_000_000_000L;
     private static final long USERNAME_HOLD_NANOS = 60_000_000_000L;
     private static final long BROADCAST_HEARTBEAT_NANOS = 60_000_000_000L;
+    private static final int MAX_COOP_CHANNELS = 4;
 
     private static final int DEFAULT_PORT = 40000;
     private static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -498,7 +499,8 @@ public class WitcherServer
                 || "UPDATE2A".equals(opcode)
                 || "UPDATE2B".equals(opcode)
                 || "UPDATE3".equals(opcode)
-                || "UPDATE4".equals(opcode);
+                || "UPDATE4".equals(opcode)
+                || "COOP".equals(opcode);
     }
 
     private static boolean isInteger(String value)
@@ -725,6 +727,18 @@ public class WitcherServer
             return;
         }
 
+        if ("COOP".equals(opcode))
+        {
+            String channel = frozenFields.isEmpty() ? "" : frozenFields.get(0);
+
+            if (!channel.isEmpty() && channel.length() <= 8
+                    && (current.coopFields.containsKey(channel) || current.coopFields.size() < MAX_COOP_CHANNELS))
+            {
+                current.coopFields.put(channel, frozenFields);
+            }
+            return;
+        }
+
         if ("UPDATE1A".equals(opcode))
         {
             current.update1AFields = frozenFields;
@@ -815,6 +829,11 @@ public class WitcherServer
                     packetsSentThisTick += broadcastChunk(socket, recipients, session, "UPDATE2B", session.update2BFields);
                     packetsSentThisTick += broadcastChunk(socket, recipients, session, "UPDATE3", session.update3Fields);
                     packetsSentThisTick += broadcastChunk(socket, recipients, session, "UPDATE4", session.update4Fields);
+
+                    for (List<String> coop : session.coopFields.values())
+                    {
+                        packetsSentThisTick += broadcastChunk(socket, recipients, session, "COOP", coop);
+                    }
                 }
 
                 totalPacketsSent.addAndGet(packetsSentThisTick);
@@ -872,7 +891,8 @@ public class WitcherServer
         String packetText = buildTypedPacket(opcode, session.playerId, session.username, fields);
         byte[] data = packetText.getBytes(StandardCharsets.UTF_8);
 
-        if (data.length > 1200)
+        // enemy snapshots are routinely larger; logging them every tick would flood the console
+        if (data.length > 1200 && !"COOP".equals(opcode))
         {
             dbg("Large packet: opcode=%s user=%s bytes=%d\n data=%s", opcode, session.username, data.length, packetText);
         }

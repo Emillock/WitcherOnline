@@ -239,6 +239,16 @@ statemachine class r_MultiplayerClient
 
     private var wo_nativePresence : string;
     private var wo_isTeleporting : bool;
+    private var coopEnemies : r_CoopEnemies;
+
+    public function getCoopEnemies() : r_CoopEnemies
+    {
+        if(!coopEnemies)
+        {
+            coopEnemies = new r_CoopEnemies in this;
+        }
+        return coopEnemies;
+    }
 
     public function WO_SetTeleporting(val : bool)
     {
@@ -5601,6 +5611,10 @@ statemachine class r_MultiplayerClient
                     client.setNotWhitelisted();
                     break;
 
+                case 10:
+                    client.getCoopEnemies().OnMessage();
+                    break;
+
                 default:
                     break;
             }
@@ -7535,6 +7549,8 @@ state WO_Tick in r_MultiplayerClient
                 SleepOneFrame();
                 continue;
             }
+
+            parent.getCoopEnemies().Tick();
 
             if(theGame.GetInGameConfigWrapper().GetVarValue('MPGhosts_Main', 'MPGhosts_HideGhosts'))
             {

@@ -72,6 +72,9 @@ struct RemotePlayerChunks
 
 	int lastPushed1Sequence = 0;
 	int lastPushed2Sequence = 0;
+
+	// last COOP fields per channel, so the server's rebroadcasts of an unchanged state reach the script once
+	std::unordered_map<std::string, std::vector<std::string>> lastCoop;
 };
 
 static std::mutex remoteMu;
@@ -512,6 +515,20 @@ static void SendCombined(const std::string &payload, const char *opcode)
 		SendUdpPacket(BuildPacket(opcode, BuildLocalPacketId(), fields), opcode);
 }
 
+// "coop <channel> <field> ...": space-separated fields (the script encodes spaces inside values)
+static void SendCoop(const std::string &payload)
+{
+	std::vector<std::string> fields;
+	std::istringstream iss(payload.substr(payload.find(' ') + 1));
+	std::string word;
+
+	while (iss >> word)
+		fields.push_back(word);
+
+	if (!fields.empty())
+		SendUdpPacket(BuildPacket("COOP", BuildLocalPacketId(), fields), "COOP");
+}
+
 static std::string PayloadTag(const std::string &payload)
 {
 	const size_t space = payload.find(' ');
@@ -615,6 +632,12 @@ static void ProcessOutbound(const std::string &payload)
 	if (tag == "offline")
 	{
 		ResetTransportWatchdog();
+		return;
+	}
+
+	if (tag == "coop")
+	{
+		SendCoop(payload);
 		return;
 	}
 
@@ -745,7 +768,7 @@ static void HandleServerPacket(const std::string &msg)
 	}
 
 	const std::string &opcode = parts[0];
-	if (opcode != "MOVE" && opcode != "UPDATE1A" && opcode != "UPDATE1B" && opcode != "UPDATE2A" && opcode != "UPDATE2B" && opcode != "UPDATE3" && opcode != "UPDATE4")
+	if (opcode != "MOVE" && opcode != "UPDATE1A" && opcode != "UPDATE1B" && opcode != "UPDATE2A" && opcode != "UPDATE2B" && opcode != "UPDATE3" && opcode != "UPDATE4" && opcode != "COOP")
 	{
 		return;
 	}
@@ -768,6 +791,30 @@ static void HandleServerPacket(const std::string &msg)
 	}
 
 	std::vector<std::string> fields(parts.begin() + 3, parts.end());
+
+	if (opcode == "COOP")
+	{
+		if (fields.empty() || fields[0].empty())
+			return;
+
+		{
+			std::lock_guard<std::mutex> lock(remoteMu);
+			auto &rp = remotePlayers[playerId];
+			rp.username = playerUsername;
+			auto &last = rp.lastCoop[fields[0]];
+			if (fields == last)
+				return;
+			last = fields;
+		}
+
+		wo_native::InboundMessage message;
+		message.opcode = wo_native::InboundOpcode::Coop;
+		message.playerId = playerId;
+		message.sender = playerUsername;
+		message.fields = std::move(fields);
+		wo_native::PushInbound(std::move(message));
+		return;
+	}
 
 	if (opcode == "MOVE")
 	{
