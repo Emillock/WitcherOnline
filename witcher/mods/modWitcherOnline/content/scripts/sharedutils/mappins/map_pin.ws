@@ -70,7 +70,7 @@ class MP_SU_MapPin {
    * - kaer_morhen
    * - bob
    */
-  var region: EAreaName;
+  var region: int; // old EAreaName code, see areaCompat.ws
 
 ////////////////////////////////////////////////////////////////////////////////
 //                               Mini Map Options                             //
@@ -104,7 +104,7 @@ class MP_SU_MapPin {
     _type: String,
     _filtered_type: string,
     _radius: float,
-    _region: EAreaName,
+    _region: int,
     _appears_on_minimap: bool,
     _pointed_by_arrow: bool,
     _highlighted: bool,

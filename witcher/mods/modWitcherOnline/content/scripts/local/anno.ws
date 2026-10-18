@@ -78,7 +78,7 @@ timer function r_showJoinMessage(dt : float, id : int)
 
         total += 1;
 
-        regionName = theGame.r_getMultiplayerClient().normalizeRegion(AreaTypeToName(players[i].area));
+        regionName = theGame.r_getMultiplayerClient().normalizeRegion(WO_AreaCodeToRegion(players[i].area));
 
         if(regionName == "no_mans_land")
         {
@@ -108,7 +108,7 @@ timer function r_showJoinMessage(dt : float, id : int)
 
     total += 1;
 
-    currentRegion = theGame.r_getMultiplayerClient().normalizeRegion(AreaTypeToName(theGame.GetCommonMapManager().GetCurrentArea()));
+    currentRegion = theGame.r_getMultiplayerClient().normalizeRegion(WO_AreaToRegion(theGame.GetCommonMapManager().GetCurrentArea()));
 
     if(currentRegion == "no_mans_land")
     {
@@ -954,7 +954,7 @@ var wo_crownsAmount : int;
 var wo_betAmount : int;
 
 @addMethod(CInputManager)
-function IgnoreGameInput( actionName : name, ignore : bool );
+import function IgnoreGameInput( actionName : name, ignore : bool );
 
 @wrapMethod(CExplorationStatePushed)
 function StateWantsToEnter() : bool 
@@ -976,23 +976,6 @@ function StateWantsToEnter() : bool
 	}
 
     return wrappedMethod();
-}
-
-@wrapMethod(CR4GwintGameMenu)
-function HandleOutgoingGwentAction( message : string )
-{
-    wrappedMethod(message);
-    theGame.r_getMultiplayerClient().setLastGwentAction(message);
-}
-
-@wrapMethod(CR4GwintGameMenu)
-function NotifyGwentMatchEnded( wonMatch : bool )
-{
-    wrappedMethod( wonMatch );
-    if ( theGame.r_getMultiplayerClient().getInGwentGame() )
-    {
-        theGame.r_getMultiplayerClient().onGwentGameEnd( wonMatch );
-    }
 }
 
 @wrapMethod(CR4HudModuleDialog)
@@ -1293,24 +1276,14 @@ public function WO_RefreshCompanionHud(party : array<r_RemotePlayer>)
 @wrapMethod(ChillOut)
 function InitGroups() 
 {
-    var area: EAreaName;
+    var area: name;
     wrappedMethod();
 
-    area = CO_CurrentArea();
+    area = theGame.GetCommonMapManager().GetCurrentArea();
 
-    if (area == AN_NMLandNovigrad) {
-        
-    } else if (area == AN_Skellige_ArdSkellig) {
-
-    } else if (area == AN_Kaer_Morhen) {
-
-    } else if (area == AN_Prologue_Village) {
+    if (area == 'AN_Prologue_Village' || area == 'AN_Prologue_Village_Winter') {
         WO_WhiteOrchard(this, m_groups);
-    } else if (area == AN_Prologue_Village_Winter) {
-        WO_WhiteOrchard(this, m_groups);
-    } else if (area == AN_Wyzima) {
-
-    } else if (area == (int) AN_Dlc_Bob) {
+    } else if (area == 'AN_Bob') {
         WO_Bob(this, m_groups);
     }
 }

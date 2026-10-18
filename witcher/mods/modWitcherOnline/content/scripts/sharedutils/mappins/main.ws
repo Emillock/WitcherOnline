@@ -1,23 +1,21 @@
 
 
-function MP_SU_updateCustomMapPins(out flash_array: CScriptedFlashArray, value_storage: CScriptedFlashValueStorage, shown_area: EAreaName) {
+function MP_SU_updateCustomMapPins(out flash_array: CScriptedFlashArray, value_storage: CScriptedFlashValueStorage, shown_area: name) {
   var flash_object: CScriptedFlashObject;
   var custom_pins: array<MP_SU_MapPin>;
   var current_pin: MP_SU_MapPin;
   var shown_region: String;
-  var journal_area: int;
   var i: int;
 
   custom_pins = MP_SUMP_getCustomPins();
 
-  shown_region = theGame.r_getMultiplayerClient().normalizeRegion(AreaTypeToName(shown_area));
-  journal_area = theGame.GetCommonMapManager().GetCurrentJournalArea();
+  shown_region = theGame.r_getMultiplayerClient().normalizeRegion(WO_AreaToRegion(shown_area));
 
   for (i = 0; i < custom_pins.Size(); i += 1) {
     current_pin = custom_pins[i];
 
     // the player is not in the right region or right map view, we skip the pin.
-    if (theGame.r_getMultiplayerClient().normalizeRegion(AreaTypeToName(current_pin.region)) != shown_region) {
+    if (theGame.r_getMultiplayerClient().normalizeRegion(WO_AreaCodeToRegion(current_pin.region)) != shown_region) {
       continue;
     }
 
@@ -34,7 +32,7 @@ function MP_SU_updateCustomMapPins(out flash_array: CScriptedFlashArray, value_s
     flash_object.SetMemberFlashUInt("id", NameToFlashUInt(current_pin.pin_tag));
 
     //Constants - Should not be modified from these values for our purposes.
-    flash_object.SetMemberFlashInt("journalAreaId", journal_area);
+    flash_object.SetMemberFlashUInt("journalAreaId", NameToFlashUInt(theGame.GetCommonMapManager().GetJournalAreaByPosition(shown_area, current_pin.position)));
     flash_object.SetMemberFlashNumber("rotation", current_pin.rotation);
     flash_object.SetMemberFlashBool("isPlayer", true);
     flash_object.SetMemberFlashBool("isUserPin", false);

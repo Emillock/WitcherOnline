@@ -39,7 +39,7 @@ statemachine class r_RemotePlayer
     public var yaw     : float;
     public var heading     : float;
     public var speed     : float;
-    public var area     : EAreaName;
+    public var area     : int; // old EAreaName code, see areaCompat.ws
     public var ghost     : CActor;
     public var inGame : bool;
     public var heldItem : string;
@@ -360,7 +360,9 @@ statemachine class r_RemotePlayer
         var manager : CR4GwintManager;
         manager = theGame.GetGwintManager();
 
+#ifdef WO_GWENT_PVP
         gwentGame.faction = manager.leaderIndexToFaction(val);
+#endif
     }
 
     public function getGwentGame() : r_GwentGame

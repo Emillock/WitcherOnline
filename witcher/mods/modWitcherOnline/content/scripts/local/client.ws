@@ -218,7 +218,7 @@ statemachine class r_MultiplayerClient
     private var partyTargetMissingSince : float;
     private var partyTargetWasMissing : bool;
     private var partyTargetLastSeenAt : float;
-    private var partyTargetLastKnownArea : EAreaName;
+    private var partyTargetLastKnownArea : int;
     private var partyTargetLastKnownPos : Vector;
 
     default partyTargetMissingSince = -1;
@@ -1509,14 +1509,14 @@ statemachine class r_MultiplayerClient
 
     private function checkPartyRegions(globalPlayer : r_RemotePlayer) : bool
     {
-        var currentArea : EAreaName;
+        var currentArea : int;
 
         if(!globalPlayer)
         {
             return false;
         }
 
-        currentArea = theGame.GetCommonMapManager().GetCurrentArea();
+        currentArea = WO_CurrentAreaCode();
 
         if(globalPlayer.area == currentArea)
         {
@@ -1729,6 +1729,7 @@ statemachine class r_MultiplayerClient
         gwentGame = opponent.getGwentGame();
         deck = gwentGame.deck;
 
+#ifdef WO_GWENT_PVP
         gwintManager = theGame.GetGwintManager();
         gwintManager.SetEnemyDeckFromMultiplayer(deck);
         gwintManager.multiplayerSeed = seed;
@@ -1738,6 +1739,11 @@ statemachine class r_MultiplayerClient
         gwintManager.testMatch = true;
 
         theGame.RequestMenu('GwintGame');
+#else
+        // Remastered (5.x) reworked Gwent; the multiplayer Gwent board is not ported yet.
+        GetWitcherPlayer().DisplayHudMessage("Gwent duels are not available on The Witcher 3 Remastered yet.");
+        onGwentGameEnd(false);
+#endif
     }
 
     public function gwentGameLoop()
@@ -1750,7 +1756,9 @@ statemachine class r_MultiplayerClient
             menu = (CR4GwintGameMenu)theGame.GetGuiManager().GetRootMenu();
             if(menu)
             {
+#ifdef WO_GWENT_PVP
                 menu.ReceiveRemoteGwentAction(action);
+#endif
             }
         }
     }
@@ -1840,7 +1848,9 @@ statemachine class r_MultiplayerClient
         gwentLastCompleted = theGame.GetEngineTimeAsSeconds();
         activeGwentBet = 0;
         activeGwentSeed = 0;
+#ifdef WO_GWENT_PVP
         theGame.GetGwintManager().ClearMultiplayerState();
+#endif
     }
 
     public function settleGwentBet(localPlayerWon : bool)
@@ -4061,7 +4071,7 @@ statemachine class r_MultiplayerClient
         if(!p || p.id != id || movementSequence <= p.lastMovementSequence)
             return;
 
-        currentArea = theGame.GetCommonMapManager().GetCurrentArea();
+        currentArea = WO_CurrentAreaCode();
         if(currentArea != area)
         {
             disconnectByServerId(serverPlayerId);
@@ -4220,7 +4230,7 @@ statemachine class r_MultiplayerClient
             }
         }
 
-        currentArea = theGame.GetCommonMapManager().GetCurrentArea();
+        currentArea = WO_CurrentAreaCode();
 
         if(currentArea != gp.area)
         {
@@ -4514,10 +4524,12 @@ statemachine class r_MultiplayerClient
             gwentCards.PushBack(cardValue);
         }
 
+#ifdef WO_GWENT_PVP
         deck.cardIndices = gwentCards;
         deck.leaderIndex = leaderIndex;
-        deck.unlocked = true;
         deck.specialCard = -1;
+#endif
+        deck.unlocked = true;
 
         p.setDeck(deck);
         p.setFaction(leaderIndex);
@@ -6303,6 +6315,7 @@ statemachine class r_MultiplayerClient
         list += selectedFaction;
         list += " ";
 
+#ifdef WO_GWENT_PVP
         list += deck.leaderIndex;
         list += " ";
 
@@ -6311,6 +6324,10 @@ statemachine class r_MultiplayerClient
             list += deck.cardIndices[i];
             list += " ";
         }
+#else
+        // keep the packet layout: leader index placeholder, no cards
+        list += "0 ";
+#endif
 
         WO_Send("wo3 "+wo_getMovementData()+list);
     }
@@ -6530,7 +6547,7 @@ statemachine class r_MultiplayerClient
             list += thePlayer.GetMovingAgentComponent().GetRelativeMoveSpeed();
 
         list += " ";
-        list += theGame.GetCommonMapManager().GetCurrentArea();
+        list += WO_CurrentAreaCode();
         list += " ";
         return list;
     }
@@ -7212,7 +7229,7 @@ function mpghosts_teleport(user :string)
         if(players[i].username == user)
         {
             theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114210) + " " + user);
-            if(players[i].area == theGame.GetCommonMapManager().GetCurrentArea())
+            if(players[i].area == WO_CurrentAreaCode())
             {
                 thePlayer.Teleport(players[i].pos);
             }
@@ -7221,7 +7238,7 @@ function mpghosts_teleport(user :string)
                 theGame.r_getMultiplayerClient().WO_SetTeleporting(true);
                 theGame.r_getMultiplayerClient().WO_PublishPresence("Teleporting", true);
 
-                theGame.ScheduleWorldChangeToPosition( theGame.GetCommonMapManager().GetWorldPathFromAreaType(players[i].area), players[i].pos, thePlayer.GetWorldRotation() );
+                theGame.ScheduleWorldChangeToPosition( theGame.GetCommonMapManager().GetWorldPathFromAreaType(WO_AreaFromCode(players[i].area)), players[i].pos, thePlayer.GetWorldRotation() );
             }
             return;
         }
@@ -7340,7 +7357,7 @@ exec function list()
 
         finalTotal += 1;
 
-        regionName = theGame.r_getMultiplayerClient().normalizeRegion(AreaTypeToName(players[i].area));
+        regionName = theGame.r_getMultiplayerClient().normalizeRegion(WO_AreaCodeToRegion(players[i].area));
 
         if(regionName == "no_mans_land")
         {
@@ -7381,7 +7398,7 @@ exec function list()
     finalTotal += 1;
     localFinalTotal += 1;
 
-    currentRegion = theGame.r_getMultiplayerClient().normalizeRegion(AreaTypeToName(theGame.GetCommonMapManager().GetCurrentArea()));
+    currentRegion = theGame.r_getMultiplayerClient().normalizeRegion(WO_AreaToRegion(theGame.GetCommonMapManager().GetCurrentArea()));
 
     if(currentRegion == "no_mans_land")
     {
