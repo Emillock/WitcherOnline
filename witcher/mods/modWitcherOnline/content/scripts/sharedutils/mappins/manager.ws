@@ -13,16 +13,16 @@ function hm_fromMapPin(pin : MP_SU_MapPin) : MP_SU_HashMapValueMapPin
     return value;
 }
 
-function hm_getMapPin(map : MP_SU_HashMap, key : int) : MP_SU_MapPin
+function hm_getMapPin(hashMap : MP_SU_HashMap, key : int) : MP_SU_MapPin
 {
     var wrapped : MP_SU_HashMapValueMapPin;
 
-    if(!map)
+    if(!hashMap)
     {
         return NULL;
     }
 
-    wrapped = (MP_SU_HashMapValueMapPin)map.get(key);
+    wrapped = (MP_SU_HashMapValueMapPin)hashMap.get(key);
 
     if(wrapped)
     {

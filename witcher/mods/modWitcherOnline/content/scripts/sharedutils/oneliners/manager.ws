@@ -23,10 +23,10 @@ function hm_fromOneliner(oneliner: MP_SU_Oneliner): MP_SU_HashMapValueOneliner {
   return value;
 }
 
-function hm_getOneliner(map: MP_SU_HashMap, key: int): MP_SU_Oneliner {
+function hm_getOneliner(hashMap: MP_SU_HashMap, key: int): MP_SU_Oneliner {
   var wrapped: MP_SU_HashMapValueOneliner;
 
-  wrapped = (MP_SU_HashMapValueOneliner)map.get(key);
+  wrapped = (MP_SU_HashMapValueOneliner)hashMap.get(key);
 
   if(wrapped) {
     return wrapped.value;

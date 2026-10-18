@@ -254,14 +254,14 @@ function hm_fromRemotePlayer(player: r_RemotePlayer): MP_SU_HashMapValueRemotePl
   return value;
 }
 
-function hm_insertRemotePlayer(map: MP_SU_HashMap, key: int, player: r_RemotePlayer) {
-  map.insert(key, hm_fromRemotePlayer(player));
+function hm_insertRemotePlayer(hashMap: MP_SU_HashMap, key: int, player: r_RemotePlayer) {
+  hashMap.insert(key, hm_fromRemotePlayer(player));
 }
 
-function hm_getRemotePlayer(map: MP_SU_HashMap, key: int): r_RemotePlayer {
+function hm_getRemotePlayer(hashMap: MP_SU_HashMap, key: int): r_RemotePlayer {
   var wrapped: MP_SU_HashMapValueRemotePlayer;
 
-  wrapped = (MP_SU_HashMapValueRemotePlayer)map.get(key);
+  wrapped = (MP_SU_HashMapValueRemotePlayer)hashMap.get(key);
 
   if (wrapped) {
     return wrapped.value;
@@ -270,8 +270,8 @@ function hm_getRemotePlayer(map: MP_SU_HashMap, key: int): r_RemotePlayer {
   return NULL;
 }
 
-function hm_removeRemotePlayer(map: MP_SU_HashMap, key: int): bool {
-  return map.remove(key);
+function hm_removeRemotePlayer(hashMap: MP_SU_HashMap, key: int): bool {
+  return hashMap.remove(key);
 }
 
 function MP_SU_getNextPrimeNumber(number: int): int {
