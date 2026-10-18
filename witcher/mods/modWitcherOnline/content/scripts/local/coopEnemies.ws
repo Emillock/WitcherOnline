@@ -76,6 +76,7 @@ class r_CoopEnemies
     public var twinsBound : int;
     public var spawnFailures : int;
     public var lastError : string;
+    public var lastHitFrac : float;
 
     default lastHostSend = -999;
     default lastSnapshotAt = -999;
@@ -422,6 +423,7 @@ class r_CoopEnemies
         var e : r_CoopHostEnemy;
         var action : W3DamageAction;
         var attacker : CActor;
+        var difficultyMult : float;
 
         e = FindHostEnemy(netId);
         if(!e || !e.npc || !e.npc.IsAlive() || frac <= 0)
@@ -430,9 +432,22 @@ class r_CoopEnemies
         }
 
         attacker = GhostOf(sender);
+
+        // the damage processor scales an NPC attacker's damage by the NPC difficulty multiplier (3.3x was
+        // measured); the member's game already applied its own stats, so divide that back out
+        difficultyMult = 1;
+        if(attacker && !attacker.IgnoresDifficultySettings())
+        {
+            difficultyMult = CalculateAttributeValue(attacker.GetAttributeValue(theGame.params.DIFFICULTY_DMG_MULTIPLIER));
+            if(difficultyMult <= 0)
+            {
+                difficultyMult = 1;
+            }
+        }
+
         action = new W3DamageAction in theGame.damageMgr;
         action.Initialize(attacker, e.npc, theGame, "W3Coop", EHRT_Light, CPS_Undefined, false, false, false, false);
-        action.AddDamage(theGame.params.DAMAGE_NAME_DIRECT, MinF(frac, 1) * e.npc.GetMaxHealth());
+        action.AddDamage(theGame.params.DAMAGE_NAME_DIRECT, MinF(frac, 1) * e.npc.GetMaxHealth() / difficultyMult);
         action.SetCannotReturnDamage(true);
         theGame.damageMgr.ProcessAction(action);
         delete action;
@@ -936,7 +951,11 @@ class r_CoopEnemies
 
     public function IsPuppet(npc : CNewNPC) : bool
     {
-        return FindPuppetByNpc(npc) != NULL;
+        if(FindPuppetByNpc(npc))
+        {
+            return true;
+        }
+        return false;
     }
 
     // damage the local player dealt to a puppet (after this game's stats, resistances and crits) goes to the
@@ -971,6 +990,7 @@ class r_CoopEnemies
         hit.seq = nextHitSeq;
         hit.netId = p.netId;
         hit.frac = MinF(1, dmg / maxHp);
+        lastHitFrac = hit.frac;
         nextHitSeq += 1;
         pendingHits.PushBack(hit);
         if(pendingHits.Size() > 32)
