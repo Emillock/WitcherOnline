@@ -1,6 +1,7 @@
 // Shared enemies (true co-op, milestone 1). The party leader's game owns the hostile NPCs near the party and
 // broadcasts them ("en" channel); members mirror them as puppets (AI off, moved and healed from the leader's
-// state) and send their hits to the leader ("hit" channel), who applies them to the real NPC.
+// state) and send their hits to the leader ("hit" channel), who applies them to the real NPC. The leader's
+// monsters attack members' ghosts; those hits go to the member ("hurt" channel) and land on their Geralt.
 // Unmatched local hostiles near a member are hidden while they mirror the leader's world.
 
 class r_CoopHostEnemy
@@ -37,6 +38,17 @@ class r_CoopHit
     public var frac : float;
 }
 
+// a leader monster's hit on a member's ghost: raw damage before the ghost's own stats
+class r_CoopHurt
+{
+    public var user : string;
+    public var seq : int;
+    public var netId : int;
+    public var hitReaction : int;
+    public var types : array<name>;
+    public var values : array<float>;
+}
+
 class r_CoopAck
 {
     public var user : string;
@@ -53,6 +65,11 @@ class r_CoopEnemies
 
     private var hostEnemies : array<r_CoopHostEnemy>;
     private var acks : array<r_CoopAck>;
+    private var hurts : array<r_CoopHurt>;
+    private var nextHurtSeq : int;
+    private var lastHurtSend : float;
+    private var lastHurtSentCount : int;
+    private var armedGhosts : array<CActor>;
     private var wasHost : bool;
     private var lastHostSend : float;
     private var hostSeq : int;
@@ -65,6 +82,9 @@ class r_CoopEnemies
     private var pendingHits : array<r_CoopHit>;
     private var lastHitSend : float;
     private var lastHitSentCount : int;
+    private var hurtAck : int;
+    private var lastSentHurtAck : int;
+    private var leaderListsMyHurts : bool;
 
     // set while this game changes a puppet itself, so the damage hook lets it through
     public var applyingHostState : bool;
@@ -77,10 +97,16 @@ class r_CoopEnemies
     public var spawnFailures : int;
     public var lastError : string;
     public var lastHitFrac : float;
+    public var hurtsCaptured : int;
+    public var ghostHitsSeen : int;
+    public var hurtsApplied : int;
+    public var hurtsDodged : int;
+    public var hurtDamageTaken : float;
 
     default lastHostSend = -999;
     default lastSnapshotAt = -999;
     default lastHitSend = -999;
+    default lastHurtSend = -999;
 
     private function EnsureIds()
     {
@@ -90,6 +116,7 @@ class r_CoopEnemies
             session = RandRange(1000000000, 1);
             nextNetId = 1;
             nextHitSeq = 1;
+            nextHurtSeq = 1;
         }
     }
 
@@ -151,12 +178,16 @@ class r_CoopEnemies
                 HostSend();
                 lastHostSend = now;
             }
+            SendHurts(now);
             wasHost = true;
         }
         else if(wasHost)
         {
             hostEnemies.Clear();
+            hurts.Clear();
+            DisarmGhosts();
             HostSend();
+            SendHurts(now);
             wasHost = false;
         }
 
@@ -168,6 +199,7 @@ class r_CoopEnemies
                 pendingHits.Clear();
                 leaderName = client.getJoinedParty();
                 leaderEpoch = 0;
+                hurtAck = 0;
             }
 
             // the leader's snapshots also stop while its game sits in a menu
@@ -195,6 +227,7 @@ class r_CoopEnemies
         var candidates : array<CActor>;
         var entities : array<CGameplayEntity>;
         var globals : array<r_RemotePlayer>;
+        var attitudeRef : CGameplayEntity;
         var npc : CNewNPC;
         var e : r_CoopHostEnemy;
         var me : string;
@@ -213,8 +246,14 @@ class r_CoopEnemies
                 continue;
             }
 
+            // hostile to the member's ghost (armed below) as well as to this Geralt
+            attitudeRef = GhostOf(globals[i].username);
+            if(!attitudeRef)
+            {
+                attitudeRef = thePlayer;
+            }
             entities.Clear();
-            FindGameplayEntitiesInSphere(entities, globals[i].pos, 40, 48, '', FLAG_Attitude_Hostile + FLAG_OnlyAliveActors, thePlayer);
+            FindGameplayEntitiesInSphere(entities, globals[i].pos, 40, 48, '', FLAG_Attitude_Hostile + FLAG_OnlyAliveActors, attitudeRef);
             for(j = 0; j < entities.Size(); j += 1)
             {
                 if((CActor)entities[j] && !candidates.Contains((CActor)entities[j]))
@@ -248,6 +287,8 @@ class r_CoopEnemies
             }
             e.lastSeenAt = now;
         }
+
+        ArmGhosts(client);
 
         // keep dead enemies for a few seconds so members see the death; drop ones out of range
         for(i = hostEnemies.Size() - 1; i >= 0; i -= 1)
@@ -390,7 +431,8 @@ class r_CoopEnemies
         return ack;
     }
 
-    // "hit leader epoch session count {seq netId fraction}": all hits the member has not seen acknowledged yet
+    // "hit leader epoch session hurtAck count {seq netId fraction}": all hits the member has not seen
+    // acknowledged yet, and the last hurt it applied
     private function OnHits(sender : string, count : int)
     {
         var client : r_MultiplayerClient;
@@ -398,14 +440,15 @@ class r_CoopEnemies
         var n, i, idx, seq : int;
 
         client = theGame.r_getMultiplayerClient();
-        if(count < 5 || WO_Str(1) != client.getUsername() || StringToInt(WO_Str(2), 0) != epoch || !IsMyPartyMember(sender))
+        if(count < 6 || WO_Str(1) != client.getUsername() || StringToInt(WO_Str(2), 0) != epoch || !IsMyPartyMember(sender))
         {
             return;
         }
 
+        PruneHurts(sender, StringToInt(WO_Str(4), 0));
         ack = FindAck(sender, StringToInt(WO_Str(3), 0));
-        n = StringToInt(WO_Str(4), 0);
-        idx = 5;
+        n = StringToInt(WO_Str(5), 0);
+        idx = 6;
         for(i = 0; i < n && idx + 2 < count; i += 1)
         {
             seq = StringToInt(WO_Str(idx), 0);
@@ -488,6 +531,196 @@ class r_CoopEnemies
         return NULL;
     }
 
+    // Party members' ghosts join the player's attitude group and become gameplay-visible, so this game's
+    // monsters attack them as they would the leader (they stay invulnerable). Undone when they leave.
+    private function ArmGhosts(client : r_MultiplayerClient)
+    {
+        var players : array<r_RemotePlayer>;
+        var wanted : array<CActor>;
+        var ghost : CActor;
+        var i : int;
+
+        players = client.getPlayers();
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(players[i] && players[i].ghost && IsMyPartyMember(players[i].username))
+            {
+                wanted.PushBack(players[i].ghost);
+            }
+        }
+
+        for(i = armedGhosts.Size() - 1; i >= 0; i -= 1)
+        {
+            if(!wanted.Contains(armedGhosts[i]))
+            {
+                Disarm(armedGhosts[i]);
+                armedGhosts.Erase(i);
+            }
+        }
+
+        for(i = 0; i < wanted.Size(); i += 1)
+        {
+            ghost = wanted[i];
+            if(!armedGhosts.Contains(ghost))
+            {
+                ghost.SetTemporaryAttitudeGroup(thePlayer.GetAttitudeGroup(), AGP_Default);
+                armedGhosts.PushBack(ghost);
+            }
+            // Witcher Online hides ghosts from gameplay again in some states (e.g. mounting)
+            ghost.SetGameplayVisibility(true);
+        }
+    }
+
+    private function Disarm(ghost : CActor)
+    {
+        if(ghost)
+        {
+            ghost.SetTemporaryAttitudeGroup('friendly_to_player', AGP_Default);
+            ghost.SetGameplayVisibility(false);
+        }
+    }
+
+    private function DisarmGhosts()
+    {
+        var i : int;
+
+        for(i = 0; i < armedGhosts.Size(); i += 1)
+        {
+            Disarm(armedGhosts[i]);
+        }
+        armedGhosts.Clear();
+    }
+
+    private function GhostOwner(ghost : CActor) : string
+    {
+        var players : array<r_RemotePlayer>;
+        var i : int;
+
+        players = theGame.r_getMultiplayerClient().getPlayers();
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(players[i] && players[i].ghost == ghost && IsMyPartyMember(players[i].username))
+            {
+                return players[i].username;
+            }
+        }
+        return "";
+    }
+
+    // Called for every damage action before it is processed; true drops it. On the leader, a shared
+    // monster's hit on a member's ghost is recorded for that member, and ghosts' own AI deals no damage
+    // (members' hits arrive as claims instead).
+    public function OnBeforeDamage(act : W3DamageAction) : bool
+    {
+        var attacker, victim : CActor;
+        var e : r_CoopHostEnemy;
+        var user : string;
+
+        if(!wasHost)
+        {
+            return false;
+        }
+
+        attacker = (CActor)act.attacker;
+        victim = (CActor)act.victim;
+        if(attacker && attacker.HasTag('MPEntity') && act.GetBuffSourceName() != "W3Coop")
+        {
+            return true;
+        }
+
+        if(victim && victim.HasTag('MPEntity') && !act.IsDoTDamage())
+        {
+            ghostHitsSeen += 1;
+            e = FindHostEnemyByNpc((CNewNPC)attacker);
+            user = GhostOwner(victim);
+            if(e && user != "")
+            {
+                QueueHurt(user, e.netId, act);
+            }
+        }
+        return false;
+    }
+
+    private function QueueHurt(user : string, netId : int, act : W3DamageAction)
+    {
+        var dts : array<SRawDamage>;
+        var h : r_CoopHurt;
+        var i : int;
+
+        h = new r_CoopHurt in this;
+        act.GetDTs(dts);
+        for(i = 0; i < dts.Size(); i += 1)
+        {
+            if(dts[i].dmgVal > 0)
+            {
+                h.types.PushBack(dts[i].dmgType);
+                h.values.PushBack(dts[i].dmgVal);
+            }
+        }
+        if(h.types.Size() == 0)
+        {
+            return;
+        }
+
+        h.user = user;
+        h.seq = nextHurtSeq;
+        h.netId = netId;
+        h.hitReaction = (int)act.GetHitReactionType();
+        nextHurtSeq += 1;
+        hurts.PushBack(h);
+        if(hurts.Size() > 16)
+        {
+            hurts.Erase(0);
+        }
+        hurtsCaptured += 1;
+        lastHurtSend = -999;
+    }
+
+    private function PruneHurts(user : string, lastSeq : int)
+    {
+        var i : int;
+
+        for(i = hurts.Size() - 1; i >= 0; i -= 1)
+        {
+            if(hurts[i].user == user && hurts[i].seq <= lastSeq)
+            {
+                hurts.Erase(i);
+            }
+        }
+    }
+
+    // "hurt epoch count {user seq netId hitReaction types {type value}}": every hurt not yet acknowledged
+    private function SendHurts(now : float)
+    {
+        var text : string;
+        var h : r_CoopHurt;
+        var i, j : int;
+
+        if((hurts.Size() == 0 && lastHurtSentCount == 0) || now - lastHurtSend < 0.1)
+        {
+            return;
+        }
+
+        text = "coop hurt " + epoch + " " + hurts.Size();
+        for(i = 0; i < hurts.Size(); i += 1)
+        {
+            h = hurts[i];
+            text += " " + h.user + " " + h.seq + " " + h.netId + " " + h.hitReaction + " " + h.types.Size();
+            for(j = 0; j < h.types.Size(); j += 1)
+            {
+                text += " " + NameToString(h.types[j]) + " " + FloatToStringPrec(h.values[j], 2);
+            }
+        }
+        WO_Send(text);
+        lastHurtSend = now;
+        lastHurtSentCount = hurts.Size();
+    }
+
+    public function PendingHurtCount() : int
+    {
+        return hurts.Size();
+    }
+
     // ---------------------------------------------------------------- member
 
     // inbound COOP message from the client's pump; fields are read with WO_Str
@@ -513,6 +746,10 @@ class r_CoopEnemies
         else if(WO_Str(0) == "hit")
         {
             OnHits(sender, count);
+        }
+        else if(WO_Str(0) == "hurt")
+        {
+            OnHurts(sender, count);
         }
     }
 
@@ -543,6 +780,7 @@ class r_CoopEnemies
             // the leader restarted: its enemy ids and hit acknowledgements start over
             ReleaseAll();
             pendingHits.Clear();
+            hurtAck = 0;
             leaderEpoch = snapshotEpoch;
         }
         lastSnapshotAt = theGame.GetEngineTimeAsSeconds();
@@ -600,6 +838,81 @@ class r_CoopEnemies
         }
 
         SuppressUnmatched();
+    }
+
+    private function OnHurts(sender : string, count : int)
+    {
+        var me, user : string;
+        var listed : bool;
+        var n, i, idx, seq, netId, hitReaction, typeCount : int;
+
+        if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 3 || StringToInt(WO_Str(1), 0) != leaderEpoch)
+        {
+            return;
+        }
+
+        me = theGame.r_getMultiplayerClient().getUsername();
+        n = StringToInt(WO_Str(2), 0);
+        idx = 3;
+        for(i = 0; i < n && idx + 4 < count; i += 1)
+        {
+            user = WO_Str(idx);
+            seq = StringToInt(WO_Str(idx + 1), 0);
+            netId = StringToInt(WO_Str(idx + 2), 0);
+            hitReaction = StringToInt(WO_Str(idx + 3), 0);
+            typeCount = StringToInt(WO_Str(idx + 4), 0);
+            idx += 5;
+            if(idx + typeCount * 2 > count)
+            {
+                break;
+            }
+            if(user == me)
+            {
+                listed = true;
+                if(seq > hurtAck)
+                {
+                    ApplyHurt(netId, hitReaction, idx, typeCount);
+                    hurtAck = seq;
+                }
+            }
+            idx += typeCount * 2;
+        }
+        leaderListsMyHurts = listed;
+    }
+
+    // The leader's monster hit this player's ghost: apply its raw damage here, with the monster's local copy
+    // as attacker, so this game's armor, Quen and difficulty count. A hit landing mid-dodge misses.
+    private function ApplyHurt(netId : int, hitReaction : int, idx : int, typeCount : int)
+    {
+        var action : W3DamageAction;
+        var p : r_CoopPuppet;
+        var attacker : CActor;
+        var before : float;
+        var i : int;
+
+        if(thePlayer.IsCurrentlyDodging())
+        {
+            hurtsDodged += 1;
+            return;
+        }
+
+        p = FindPuppet(netId);
+        if(p && p.alive)
+        {
+            attacker = p.npc;
+        }
+
+        action = new W3DamageAction in theGame.damageMgr;
+        action.Initialize(attacker, thePlayer, theGame, "W3CoopHurt", (EHitReactionType)hitReaction, CPS_AttackPower, true, false, false, false);
+        for(i = 0; i < typeCount; i += 1)
+        {
+            action.AddDamage(WO_NameAt(idx + i * 2), StringToFloat(WO_Str(idx + i * 2 + 1), 0));
+        }
+        before = thePlayer.GetStat(BCS_Vitality);
+        theGame.damageMgr.ProcessAction(action);
+        delete action;
+        hurtDamageTaken += MaxF(0, before - thePlayer.GetStat(BCS_Vitality));
+        hurtsApplied += 1;
     }
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool)
@@ -1023,7 +1336,7 @@ class r_CoopEnemies
         var text : string;
         var i : int;
 
-        if(pendingHits.Size() == 0 && lastHitSentCount == 0)
+        if(pendingHits.Size() == 0 && lastHitSentCount == 0 && hurtAck == lastSentHurtAck && !leaderListsMyHurts)
         {
             return;
         }
@@ -1032,7 +1345,7 @@ class r_CoopEnemies
             return;
         }
 
-        text = "coop hit " + leaderName + " " + leaderEpoch + " " + session + " " + pendingHits.Size();
+        text = "coop hit " + leaderName + " " + leaderEpoch + " " + session + " " + hurtAck + " " + pendingHits.Size();
         for(i = 0; i < pendingHits.Size(); i += 1)
         {
             text += " " + pendingHits[i].seq + " " + pendingHits[i].netId + " " + FloatToStringPrec(pendingHits[i].frac, 4);
@@ -1040,6 +1353,7 @@ class r_CoopEnemies
         WO_Send(text);
         lastHitSend = now;
         lastHitSentCount = pendingHits.Size();
+        lastSentHurtAck = hurtAck;
     }
 
     // ---------------------------------------------------------------- diagnostics
@@ -1114,6 +1428,25 @@ function CoopDecode(text : string) : string
         return "";
     }
     return StrReplaceAll(text, "*", " ");
+}
+
+@wrapMethod(W3DamageManagerProcessor)
+function ProcessAction(act : W3DamageAction)
+{
+    var client : r_MultiplayerClient;
+    var coop : r_CoopEnemies;
+
+    client = theGame.r_getMultiplayerClient();
+    if(client)
+    {
+        coop = client.getCoopEnemies();
+    }
+    if(coop && coop.OnBeforeDamage(act))
+    {
+        return;
+    }
+
+    wrappedMethod(act);
 }
 
 // Damage to a puppet is computed here as usual, sent to the leader, and not applied locally: the leader's
