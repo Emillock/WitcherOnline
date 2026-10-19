@@ -13,6 +13,9 @@ class r_CoopHostEnemy
     public var attackSeq : int;
     public var attackAnim : name;
     public var hitAnimTime : float;  // animation time of the current attack's hit
+    public var hitSeq : int;         // hits it took, for members to replay the reaction
+    public var hitBy : string;
+    public var hitReaction : int;
 }
 
 class r_CoopPuppet
@@ -29,6 +32,9 @@ class r_CoopPuppet
     public var attackSeq : int;
     public var attackPlayedAt : float;
     public var animAiId : int;
+    public var hitSeq : int;
+    public var wasInHitAnim : bool;
+    public var reactUntil : float;  // forced idle lifted until then, so the AI plays the hit reaction
     public var addedNoFinishers : array<name>;
 }
 
@@ -58,6 +64,7 @@ class r_CoopHurt
     public var receivedAt : float;
     public var types : array<name>;
     public var values : array<float>;
+    public var effects : array<int>; // EEffectType of the hit's buffs (bleeding, knockdown, ...)
 }
 
 class r_CoopAck
@@ -98,6 +105,16 @@ class r_CoopEnemies
     private var leaderListsMyHurts : bool;
     private var delayedHurts : array<r_CoopHurt>;
 
+    // journal entries (quests, objectives) whose status changed this session, latest status per tag
+    private var journalTags : array<name>;
+    private var journalStatus : array<int>;
+    private var journalTick : int;
+    private var lastJournalSend : float;
+    private var applyingJournal : bool;
+    private var journalIndexTags : array<name>;
+    private var journalIndexEntries : array<CJournalBase>;
+    private var journalIndexBuiltAt : float;
+
     // set while this game changes a puppet itself, so the damage hook lets it through
     public var applyingHostState : bool;
 
@@ -118,11 +135,22 @@ class r_CoopEnemies
     public var attacksPlayed : int;
     public var attackPlayFailures : int;
     public var lastHurtDelay : float;
+    public var hitReactionsMirrored : int;
+    public var hitAnimsSeen : int;  // puppets entering a hit animation (shows the reactions really play)
+    public var hurtEffectsApplied : int;
+    public var journalApplied : int;
+    public var lastJournalApplied : name;
+    public var journalMessages : int;   // journal lists accepted from the leader
+    public var journalMissing : int;    // entries this game could not find
+    public var lastJournalSeen : string;
+    public var lastJournalAppliedStatus : int;
 
     default lastHostSend = -999;
     default lastSnapshotAt = -999;
     default lastHitSend = -999;
     default lastHurtSend = -999;
+    default lastJournalSend = -999;
+    default journalIndexBuiltAt = -999;
 
     private function EnsureIds()
     {
@@ -195,6 +223,7 @@ class r_CoopEnemies
                 lastHostSend = now;
             }
             SendHurts(now);
+            SendJournal(now);
             wasHost = true;
         }
         else if(wasHost)
@@ -331,7 +360,7 @@ class r_CoopEnemies
     }
 
     // "en epoch seq area acks{user session lastSeq} templates{path}
-    //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim}"
+    //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim hitSeq hitBy hitReaction}"
     private function HostSend()
     {
         var templates : array<string>;
@@ -366,7 +395,8 @@ class r_CoopEnemies
             body += " " + e.netId + " " + tplIndex + " " + CoopEncode(NameToString(e.npc.GetAppearance()))
                 + " " + FloatToStringPrec(pos.X, 2) + " " + FloatToStringPrec(pos.Y, 2) + " " + FloatToStringPrec(pos.Z, 2)
                 + " " + FloatToStringPrec(e.npc.GetHeading(), 1) + " " + FloatToStringPrec(MaxF(0, e.npc.GetHealthPercents()), 4)
-                + " " + alive + " " + e.attackSeq + " " + CoopEncode(NameToString(e.attackAnim));
+                + " " + alive + " " + e.attackSeq + " " + CoopEncode(NameToString(e.attackAnim))
+                + " " + e.hitSeq + " " + CoopEncode(e.hitBy) + " " + e.hitReaction;
         }
 
         WO_Send("coop en " + epoch + " " + hostSeq + " " + WO_CurrentAreaCode() + " " + AcksText() + " " + TemplatesText(templates)
@@ -637,13 +667,19 @@ class r_CoopEnemies
         var e : r_CoopHostEnemy;
         var user : string;
 
+        attacker = (CActor)act.attacker;
+        victim = (CActor)act.victim;
+
+        // a member's puppets only hurt it through the leader's hits
+        if((CNewNPC)attacker && IsPuppet((CNewNPC)attacker) && act.GetBuffSourceName() != "W3CoopHurt")
+        {
+            return true;
+        }
+
         if(!wasHost)
         {
             return false;
         }
-
-        attacker = (CActor)act.attacker;
-        victim = (CActor)act.victim;
         if(attacker && attacker.HasTag('MPEntity') && act.GetBuffSourceName() != "W3Coop")
         {
             return true;
@@ -665,10 +701,16 @@ class r_CoopEnemies
     private function QueueHurt(user : string, e : r_CoopHostEnemy, act : W3DamageAction)
     {
         var dts : array<SRawDamage>;
+        var effects : array<EEffectType>;
         var h : r_CoopHurt;
         var i : int;
 
         h = new r_CoopHurt in this;
+        act.GetEffectTypes(effects);
+        for(i = 0; i < effects.Size(); i += 1)
+        {
+            h.effects.PushBack((int)effects[i]);
+        }
         act.GetDTs(dts);
         for(i = 0; i < dts.Size(); i += 1)
         {
@@ -712,8 +754,8 @@ class r_CoopEnemies
         }
     }
 
-    // "hurt epoch count {user seq netId hitReaction attackSeq hitAnimTime types {type value}}": every hurt not yet
-    // acknowledged
+    // "hurt epoch count {user seq netId hitReaction attackSeq hitAnimTime types {type value} effects {type}}": every
+    // hurt not yet acknowledged
     private function SendHurts(now : float)
     {
         var text : string;
@@ -734,6 +776,11 @@ class r_CoopEnemies
             for(j = 0; j < h.types.Size(); j += 1)
             {
                 text += " " + NameToString(h.types[j]) + " " + FloatToStringPrec(h.values[j], 2);
+            }
+            text += " " + h.effects.Size();
+            for(j = 0; j < h.effects.Size(); j += 1)
+            {
+                text += " " + h.effects[j];
             }
         }
         WO_Send(text);
@@ -771,6 +818,38 @@ class r_CoopEnemies
         }
     }
 
+    // A shared monster took damage here: members replay the hit reaction on its puppet (the hitter's own game
+    // already played it).
+    public function OnEnemyDamaged(npc : CNewNPC, action : W3DamageAction)
+    {
+        var e : r_CoopHostEnemy;
+        var attacker : CActor;
+
+        if(!wasHost || !action.DealsAnyDamage() || action.IsDoTDamage())
+        {
+            return;
+        }
+        e = FindHostEnemyByNpc(npc);
+        if(!e)
+        {
+            return;
+        }
+
+        attacker = (CActor)action.attacker;
+        e.hitBy = "";
+        if(attacker == thePlayer)
+        {
+            e.hitBy = theGame.r_getMultiplayerClient().getUsername();
+        }
+        else if(attacker && attacker.HasTag('MPEntity'))
+        {
+            e.hitBy = GhostOwner(attacker);
+        }
+        e.hitSeq += 1;
+        e.hitReaction = (int)action.GetHitReactionType();
+        lastHostSend = -999;
+    }
+
     public function PendingHurtCount() : int
     {
         return hurts.Size();
@@ -806,6 +885,10 @@ class r_CoopEnemies
         {
             OnHurts(sender, count);
         }
+        else if(WO_Str(0) == "jr")
+        {
+            OnJournal(sender, count);
+        }
     }
 
     private function OnSnapshot(sender : string, count : int)
@@ -814,7 +897,8 @@ class r_CoopEnemies
         var seen : array<int>;
         var pos : Vector;
         var attackAnim : name;
-        var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq : int;
+        var hitBy : string;
+        var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction : int;
         var hp, yaw : float;
         var alive : bool;
         var app : string;
@@ -863,7 +947,7 @@ class r_CoopEnemies
 
         n = StringToInt(WO_Str(idx), 0);
         idx += 1;
-        for(i = 0; i < n && idx + 10 < count; i += 1)
+        for(i = 0; i < n && idx + 13 < count; i += 1)
         {
             netId = StringToInt(WO_Str(idx), 0);
             tplIndex = StringToInt(WO_Str(idx + 1), 0);
@@ -881,11 +965,14 @@ class r_CoopEnemies
             {
                 attackAnim = WO_NameAt(idx + 10);
             }
-            idx += 11;
+            hitSeq = StringToInt(WO_Str(idx + 11), 0);
+            hitBy = CoopDecode(WO_Str(idx + 12));
+            hitReaction = StringToInt(WO_Str(idx + 13), 0);
+            idx += 14;
 
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
-                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackAnim);
+                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackAnim, hitSeq, hitBy, hitReaction);
                 seen.PushBack(netId);
             }
         }
@@ -909,7 +996,7 @@ class r_CoopEnemies
         var h : r_CoopHurt;
         var p : r_CoopPuppet;
         var now : float;
-        var n, i, j, idx, seq, typeCount : int;
+        var n, i, j, idx, seq, typeCount, effectCount, effectsAt : int;
 
         if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 3 || StringToInt(WO_Str(1), 0) != leaderEpoch)
         {
@@ -925,7 +1012,13 @@ class r_CoopEnemies
             user = WO_Str(idx);
             seq = StringToInt(WO_Str(idx + 1), 0);
             typeCount = StringToInt(WO_Str(idx + 6), 0);
-            if(idx + 7 + typeCount * 2 > count)
+            effectsAt = idx + 7 + typeCount * 2;
+            if(effectsAt >= count)
+            {
+                break;
+            }
+            effectCount = StringToInt(WO_Str(effectsAt), 0);
+            if(effectsAt + 1 + effectCount > count)
             {
                 break;
             }
@@ -945,6 +1038,10 @@ class r_CoopEnemies
                         h.types.PushBack(WO_NameAt(idx + 7 + j * 2));
                         h.values.PushBack(StringToFloat(WO_Str(idx + 8 + j * 2), 0));
                     }
+                    for(j = 0; j < effectCount; j += 1)
+                    {
+                        h.effects.PushBack(StringToInt(WO_Str(effectsAt + 1 + j), 0));
+                    }
 
                     // land it when this world's copy of the swing reaches the hit (immediately if this world
                     // missed that attack); a dodge before then avoids it
@@ -959,7 +1056,7 @@ class r_CoopEnemies
                     hurtAck = seq;
                 }
             }
-            idx += 7 + typeCount * 2;
+            idx = effectsAt + 1 + effectCount;
         }
         leaderListsMyHurts = listed;
     }
@@ -1008,6 +1105,12 @@ class r_CoopEnemies
         {
             action.AddDamage(h.types[i], h.values[i]);
         }
+        // the monster's buffs; this game's immunities and resistances decide whether they take hold
+        for(i = 0; i < h.effects.Size(); i += 1)
+        {
+            action.AddEffectInfo((EEffectType)h.effects[i]);
+        }
+        hurtEffectsApplied += h.effects.Size();
         before = thePlayer.GetStat(BCS_Vitality);
         theGame.damageMgr.ProcessAction(action);
         delete action;
@@ -1016,7 +1119,7 @@ class r_CoopEnemies
     }
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
-        attackSeq : int, attackAnim : name)
+        attackSeq : int, attackAnim : name, hitSeq : int, hitBy : string, hitReaction : int)
     {
         var p : r_CoopPuppet;
         var npc : CNewNPC;
@@ -1047,7 +1150,18 @@ class r_CoopEnemies
                 return;
             }
             p = MakePuppet(npc, netId, spawned);
-            p.attackSeq = attackSeq;  // don't replay an attack from before this puppet existed
+            p.attackSeq = attackSeq;  // don't replay an attack or a hit from before this puppet existed
+            p.hitSeq = hitSeq;
+        }
+
+        // hits by others (this player's own hits already reacted here)
+        if(hitSeq != p.hitSeq)
+        {
+            p.hitSeq = hitSeq;
+            if(p.alive && hitBy != "" && hitBy != theGame.r_getMultiplayerClient().getUsername())
+            {
+                MirrorHit(p, hitBy, hitReaction);
+            }
         }
 
         if(attackSeq != p.attackSeq)
@@ -1162,6 +1276,37 @@ class r_CoopEnemies
         return p;
     }
 
+    // Replays another player's hit on a puppet through the damage manager with a negligible damage, so the
+    // vanilla reaction path runs (the leader's health is restored right after).
+    // The forced idle tree swallows hit reactions; lift it briefly so the monster's own AI plays one. Its
+    // attacks in that time do no damage here (OnBeforeDamage drops a puppet's own damage).
+    private function OpenReactionWindow(p : r_CoopPuppet)
+    {
+        if(p.aiId != 0)
+        {
+            p.npc.CancelAIBehavior(p.aiId);
+            p.aiId = 0;
+        }
+        p.reactUntil = theGame.GetEngineTimeAsSeconds() + 0.8;
+    }
+
+    private function MirrorHit(p : r_CoopPuppet, hitBy : string, hitReaction : int)
+    {
+        var action : W3DamageAction;
+
+        OpenReactionWindow(p);
+
+        action = new W3DamageAction in theGame.damageMgr;
+        action.Initialize(GhostOf(hitBy), p.npc, theGame, "W3CoopHitFx", (EHitReactionType)hitReaction, CPS_Undefined, true, false, false, false);
+        action.AddDamage(theGame.params.DAMAGE_NAME_DIRECT, COOP_FX_DAMAGE());
+        action.SetCannotReturnDamage(true);
+        applyingHostState = true;
+        theGame.damageMgr.ProcessAction(action);
+        applyingHostState = false;
+        delete action;
+        hitReactionsMirrored += 1;
+    }
+
     private function BlockFinisher(p : r_CoopPuppet, ability : name)
     {
         if(!p.npc.HasAbility(ability))
@@ -1247,6 +1392,17 @@ class r_CoopEnemies
             }
 
             MovePuppet(p);
+
+            if(p.npc.IsInHitAnim() && !p.wasInHitAnim)
+            {
+                hitAnimsSeen += 1;
+            }
+            p.wasInHitAnim = p.npc.IsInHitAnim();
+
+            if(p.aiId == 0 && now >= p.reactUntil)
+            {
+                p.aiId = ForceIdle(p.npc);
+            }
 
             current = p.npc.GetHealthPercents();
             if(current >= 0 && p.hp > 0 && AbsF(current - p.hp) > 0.002)
@@ -1471,7 +1627,12 @@ class r_CoopEnemies
         var dmg, maxHp : float;
 
         p = FindPuppetByNpc(npc);
-        if(!p || !p.alive || action.attacker != thePlayer)
+        if(!p || !p.alive)
+        {
+            return;
+        }
+        OpenReactionWindow(p);
+        if(action.attacker != thePlayer)
         {
             return;
         }
@@ -1547,6 +1708,207 @@ class r_CoopEnemies
         lastSentHurtAck = hurtAck;
     }
 
+    // ---------------------------------------------------------------- journal (milestone 3)
+
+    // Every game records its quest and objective updates (the HUD hears about all of them, also the quest
+    // system's own); the leader sends them, and members apply the ones that move them forward.
+    public function OnJournalChange(journalEntry : CJournalBase)
+    {
+        var tag : name;
+        var status, i : int;
+
+        if(!journalEntry || applyingJournal)
+        {
+            return;
+        }
+        tag = journalEntry.GetUniqueScriptTag();
+        if(!IsNameValid(tag))
+        {
+            return;
+        }
+        status = (int)theGame.GetJournalManager().GetEntryStatus(journalEntry);
+
+        i = journalTags.FindFirst(tag);
+        if(i < 0)
+        {
+            journalTags.PushBack(tag);
+            journalStatus.PushBack(status);
+            if(journalTags.Size() > 48)
+            {
+                journalTags.Erase(0);
+                journalStatus.Erase(0);
+            }
+        }
+        else
+        {
+            journalStatus[i] = status;
+        }
+        lastJournalSend = -999;
+    }
+
+    // "jr epoch tick count {tag status}"; the tick changes every send so a member that joins later still gets
+    // the list (the client passes unchanged state on only once)
+    private function SendJournal(now : float)
+    {
+        var text : string;
+        var i : int;
+
+        if(now - lastJournalSend < 1.0)
+        {
+            return;
+        }
+        journalTick += 1;
+        text = "coop jr " + epoch + " " + journalTick + " " + journalTags.Size();
+        for(i = 0; i < journalTags.Size(); i += 1)
+        {
+            // tags can contain spaces ("Win unique card from crossroads innkeeper A485F434-...")
+            text += " " + CoopEncode(NameToString(journalTags[i])) + " " + journalStatus[i];
+        }
+        WO_Send(text);
+        lastJournalSend = now;
+    }
+
+    private function OnJournal(sender : string, count : int)
+    {
+        var manager : CWitcherJournalManager;
+        var journalEntry : CJournalBase;
+        var tag : name;
+        var status, current, n, i, idx : int;
+
+        if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 4 || StringToInt(WO_Str(1), 0) != leaderEpoch)
+        {
+            return;
+        }
+
+        manager = theGame.GetJournalManager();
+        journalMessages += 1;
+        n = StringToInt(WO_Str(3), 0);
+        idx = 4;
+        for(i = 0; i < n && idx + 1 < count; i += 1)
+        {
+            // the client restores the spaces of encoded fields, so this is the exact tag
+            tag = WO_NameAt(idx);
+            status = StringToInt(WO_Str(idx + 1), 0);
+            idx += 2;
+
+            lastJournalSeen = NameToString(tag) + "=" + status;
+            journalEntry = FindJournalEntry(tag);
+            if(!journalEntry)
+            {
+                journalMissing += 1;
+                continue;
+            }
+            current = (int)manager.GetEntryStatus(journalEntry);
+            if(JournalAdvances(current, status))
+            {
+                applyingJournal = true;
+                manager.ActivateEntry(journalEntry, (EJournalStatus)status, true, true);
+                applyingJournal = false;
+                journalApplied += 1;
+                lastJournalApplied = tag;
+                lastJournalAppliedStatus = status;
+            }
+        }
+    }
+
+    private function FindJournalEntry(tag : name) : CJournalBase
+    {
+        var journalEntry : CJournalBase;
+        var i : int;
+
+        journalEntry = theGame.GetJournalManager().GetEntryByTag(tag);
+        if(journalEntry)
+        {
+            return journalEntry;
+        }
+
+        i = journalIndexTags.FindFirst(tag);
+        if(i < 0 && theGame.GetEngineTimeAsSeconds() - journalIndexBuiltAt > 5.0)
+        {
+            BuildJournalIndex();
+            i = journalIndexTags.FindFirst(tag);
+        }
+        if(i >= 0)
+        {
+            return journalIndexEntries[i];
+        }
+        return NULL;
+    }
+
+    // Quests this game knows and their objectives, by unique tag: GetEntryByTag doesn't find objectives that
+    // are still inactive here (the map menu walks the same hierarchy).
+    private function BuildJournalIndex()
+    {
+        var quests : array<CJournalBase>;
+        var journalQuest : CJournalQuest;
+        var phase : CJournalQuestPhase;
+        var child : CJournalBase;
+        var i, j, k : int;
+
+        journalIndexTags.Clear();
+        journalIndexEntries.Clear();
+        theGame.GetJournalManager().GetActivatedOfType('CJournalQuest', quests);
+        for(i = 0; i < quests.Size(); i += 1)
+        {
+            journalQuest = (CJournalQuest)quests[i];
+            if(!journalQuest)
+            {
+                continue;
+            }
+            journalIndexTags.PushBack(journalQuest.GetUniqueScriptTag());
+            journalIndexEntries.PushBack(journalQuest);
+            for(j = 0; j < journalQuest.GetNumChildren(); j += 1)
+            {
+                phase = (CJournalQuestPhase)journalQuest.GetChild(j);
+                if(!phase)
+                {
+                    continue;
+                }
+                for(k = 0; k < phase.GetNumChildren(); k += 1)
+                {
+                    child = phase.GetChild(k);
+                    if((CJournalQuestObjective)child)
+                    {
+                        journalIndexTags.PushBack(child.GetUniqueScriptTag());
+                        journalIndexEntries.PushBack(child);
+                    }
+                }
+            }
+        }
+        journalIndexBuiltAt = theGame.GetEngineTimeAsSeconds();
+    }
+
+    // inactive -> active -> succeeded/failed; never back, never from one outcome to the other
+    private function JournalAdvances(current : int, wanted : int) : bool
+    {
+        if(current == (int)JS_Inactive)
+        {
+            return wanted != (int)JS_Inactive;
+        }
+        if(current == (int)JS_Active)
+        {
+            return wanted == (int)JS_Success || wanted == (int)JS_Failed;
+        }
+        return false;
+    }
+
+    public function JournalStatusOf(tag : name) : int
+    {
+        var journalEntry : CJournalBase;
+
+        journalEntry = FindJournalEntry(tag);
+        if(!journalEntry)
+        {
+            return -1;
+        }
+        return (int)theGame.GetJournalManager().GetEntryStatus(journalEntry);
+    }
+
+    public function JournalRecorded(tag : name) : bool
+    {
+        return journalTags.Contains(tag);
+    }
+
     // ---------------------------------------------------------------- diagnostics
 
     public function HostEnemyCount() : int
@@ -1591,6 +1953,11 @@ class r_CoopEnemies
         return puppets[i].spawned;
     }
 
+    public function PuppetInHitAnim(i : int) : bool
+    {
+        return puppets[i].npc.IsInHitAnim();
+    }
+
     public function SuppressedCount() : int
     {
         return suppressed.Size();
@@ -1600,6 +1967,12 @@ class r_CoopEnemies
     {
         return pendingHits.Size();
     }
+}
+
+// what a puppet keeps of a hit, so the vanilla hit reaction runs (its health is the leader's anyway)
+function COOP_FX_DAMAGE() : float
+{
+    return 0.01;
 }
 
 // players farther apart than this run their own monsters (the leader's world doesn't simulate far away)
@@ -1675,8 +2048,42 @@ function OnTakeDamage(action : W3DamageAction)
     if(coop && !coop.applyingHostState && coop.IsPuppet(this))
     {
         coop.OnPuppetDamaged(this, action);
+        // a negligible remainder instead of zero keeps the vanilla hit reaction (it needs damage dealt)
         action.SetAllProcessedDamageAs(0);
+        action.processedDmg.vitalityDamage = COOP_FX_DAMAGE();
+        action.processedDmg.essenceDamage = COOP_FX_DAMAGE();
+    }
+    else if(coop)
+    {
+        coop.OnEnemyDamaged(this, action);
     }
 
     wrappedMethod(action);
+}
+
+@wrapMethod(CR4ScriptedHud)
+function OnQuestEvent(journalQuest : CJournalQuest)
+{
+    var client : r_MultiplayerClient;
+
+    client = theGame.r_getMultiplayerClient();
+    if(client)
+    {
+        client.getCoopEnemies().OnJournalChange(journalQuest);
+    }
+    return wrappedMethod(journalQuest);
+}
+
+@wrapMethod(CR4ScriptedHud)
+function OnQuestObjectiveEvent(journalQuest : CJournalQuest, journalObjective : CJournalQuestObjective)
+{
+    var client : r_MultiplayerClient;
+
+    client = theGame.r_getMultiplayerClient();
+    if(client)
+    {
+        client.getCoopEnemies().OnJournalChange(journalQuest);
+        client.getCoopEnemies().OnJournalChange(journalObjective);
+    }
+    return wrappedMethod(journalQuest, journalObjective);
 }

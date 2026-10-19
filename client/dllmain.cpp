@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <iostream>
@@ -796,6 +797,11 @@ static void HandleServerPacket(const std::string &msg)
 	{
 		if (fields.empty() || fields[0].empty())
 			return;
+
+		// scripts send spaces inside values as '*' (fields are space-separated); restore them here so
+		// WO_NameAt yields names that contain spaces, like journal tags
+		for (auto &field : fields)
+			std::replace(field.begin(), field.end(), '*', ' ');
 
 		{
 			std::lock_guard<std::mutex> lock(remoteMu);
