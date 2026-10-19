@@ -19,6 +19,7 @@ class r_CoopHostEnemy
     public var hitSeq : int;         // hits it took, for members to replay the reaction
     public var hitBy : string;
     public var hitReaction : int;
+    public var stride : r_CoopStride;
 }
 
 class r_CoopPuppet
@@ -37,8 +38,175 @@ class r_CoopPuppet
     public var animAiId : int;
     public var hitSeq : int;
     public var wasInHitAnim : bool;
+    public var targetSpeed : float;   // how fast the leader's monster moves (m/s, smoothed), for its locomotion
+    public var lastTargetAt : float;
+    public var stride : r_CoopStride;
     public var reactUntil : float;  // forced idle lifted until then, so the AI plays the hit reaction
     public var addedNoFinishers : array<name>;
+}
+
+// Feet swinging along the actor's facing over 1.5 s windows while it moves: a walking stride swings a foot tens of
+// centimeters back and forth, a slide barely at all. Diagnostics for the locomotion of puppets.
+class r_CoopStride
+{
+    public var bones : array<int>;
+    public var lows : array<float>;
+    public var highs : array<float>;
+    public var boneLabel : string;
+    public var pelvis : int;
+    public var tries : int;
+    public var windowStart : float;
+    public var maxSwing : float;
+    public var lastPos : Vector;
+    public var lastAt : float;
+    public var speed : float;
+
+    default windowStart = -1;
+
+    // the actor's own speed from its positions (m/s, smoothed); velocity reads 0 on monsters
+    public function OwnSpeed(actor : CActor, now : float) : float
+    {
+        var pos : Vector;
+
+        pos = actor.GetWorldPosition();
+        if(lastAt > 0 && now - lastAt > 0.01)
+        {
+            speed = 0.8 * speed + 0.2 * VecDistance2D(pos, lastPos) / (now - lastAt);
+        }
+        lastPos = pos;
+        lastAt = now;
+        return speed;
+    }
+
+    public function Update(actor : CActor, moving : bool, now : float)
+    {
+        var base, facing : Vector;
+        var offset : float;
+        var i : int;
+
+        if(!moving)
+        {
+            // a movement shorter than a window still counts
+            if(windowStart >= 0 && now - windowStart >= 0.5)
+            {
+                CloseWindow();
+            }
+            windowStart = -1;
+            return;
+        }
+        // searched while moving, once the actor is posed where it walks
+        if(bones.Size() == 0 && tries < 30)
+        {
+            tries += 1;
+            FindBones(actor);
+        }
+        if(bones.Size() == 0)
+        {
+            return;
+        }
+        if(windowStart >= 0 && now - windowStart > 1.5)
+        {
+            CloseWindow();
+            windowStart = -1;
+        }
+        // against the pelvis of the same pose, so a slide moving the root between poses doesn't count
+        base = actor.GetWorldPosition();
+        if(pelvis >= 0)
+        {
+            base = MatrixGetTranslation(actor.GetBoneWorldMatrixByIndex(pelvis));
+        }
+        facing = VecFromHeading(actor.GetHeading());
+        for(i = 0; i < bones.Size(); i += 1)
+        {
+            offset = VecDot(MatrixGetTranslation(actor.GetBoneWorldMatrixByIndex(bones[i])) - base, facing);
+            if(windowStart < 0)
+            {
+                lows[i] = offset;
+                highs[i] = offset;
+            }
+            else
+            {
+                lows[i] = MinF(lows[i], offset);
+                highs[i] = MaxF(highs[i], offset);
+            }
+        }
+        if(windowStart < 0)
+        {
+            windowStart = now;
+        }
+    }
+
+    private function CloseWindow()
+    {
+        var i : int;
+
+        for(i = 0; i < bones.Size(); i += 1)
+        {
+            maxSwing = MaxF(maxSwing, highs[i] - lows[i]);
+        }
+    }
+
+    // the feet by their usual names, else the bones nearest points at foot height around the body (skeletons name
+    // their feet differently; the root under the body doesn't count); the torso stands in for a missing pelvis
+    private function FindBones(actor : CActor)
+    {
+        var offsets : array<Vector>;
+        var pos, probe, found : Vector;
+        var heading : float;
+        var bone, i : int;
+
+        pelvis = actor.GetBoneIndex('pelvis');
+        if(pelvis < 0)
+        {
+            pelvis = actor.GetTorsoBoneIndex();
+        }
+        AddBone(actor.GetBoneIndex('l_foot'));
+        AddBone(actor.GetBoneIndex('r_foot'));
+        if(bones.Size() > 0)
+        {
+            boneLabel = "feet";
+            return;
+        }
+        if(!actor.GetRootAnimatedComponent())
+        {
+            return;
+        }
+        pos = actor.GetWorldPosition();
+        heading = actor.GetHeading();
+        offsets.PushBack(VecFromHeading(heading) * 0.6 + VecFromHeading(heading - 90) * 0.3);
+        offsets.PushBack(VecFromHeading(heading + 180) * 0.6 + VecFromHeading(heading - 90) * 0.3);
+        offsets.PushBack(VecFromHeading(heading - 90) * 0.6);
+        offsets.PushBack(VecFromHeading(heading + 90) * 0.6);
+        for(i = 0; i < offsets.Size(); i += 1)
+        {
+            probe = pos + offsets[i];
+            probe.Z += 0.1;
+            bone = actor.GetRootAnimatedComponent().FindNearestBoneWS(probe);
+            if(bone > 0)
+            {
+                found = MatrixGetTranslation(actor.GetBoneWorldMatrixByIndex(bone));
+                if(VecDistance2D(found, pos) >= 0.05 && found.Z - pos.Z <= 0.5)
+                {
+                    AddBone(bone);
+                }
+            }
+        }
+        boneLabel = "";
+        for(i = 0; i < bones.Size(); i += 1)
+        {
+            boneLabel += "#" + bones[i];
+        }
+    }
+
+    private function AddBone(bone : int)
+    {
+        if(bone >= 0 && !bones.Contains(bone))
+        {
+            bones.PushBack(bone);
+            lows.PushBack(0);
+            highs.PushBack(0);
+        }
+    }
 }
 
 class r_CoopSuppressed
@@ -158,6 +326,10 @@ class r_CoopEnemies
     public var lastHurtDelay : float;
     public var hitReactionsMirrored : int;
     public var hitAnimsSeen : int;  // puppets entering a hit animation (shows the reactions really play)
+    public var hostMaxSwing : float;    // stride of the leader's real monsters while they move (calibration)
+    public var puppetMaxSwing : float;  // stride of puppets while their leader's monster moves
+    public var strideBone : string;
+    public var puppetLocomotion : bool;  // off: puppets only slide (the glide baseline for the stride tests)
     public var hurtEffectsApplied : int;
     public var journalApplied : int;
     public var lastJournalApplied : name;
@@ -171,6 +343,7 @@ class r_CoopEnemies
     public var lastFactApplied : string;
     public var lastJournalAppliedStatus : int;
 
+    default puppetLocomotion = true;
     default lastHostSend = -999;
     default lastSnapshotAt = -999;
     default lastHitSend = -999;
@@ -250,6 +423,7 @@ class r_CoopEnemies
                 HostSend();
                 lastHostSend = now;
             }
+            MeasureHostStrides(now);
             SendHurts(now);
             if(TrackingChanged())
             {
@@ -460,6 +634,33 @@ class r_CoopEnemies
             text += " " + templates[i];
         }
         return text;
+    }
+
+    public function SetPuppetLocomotion(on : bool)
+    {
+        puppetLocomotion = on;
+    }
+
+    private function MeasureHostStrides(now : float)
+    {
+        var e : r_CoopHostEnemy;
+        var i : int;
+
+        for(i = 0; i < hostEnemies.Size(); i += 1)
+        {
+            e = hostEnemies[i];
+            if(!e.npc || e.deadAt >= 0)
+            {
+                continue;
+            }
+            if(!e.stride)
+            {
+                e.stride = new r_CoopStride in this;
+            }
+            e.stride.Update(e.npc, e.stride.OwnSpeed(e.npc, now) > 1.0, now);
+            hostMaxSwing = MaxF(hostMaxSwing, e.stride.maxSwing);
+            strideBone = e.stride.boneLabel + "/" + e.stride.pelvis;
+        }
     }
 
     private function FindHostEnemyByNpc(npc : CNewNPC) : r_CoopHostEnemy
@@ -1210,6 +1411,11 @@ class r_CoopEnemies
             }
         }
 
+        if(p.lastTargetAt > 0 && now - p.lastTargetAt > 0.02)
+        {
+            p.targetSpeed = 0.5 * p.targetSpeed + 0.5 * VecDistance2D(pos, p.target) / (now - p.lastTargetAt);
+        }
+        p.lastTargetAt = now;
         p.target = pos;
         p.yaw = yaw;
         // after a local hit the leader's health arrives a moment later; don't flash back up meanwhile
@@ -1429,6 +1635,14 @@ class r_CoopEnemies
             }
 
             MovePuppet(p);
+            DrivePuppetLocomotion(p);
+            if(!p.stride)
+            {
+                p.stride = new r_CoopStride in this;
+            }
+            p.stride.Update(p.npc, p.targetSpeed > 1.0, now);
+            puppetMaxSwing = MaxF(puppetMaxSwing, p.stride.maxSwing);
+            strideBone = p.stride.boneLabel + "/" + p.stride.pelvis;
 
             if(p.npc.IsInHitAnim() && !p.wasInHitAnim)
             {
@@ -1449,6 +1663,34 @@ class r_CoopEnemies
                 applyingHostState = false;
             }
         }
+    }
+
+    // The slide keeps it on the leader's positions; the gameplay move speed and direction make its behavior graph
+    // play the matching walk or run (as Witcher Online does for horses).
+    private function DrivePuppetLocomotion(p : r_CoopPuppet)
+    {
+        var agent : CMovingAgentComponent;
+        var speed, now : float;
+
+        agent = p.npc.GetMovingAgentComponent();
+        now = theGame.GetEngineTimeAsSeconds();
+        // standing: slow target, a mirrored attack playing, or no snapshot lately (stalled link)
+        if(!puppetLocomotion || p.targetSpeed < 0.4 || now - p.attackPlayedAt < 1.2 || now - p.lastTargetAt > 0.5)
+        {
+            agent.SetGameplayRelativeMoveSpeed(0);
+            return;
+        }
+        speed = 1;
+        if(p.targetSpeed > 4.5)
+        {
+            speed = 3;
+        }
+        else if(p.targetSpeed > 2.0)
+        {
+            speed = 2;
+        }
+        agent.SetGameplayMoveDirection(VecHeading(p.target - p.npc.GetWorldPosition()));
+        agent.SetGameplayRelativeMoveSpeed(speed);
     }
 
     private function MovePuppet(p : r_CoopPuppet)
