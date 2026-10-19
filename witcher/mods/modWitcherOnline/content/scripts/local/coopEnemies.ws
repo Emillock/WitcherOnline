@@ -316,6 +316,7 @@ class r_CoopEnemies
     public var hitsSent : int;
     public var hitsApplied : int;
     public var puppetsSpawned : int;
+    public var puppetsKilled : int;  // puppets that died with the leader's monster
     public var twinsBound : int;
     public var spawnFailures : int;
     public var lastError : string;
@@ -1805,6 +1806,7 @@ class r_CoopEnemies
     private function KillPuppet(p : r_CoopPuppet)
     {
         p.alive = false;
+        puppetsKilled += 1;
         if(p.animAiId != 0)
         {
             p.npc.CancelAIBehavior(p.animAiId);
@@ -2483,6 +2485,11 @@ class r_CoopEnemies
     public function HostEnemyCount() : int
     {
         return hostEnemies.Size();
+    }
+
+    public function HostEnemyAt(i : int) : CNewNPC
+    {
+        return hostEnemies[i].npc;
     }
 
     public function HostNetIdOf(npc : CNewNPC) : int
