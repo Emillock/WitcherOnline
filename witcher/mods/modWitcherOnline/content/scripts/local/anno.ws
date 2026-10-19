@@ -22,6 +22,7 @@ function OnSpawned(spawnData: SEntitySpawnData)
 
     wrappedMethod(spawnData);
 
+    theGame.r_getMultiplayerClient().getCoopEnemies().OnSessionStart();
     theGame.r_getMultiplayerClient().WO_PublishPresence(theGame.r_getMultiplayerClient().WO_GetPresence(), true);
 }
 

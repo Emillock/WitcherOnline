@@ -4,6 +4,9 @@
 // monsters attack members' ghosts; those hits go to the member ("hurt" channel) and land on their Geralt.
 // Unmatched local hostiles near a member are hidden while they mirror the leader's world.
 
+import function WO_FactsBaseline() : bool;
+import function WO_FactsPage(pageSize : int) : string;
+
 class r_CoopHostEnemy
 {
     public var npc : CNewNPC;
@@ -127,6 +130,12 @@ class r_CoopEnemies
     private var leaderSceneSeen : string;
     private var leaderSkipSeen : int;
 
+    // quest facts: changes since this save was loaded, read from the engine by the client ASI
+    private var factsReady : bool;
+    private var nextFactsTry : float;
+    private var lastFactsSend : float;
+    private var factsTick : int;
+
     // set while this game changes a puppet itself, so the damage hook lets it through
     public var applyingHostState : bool;
 
@@ -158,6 +167,8 @@ class r_CoopEnemies
     public var trackedApplied : int;
     public var lastTrackedApplied : name;
     public var skipsApplied : int;
+    public var factsApplied : int;
+    public var lastFactApplied : string;
     public var lastJournalAppliedStatus : int;
 
     default lastHostSend = -999;
@@ -165,6 +176,7 @@ class r_CoopEnemies
     default lastHitSend = -999;
     default lastHurtSend = -999;
     default lastJournalSend = -999;
+    default lastFactsSend = -999;
     default journalIndexBuiltAt = -999;
 
     private function EnsureIds()
@@ -227,6 +239,7 @@ class r_CoopEnemies
 
         EnsureIds();
         now = theGame.GetEngineTimeAsSeconds();
+        RetryFactsBaseline(now);
         role = GetRole();
 
         if(role == 1)
@@ -243,6 +256,7 @@ class r_CoopEnemies
                 lastJournalSend = -999;
             }
             SendJournal(now);
+            SendFacts(now);
             wasHost = true;
         }
         else if(wasHost)
@@ -907,6 +921,10 @@ class r_CoopEnemies
         else if(WO_Str(0) == "jr")
         {
             OnJournal(sender, count);
+        }
+        else if(WO_Str(0) == "fx")
+        {
+            OnFacts(sender, count);
         }
     }
 
@@ -1901,6 +1919,78 @@ class r_CoopEnemies
             if(journalObjective && manager.GetEntryStatus(journalObjective) == JS_Active)
             {
                 manager.SetHighlightedObjective(journalObjective);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- quest facts
+
+    // A save was loaded: fact changes count from here (the journal list works the same way).
+    public function OnSessionStart()
+    {
+        factsReady = WO_FactsBaseline();
+        nextFactsTry = theGame.GetEngineTimeAsSeconds() + 2;
+    }
+
+    // the facts DB may not be readable yet when the player spawns
+    private function RetryFactsBaseline(now : float)
+    {
+        if(!factsReady && now >= nextFactsTry)
+        {
+            factsReady = WO_FactsBaseline();
+            nextFactsTry = now + 2;
+        }
+    }
+
+    public function FactsReady() : bool
+    {
+        return factsReady;
+    }
+
+    // "fx epoch tick page pages count {id sum}": one page of the facts this session changed, in turn
+    private function SendFacts(now : float)
+    {
+        var page : string;
+
+        if(!factsReady || now - lastFactsSend < 0.5)
+        {
+            return;
+        }
+        lastFactsSend = now;
+        page = WO_FactsPage(40);
+        if(page != "")
+        {
+            factsTick += 1;
+            WO_Send("coop fx " + epoch + " " + factsTick + " " + page);
+        }
+    }
+
+    // Forward only, like the journal: a fact goes up to the leader's sum, never down (a member that is
+    // further along keeps its own value).
+    private function OnFacts(sender : string, count : int)
+    {
+        var id : string;
+        var sum, current, n, i, idx : int;
+
+        if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 6 || StringToInt(WO_Str(1), 0) != leaderEpoch)
+        {
+            return;
+        }
+
+        n = StringToInt(WO_Str(5), 0);
+        idx = 6;
+        for(i = 0; i < n && idx + 1 < count; i += 1)
+        {
+            id = WO_Str(idx);
+            sum = StringToInt(WO_Str(idx + 1), 0);
+            idx += 2;
+
+            current = FactsQuerySum(id);
+            if(sum > current)
+            {
+                FactsAdd(id, sum - current);
+                factsApplied += 1;
+                lastFactApplied = id;
             }
         }
     }

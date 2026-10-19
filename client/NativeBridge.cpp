@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -13,6 +14,8 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <cstdio>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -279,6 +282,225 @@ namespace wo_native
 		PushInbound(std::move(message));
 	}
 
+	// ---- facts: read the engine's facts database (party leader's quest facts for members) ----
+
+	static bool ReadMemory(const void *address, void *out, size_t size)
+	{
+		__try
+		{
+			memcpy(out, address, size);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	struct FactsDbSite
+	{
+		bool searched = false;
+		uint8_t *global = nullptr;
+		int32_t countOffset = 0;
+		int32_t systemsOffset = 0;
+	};
+	static FactsDbSite g_factsSite;
+
+	// The facts natives reach the facts DB as game->systems[1] (seen in FactsQuerySum):
+	//   mov rax,[rip+game]; ...; cmp dword [rax+count],1; jle; mov rax,[rax+systems]; mov rsi,[rax+8]
+	static void FindFactsSite()
+	{
+		static const int pattern[] = {0x48, 0x8B, 0x05, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0x48, 0x85, 0xC0, 0x0F, 0x84, -1, -1, -1, -1,
+		                              0x83, 0xB8, -1, -1, -1, -1, 0x01, 0x0F, 0x8E, -1, -1, -1, -1, 0x48, 0x8B, 0x80, -1, -1, -1, -1, 0x48, 0x8B, 0x70, 0x08};
+		const size_t length = sizeof(pattern) / sizeof(pattern[0]);
+
+		g_factsSite.searched = true;
+		auto *base = reinterpret_cast<uint8_t *>(GetModuleHandleW(nullptr));
+		auto *dos = reinterpret_cast<IMAGE_DOS_HEADER *>(base);
+		auto *nt = reinterpret_cast<IMAGE_NT_HEADERS64 *>(base + dos->e_lfanew);
+		IMAGE_SECTION_HEADER *section = IMAGE_FIRST_SECTION(nt);
+		for (unsigned s = 0; s < nt->FileHeader.NumberOfSections; ++s, ++section)
+		{
+			if (memcmp(section->Name, ".text", 5) != 0)
+				continue;
+			uint8_t *text = base + section->VirtualAddress;
+			const size_t size = section->Misc.VirtualSize;
+			for (size_t i = 0; i + length < size; ++i)
+			{
+				size_t k = 0;
+				while (k < length && (pattern[k] < 0 || text[i + k] == pattern[k]))
+					++k;
+				if (k != length)
+					continue;
+				uint8_t *site = text + i;
+				g_factsSite.global = site + 7 + *reinterpret_cast<int32_t *>(site + 3);
+				g_factsSite.countOffset = *reinterpret_cast<int32_t *>(site + 23);
+				g_factsSite.systemsOffset = *reinterpret_cast<int32_t *>(site + 37);
+				return;
+			}
+		}
+		DebugLog("facts: code pattern not found; fact sync is off");
+	}
+
+	static uint8_t *FindFactsDb()
+	{
+		if (!g_factsSite.searched)
+			FindFactsSite();
+		uint8_t *game = nullptr, *systems = nullptr, *facts = nullptr;
+		int32_t count = 0;
+		if (!g_factsSite.global || !ReadMemory(g_factsSite.global, &game, 8) || !game ||
+		    !ReadMemory(game + g_factsSite.countOffset, &count, 4) || count <= 1 ||
+		    !ReadMemory(game + g_factsSite.systemsOffset, &systems, 8) || !systems || !ReadMemory(systems + 8, &facts, 8))
+			return nullptr;
+		return facts;
+	}
+
+	static std::string g_factsError;
+
+	// Sums of every fact. 5.01 layout (found by probing): the facts map sits at +0x58 of the facts DB, fact count
+	// at +0x64; its nodes come from one pool, [+0x68, +0x80), node size at +0x74 (0x28), free slots linked from
+	// +0x78. Node (pack 4): key text +0x00, key size +0x08, entries +0x0C, entry count +0x14, link +0x20; 24-byte
+	// entries, the int value first. Anything off (unreadable memory, odd sizes, a used-slot count that doesn't
+	// match the fact count) and it reports failure instead of guessing.
+	static bool ReadAllFacts(std::unordered_map<std::string, int> &out)
+	{
+		uint8_t *db = FindFactsDb();
+		if (!db)
+		{
+			g_factsError = "no facts DB";
+			return false;
+		}
+		uint32_t factCount = 0, nodeSize = 0;
+		uint8_t *pool = nullptr, *poolEnd = nullptr, *freeHead = nullptr;
+		if (!ReadMemory(db + 0x64, &factCount, 4) || !ReadMemory(db + 0x74, &nodeSize, 4) || !ReadMemory(db + 0x68, &pool, 8) ||
+		    !ReadMemory(db + 0x80, &poolEnd, 8) || !ReadMemory(db + 0x78, &freeHead, 8) || nodeSize != 0x28 || !pool || poolEnd <= pool ||
+		    (poolEnd - pool) % nodeSize != 0 || (poolEnd - pool) / nodeSize > 4000000)
+		{
+			g_factsError = "map header: facts=" + std::to_string(factCount) + " node size=" + std::to_string(nodeSize);
+			return false;
+		}
+
+		const size_t capacity = (poolEnd - pool) / nodeSize;
+		std::vector<uint8_t> nodes(capacity * nodeSize);
+		if (!ReadMemory(pool, nodes.data(), nodes.size()))
+		{
+			g_factsError = "pool unreadable (" + std::to_string(capacity) + " slots)";
+			return false;
+		}
+
+		for (const size_t link : {size_t(0x20), size_t(0x00)})
+		{
+			std::vector<bool> isFree(capacity, false);
+			size_t freeSlots = 0;
+			for (uint8_t *slot = freeHead; slot >= pool && slot < poolEnd && freeSlots < capacity; ++freeSlots)
+			{
+				const size_t index = (slot - pool) / nodeSize;
+				if ((slot - pool) % nodeSize != 0 || isFree[index])
+					break;
+				isFree[index] = true;
+				slot = *reinterpret_cast<uint8_t **>(nodes.data() + index * nodeSize + link);
+			}
+			if (capacity - freeSlots != factCount)
+				continue;
+
+			out.clear();
+			std::vector<uint8_t> entries;
+			bool ok = true;
+			for (size_t i = 0; i < capacity && ok; ++i)
+			{
+				if (isFree[i])
+					continue;
+				const uint8_t *raw = nodes.data() + i * nodeSize;
+				const char *key = *reinterpret_cast<const char *const *>(raw);
+				const uint32_t keySize = *reinterpret_cast<const uint32_t *>(raw + 0x08);
+				uint8_t *values = *reinterpret_cast<uint8_t *const *>(raw + 0x0C);
+				const uint32_t valueCount = *reinterpret_cast<const uint32_t *>(raw + 0x14);
+				std::string id(keySize > 1 && keySize <= 1024 ? keySize - 1 : 0, '\0');
+				if (id.empty() || valueCount > 1000000 || !ReadMemory(key, id.data(), id.size()))
+				{
+					g_factsError = "odd node " + std::to_string(i) + ": key size " + std::to_string(keySize) + ", entries " + std::to_string(valueCount);
+					ok = false;
+					break;
+				}
+				int sum = 0;
+				if (valueCount > 0)
+				{
+					entries.resize(static_cast<size_t>(valueCount) * 24);
+					if (!ReadMemory(values, entries.data(), entries.size()))
+					{
+						g_factsError = "entries unreadable at node " + std::to_string(i);
+						ok = false;
+						break;
+					}
+					for (uint32_t v = 0; v < valueCount; ++v)
+						sum += *reinterpret_cast<int32_t *>(entries.data() + v * 24);
+				}
+				out[id] = sum;
+			}
+			if (ok && out.size() == factCount)
+				return true;
+			if (ok)
+				g_factsError = "read " + std::to_string(out.size()) + " distinct facts, map says " + std::to_string(factCount);
+			return false;
+		}
+		g_factsError = "free list doesn't match the fact count (" + std::to_string(factCount) + " facts, " + std::to_string(capacity) + " slots)";
+		return false;
+	}
+
+	static std::unordered_map<std::string, int> g_factsBaseline;
+	static bool g_factsBaselineValid = false;
+	static size_t g_factsPage = 0;
+
+	// session start (a save loaded): changes are counted from here
+	static void WO_FactsBaseline(void *, void *frame, void *result)
+	{
+		g_factsBaseline.clear();
+		g_factsBaselineValid = ReadAllFacts(g_factsBaseline);
+		g_factsPage = 0;
+		DebugLog("facts: baseline " + std::string(g_factsBaselineValid ? "of " + std::to_string(g_factsBaseline.size()) + " facts" : "failed (" + g_factsError + ")"));
+		WNB_ReturnBool(frame, result, g_factsBaselineValid);
+	}
+
+	// "page pages count {id sum}" for facts whose sum changed since the baseline, one page per call in turn
+	// (pages keep each message small; a member that joins late gets every page within a few calls)
+	static void WO_FactsPage(void *, void *frame, void *result)
+	{
+		const int pageSize = (std::max)(1, WNB_ReadIntParameter(frame));
+		std::unordered_map<std::string, int> current;
+		if (!g_factsBaselineValid || !ReadAllFacts(current))
+		{
+			ReturnString(frame, result, "");
+			return;
+		}
+
+		std::vector<std::pair<std::string, int>> changes;
+		for (const auto &fact : current)
+		{
+			const auto before = g_factsBaseline.find(fact.first);
+			if (before == g_factsBaseline.end() ? fact.second != 0 : before->second != fact.second)
+				changes.emplace_back(fact.first, fact.second);
+		}
+		for (const auto &fact : g_factsBaseline)
+		{
+			if (current.find(fact.first) == current.end())
+				changes.emplace_back(fact.first, 0);
+		}
+		std::sort(changes.begin(), changes.end());
+
+		const size_t pages = changes.empty() ? 1 : (changes.size() + pageSize - 1) / pageSize;
+		const size_t page = g_factsPage++ % pages;
+		const size_t first = page * pageSize;
+		const size_t last = (std::min)(changes.size(), first + pageSize);
+		std::string text = std::to_string(page) + " " + std::to_string(pages) + " " + std::to_string(last - first);
+		for (size_t i = first; i < last; ++i)
+		{
+			std::string id = changes[i].first;
+			std::replace(id.begin(), id.end(), ' ', '*');
+			text += " " + id + " " + std::to_string(changes[i].second);
+		}
+		ReturnString(frame, result, text);
+	}
+
 	static void WO_Send(void *, void *frame, void *result)
 	{
 		WNB_String text{};
@@ -504,6 +726,7 @@ namespace wo_native
 
 		const NativeRegistration registrations[] = {
 		    {"WO_Send", &WO_Send}, {"WO_Poll", &WO_Poll}, {"WO_Tick", &WO_Tick}, {"WO_Str", &WO_Str}, {"WO_NameAt", &WO_NameAt},
+		    {"WO_FactsBaseline", &WO_FactsBaseline}, {"WO_FactsPage", &WO_FactsPage},
 		};
 
 		int registeredCount = 0;
