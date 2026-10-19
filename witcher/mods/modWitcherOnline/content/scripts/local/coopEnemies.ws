@@ -10,6 +10,9 @@ class r_CoopHostEnemy
     public var netId : int;
     public var lastSeenAt : float;
     public var deadAt : float;
+    public var attackSeq : int;
+    public var attackAnim : name;
+    public var hitAnimTime : float;  // animation time of the current attack's hit
 }
 
 class r_CoopPuppet
@@ -23,6 +26,10 @@ class r_CoopPuppet
     public var hp : float;
     public var alive : bool;
     public var predictUntil : float;
+    public var attackSeq : int;
+    public var attackPlayedAt : float;
+    public var animAiId : int;
+    public var addedNoFinishers : array<name>;
 }
 
 class r_CoopSuppressed
@@ -45,6 +52,10 @@ class r_CoopHurt
     public var seq : int;
     public var netId : int;
     public var hitReaction : int;
+    public var attackSeq : int;     // the attack that landed it, to line it up with the puppet's swing
+    public var hitAnimTime : float;
+    public var due : float;         // member: when to apply it
+    public var receivedAt : float;
     public var types : array<name>;
     public var values : array<float>;
 }
@@ -85,6 +96,7 @@ class r_CoopEnemies
     private var hurtAck : int;
     private var lastSentHurtAck : int;
     private var leaderListsMyHurts : bool;
+    private var delayedHurts : array<r_CoopHurt>;
 
     // set while this game changes a puppet itself, so the damage hook lets it through
     public var applyingHostState : bool;
@@ -102,6 +114,10 @@ class r_CoopEnemies
     public var hurtsApplied : int;
     public var hurtsDodged : int;
     public var hurtDamageTaken : float;
+    public var attacksSeen : int;
+    public var attacksPlayed : int;
+    public var attackPlayFailures : int;
+    public var lastHurtDelay : float;
 
     default lastHostSend = -999;
     default lastSnapshotAt = -999;
@@ -200,10 +216,12 @@ class r_CoopEnemies
                 leaderName = client.getJoinedParty();
                 leaderEpoch = 0;
                 hurtAck = 0;
+                delayedHurts.Clear();
             }
 
-            // the leader's snapshots also stop while its game sits in a menu
-            if(now - lastSnapshotAt > 8.0)
+            // the leader's snapshots also stop while its game sits in a menu; far from the leader, this world
+            // runs its own monsters again
+            if(now - lastSnapshotAt > 8.0 || !LeaderNear())
             {
                 ReleaseAll();
             }
@@ -211,6 +229,7 @@ class r_CoopEnemies
             {
                 UpdatePuppets(now);
             }
+            ApplyDueHurts(now);
             SendHits(now);
         }
         else if(puppets.Size() > 0 || suppressed.Size() > 0)
@@ -241,7 +260,8 @@ class r_CoopEnemies
         globals = client.getGlobalPlayers();
         for(i = 0; i < globals.Size(); i += 1)
         {
-            if(!globals[i] || !globals[i].inParty || globals[i].joinedParty != me || globals[i].area != area)
+            if(!globals[i] || !globals[i].inParty || globals[i].joinedParty != me || globals[i].area != area
+                || VecDistance(globals[i].pos, thePlayer.GetWorldPosition()) > COOP_SHARE_RANGE())
             {
                 continue;
             }
@@ -310,7 +330,8 @@ class r_CoopEnemies
         }
     }
 
-    // "en epoch seq area acks{user session lastSeq} templates{path} enemies{netId tpl appearance x y z yaw hp alive}"
+    // "en epoch seq area acks{user session lastSeq} templates{path}
+    //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim}"
     private function HostSend()
     {
         var templates : array<string>;
@@ -345,7 +366,7 @@ class r_CoopEnemies
             body += " " + e.netId + " " + tplIndex + " " + CoopEncode(NameToString(e.npc.GetAppearance()))
                 + " " + FloatToStringPrec(pos.X, 2) + " " + FloatToStringPrec(pos.Y, 2) + " " + FloatToStringPrec(pos.Z, 2)
                 + " " + FloatToStringPrec(e.npc.GetHeading(), 1) + " " + FloatToStringPrec(MaxF(0, e.npc.GetHealthPercents()), 4)
-                + " " + alive;
+                + " " + alive + " " + e.attackSeq + " " + CoopEncode(NameToString(e.attackAnim));
         }
 
         WO_Send("coop en " + epoch + " " + hostSeq + " " + WO_CurrentAreaCode() + " " + AcksText() + " " + TemplatesText(templates)
@@ -635,13 +656,13 @@ class r_CoopEnemies
             user = GhostOwner(victim);
             if(e && user != "")
             {
-                QueueHurt(user, e.netId, act);
+                QueueHurt(user, e, act);
             }
         }
         return false;
     }
 
-    private function QueueHurt(user : string, netId : int, act : W3DamageAction)
+    private function QueueHurt(user : string, e : r_CoopHostEnemy, act : W3DamageAction)
     {
         var dts : array<SRawDamage>;
         var h : r_CoopHurt;
@@ -664,8 +685,10 @@ class r_CoopEnemies
 
         h.user = user;
         h.seq = nextHurtSeq;
-        h.netId = netId;
+        h.netId = e.netId;
         h.hitReaction = (int)act.GetHitReactionType();
+        h.attackSeq = e.attackSeq;
+        h.hitAnimTime = e.hitAnimTime;
         nextHurtSeq += 1;
         hurts.PushBack(h);
         if(hurts.Size() > 16)
@@ -689,7 +712,8 @@ class r_CoopEnemies
         }
     }
 
-    // "hurt epoch count {user seq netId hitReaction types {type value}}": every hurt not yet acknowledged
+    // "hurt epoch count {user seq netId hitReaction attackSeq hitAnimTime types {type value}}": every hurt not yet
+    // acknowledged
     private function SendHurts(now : float)
     {
         var text : string;
@@ -705,7 +729,8 @@ class r_CoopEnemies
         for(i = 0; i < hurts.Size(); i += 1)
         {
             h = hurts[i];
-            text += " " + h.user + " " + h.seq + " " + h.netId + " " + h.hitReaction + " " + h.types.Size();
+            text += " " + h.user + " " + h.seq + " " + h.netId + " " + h.hitReaction + " " + h.attackSeq
+                + " " + FloatToStringPrec(h.hitAnimTime, 2) + " " + h.types.Size();
             for(j = 0; j < h.types.Size(); j += 1)
             {
                 text += " " + NameToString(h.types[j]) + " " + FloatToStringPrec(h.values[j], 2);
@@ -714,6 +739,36 @@ class r_CoopEnemies
         WO_Send(text);
         lastHurtSend = now;
         lastHurtSentCount = hurts.Size();
+    }
+
+    // A shared monster started (AET_DurationStart) or finished (AET_DurationEnd, where the hit is processed) an
+    // attack's hit window. Members replay the animation on its puppet.
+    public function OnEnemyAttack(npc : CNewNPC, eventType : EAnimationEventType, animInfo : SAnimationEventAnimInfo)
+    {
+        var e : r_CoopHostEnemy;
+
+        if(!wasHost)
+        {
+            return;
+        }
+        e = FindHostEnemyByNpc(npc);
+        if(!e)
+        {
+            return;
+        }
+
+        if(eventType == AET_DurationStart)
+        {
+            e.attackSeq += 1;
+            e.attackAnim = GetAnimNameFromEventAnimInfo(animInfo);
+            e.hitAnimTime = GetLocalAnimTimeFromEventAnimInfo(animInfo);
+            attacksSeen += 1;
+            lastHostSend = -999;  // send it now, not on the next 100 ms tick
+        }
+        else if(eventType == AET_DurationEnd)
+        {
+            e.hitAnimTime = GetLocalAnimTimeFromEventAnimInfo(animInfo);
+        }
     }
 
     public function PendingHurtCount() : int
@@ -758,7 +813,8 @@ class r_CoopEnemies
         var templates : array<string>;
         var seen : array<int>;
         var pos : Vector;
-        var snapshotEpoch, n, i, idx, netId, tplIndex : int;
+        var attackAnim : name;
+        var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq : int;
         var hp, yaw : float;
         var alive : bool;
         var app : string;
@@ -768,7 +824,7 @@ class r_CoopEnemies
             return;
         }
 
-        if(StringToInt(WO_Str(3), 0) != WO_CurrentAreaCode())
+        if(StringToInt(WO_Str(3), 0) != WO_CurrentAreaCode() || !LeaderNear())
         {
             ReleaseAll();
             return;
@@ -807,7 +863,7 @@ class r_CoopEnemies
 
         n = StringToInt(WO_Str(idx), 0);
         idx += 1;
-        for(i = 0; i < n && idx + 8 < count; i += 1)
+        for(i = 0; i < n && idx + 10 < count; i += 1)
         {
             netId = StringToInt(WO_Str(idx), 0);
             tplIndex = StringToInt(WO_Str(idx + 1), 0);
@@ -819,11 +875,17 @@ class r_CoopEnemies
             yaw = StringToFloat(WO_Str(idx + 6), 0);
             hp = StringToFloat(WO_Str(idx + 7), 0);
             alive = WO_Str(idx + 8) == "1";
-            idx += 9;
+            attackSeq = StringToInt(WO_Str(idx + 9), 0);
+            attackAnim = '';
+            if(WO_Str(idx + 10) != "-")
+            {
+                attackAnim = WO_NameAt(idx + 10);
+            }
+            idx += 11;
 
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
-                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive);
+                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackAnim);
                 seen.PushBack(netId);
             }
         }
@@ -844,7 +906,10 @@ class r_CoopEnemies
     {
         var me, user : string;
         var listed : bool;
-        var n, i, idx, seq, netId, hitReaction, typeCount : int;
+        var h : r_CoopHurt;
+        var p : r_CoopPuppet;
+        var now : float;
+        var n, i, j, idx, seq, typeCount : int;
 
         if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 3 || StringToInt(WO_Str(1), 0) != leaderEpoch)
         {
@@ -852,17 +917,15 @@ class r_CoopEnemies
         }
 
         me = theGame.r_getMultiplayerClient().getUsername();
+        now = theGame.GetEngineTimeAsSeconds();
         n = StringToInt(WO_Str(2), 0);
         idx = 3;
-        for(i = 0; i < n && idx + 4 < count; i += 1)
+        for(i = 0; i < n && idx + 6 < count; i += 1)
         {
             user = WO_Str(idx);
             seq = StringToInt(WO_Str(idx + 1), 0);
-            netId = StringToInt(WO_Str(idx + 2), 0);
-            hitReaction = StringToInt(WO_Str(idx + 3), 0);
-            typeCount = StringToInt(WO_Str(idx + 4), 0);
-            idx += 5;
-            if(idx + typeCount * 2 > count)
+            typeCount = StringToInt(WO_Str(idx + 6), 0);
+            if(idx + 7 + typeCount * 2 > count)
             {
                 break;
             }
@@ -871,18 +934,55 @@ class r_CoopEnemies
                 listed = true;
                 if(seq > hurtAck)
                 {
-                    ApplyHurt(netId, hitReaction, idx, typeCount);
+                    h = new r_CoopHurt in this;
+                    h.seq = seq;
+                    h.netId = StringToInt(WO_Str(idx + 2), 0);
+                    h.hitReaction = StringToInt(WO_Str(idx + 3), 0);
+                    h.attackSeq = StringToInt(WO_Str(idx + 4), 0);
+                    h.hitAnimTime = StringToFloat(WO_Str(idx + 5), 0);
+                    for(j = 0; j < typeCount; j += 1)
+                    {
+                        h.types.PushBack(WO_NameAt(idx + 7 + j * 2));
+                        h.values.PushBack(StringToFloat(WO_Str(idx + 8 + j * 2), 0));
+                    }
+
+                    // land it when this world's copy of the swing reaches the hit (immediately if this world
+                    // missed that attack); a dodge before then avoids it
+                    h.receivedAt = now;
+                    h.due = now;
+                    p = FindPuppet(h.netId);
+                    if(p && p.alive && p.attackSeq == h.attackSeq && p.attackPlayedAt > 0)
+                    {
+                        h.due = MaxF(now, p.attackPlayedAt + MinF(h.hitAnimTime, 1.5));
+                    }
+                    delayedHurts.PushBack(h);
                     hurtAck = seq;
                 }
             }
-            idx += typeCount * 2;
+            idx += 7 + typeCount * 2;
         }
         leaderListsMyHurts = listed;
     }
 
+    private function ApplyDueHurts(now : float)
+    {
+        var i : int;
+
+        for(i = 0; i < delayedHurts.Size(); i += 1)
+        {
+            if(delayedHurts[i].due <= now)
+            {
+                lastHurtDelay = now - delayedHurts[i].receivedAt;
+                ApplyHurt(delayedHurts[i]);
+                delayedHurts.Erase(i);
+                i -= 1;
+            }
+        }
+    }
+
     // The leader's monster hit this player's ghost: apply its raw damage here, with the monster's local copy
     // as attacker, so this game's armor, Quen and difficulty count. A hit landing mid-dodge misses.
-    private function ApplyHurt(netId : int, hitReaction : int, idx : int, typeCount : int)
+    private function ApplyHurt(h : r_CoopHurt)
     {
         var action : W3DamageAction;
         var p : r_CoopPuppet;
@@ -896,17 +996,17 @@ class r_CoopEnemies
             return;
         }
 
-        p = FindPuppet(netId);
+        p = FindPuppet(h.netId);
         if(p && p.alive)
         {
             attacker = p.npc;
         }
 
         action = new W3DamageAction in theGame.damageMgr;
-        action.Initialize(attacker, thePlayer, theGame, "W3CoopHurt", (EHitReactionType)hitReaction, CPS_AttackPower, true, false, false, false);
-        for(i = 0; i < typeCount; i += 1)
+        action.Initialize(attacker, thePlayer, theGame, "W3CoopHurt", (EHitReactionType)h.hitReaction, CPS_AttackPower, true, false, false, false);
+        for(i = 0; i < h.types.Size(); i += 1)
         {
-            action.AddDamage(WO_NameAt(idx + i * 2), StringToFloat(WO_Str(idx + i * 2 + 1), 0));
+            action.AddDamage(h.types[i], h.values[i]);
         }
         before = thePlayer.GetStat(BCS_Vitality);
         theGame.damageMgr.ProcessAction(action);
@@ -915,7 +1015,8 @@ class r_CoopEnemies
         hurtsApplied += 1;
     }
 
-    private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool)
+    private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
+        attackSeq : int, attackAnim : name)
     {
         var p : r_CoopPuppet;
         var npc : CNewNPC;
@@ -946,6 +1047,16 @@ class r_CoopEnemies
                 return;
             }
             p = MakePuppet(npc, netId, spawned);
+            p.attackSeq = attackSeq;  // don't replay an attack from before this puppet existed
+        }
+
+        if(attackSeq != p.attackSeq)
+        {
+            p.attackSeq = attackSeq;
+            if(p.alive && IsNameValid(attackAnim))
+            {
+                PlayAttack(p, attackAnim);
+            }
         }
 
         p.target = pos;
@@ -1043,8 +1154,68 @@ class r_CoopEnemies
         p.target = npc.GetWorldPosition();
         p.yaw = npc.GetHeading();
         p.aiId = ForceIdle(npc);
+        // a finisher would kill it here, outside the leader's say ('DisableFinishers' blocks the killing-blow
+        // finisher, 'DisableFinisher' the one on a living target)
+        BlockFinisher(p, 'DisableFinishers');
+        BlockFinisher(p, 'DisableFinisher');
         puppets.PushBack(p);
         return p;
+    }
+
+    private function BlockFinisher(p : r_CoopPuppet, ability : name)
+    {
+        if(!p.npc.HasAbility(ability))
+        {
+            p.npc.AddAbility(ability, false);
+            p.addedNoFinishers.PushBack(ability);
+        }
+    }
+
+    // Through the AI, above the forced idle tree (a direct ActionPlaySlotAnimationAsync is refused while that
+    // tree owns the puppet's actions); when the animation ends the puppet is idle again.
+    private function PlayAttack(p : r_CoopPuppet, anim : name)
+    {
+        var action : CAIPlayAnimationSlotAction;
+
+        p.attackPlayedAt = theGame.GetEngineTimeAsSeconds();
+        if(p.animAiId != 0)
+        {
+            p.npc.CancelAIBehavior(p.animAiId);
+        }
+        action = new CAIPlayAnimationSlotAction in p.npc;
+        action.OnCreated();
+        action.animName = anim;
+        action.slotName = 'NPC_ANIM_SLOT';
+        action.blendInTime = 0.1;
+        action.blendOutTime = 0.2;
+        p.animAiId = p.npc.ForceAIBehavior(action, BTAP_Emergency);
+        if(p.animAiId != 0)
+        {
+            attacksPlayed += 1;
+        }
+        else
+        {
+            attackPlayFailures += 1;
+            lastError = "attack animation '" + NameToString(anim) + "' did not play";
+        }
+    }
+
+    // within sharing range of the leader, in the same area
+    private function LeaderNear() : bool
+    {
+        var globals : array<r_RemotePlayer>;
+        var i : int;
+
+        globals = theGame.r_getMultiplayerClient().getGlobalPlayers();
+        for(i = 0; i < globals.Size(); i += 1)
+        {
+            if(globals[i] && globals[i].username == leaderName)
+            {
+                return globals[i].area == WO_CurrentAreaCode()
+                    && VecDistance(globals[i].pos, thePlayer.GetWorldPosition()) <= COOP_SHARE_RANGE();
+            }
+        }
+        return false;
     }
 
     private function ForceIdle(npc : CNewNPC) : int
@@ -1120,6 +1291,11 @@ class r_CoopEnemies
     private function KillPuppet(p : r_CoopPuppet)
     {
         p.alive = false;
+        if(p.animAiId != 0)
+        {
+            p.npc.CancelAIBehavior(p.animAiId);
+            p.animAiId = 0;
+        }
         if(p.aiId != 0)
         {
             p.npc.CancelAIBehavior(p.aiId);
@@ -1133,9 +1309,16 @@ class r_CoopEnemies
     // a puppet the leader no longer reports: spawned ones go away, local twins get their own AI back
     private function ReleasePuppet(p : r_CoopPuppet)
     {
+        var i : int;
+
         if(!p.npc || !p.alive)
         {
             return;
+        }
+        if(p.animAiId != 0)
+        {
+            p.npc.CancelAIBehavior(p.animAiId);
+            p.animAiId = 0;
         }
         if(p.aiId != 0)
         {
@@ -1145,6 +1328,13 @@ class r_CoopEnemies
         if(p.spawned)
         {
             p.npc.Destroy();
+        }
+        else
+        {
+            for(i = 0; i < p.addedNoFinishers.Size(); i += 1)
+            {
+                p.npc.RemoveAbility(p.addedNoFinishers[i]);
+            }
         }
     }
 
@@ -1157,6 +1347,7 @@ class r_CoopEnemies
             ReleasePuppet(puppets[i]);
         }
         puppets.Clear();
+        delayedHurts.Clear();
 
         for(i = suppressed.Size() - 1; i >= 0; i -= 1)
         {
@@ -1409,6 +1600,25 @@ class r_CoopEnemies
     {
         return pendingHits.Size();
     }
+}
+
+// players farther apart than this run their own monsters (the leader's world doesn't simulate far away)
+function COOP_SHARE_RANGE() : float
+{
+    return 60.0;
+}
+
+@wrapMethod(CNewNPC)
+function OnPreAttackEvent(animEventName : name, animEventType : EAnimationEventType, data : CPreAttackEventData, animInfo : SAnimationEventAnimInfo)
+{
+    var client : r_MultiplayerClient;
+
+    client = theGame.r_getMultiplayerClient();
+    if(client)
+    {
+        client.getCoopEnemies().OnEnemyAttack(this, animEventType, animInfo);
+    }
+    return wrappedMethod(animEventName, animEventType, data, animInfo);
 }
 
 // Spaces separate fields on the wire; '*' can't appear in depot paths or appearance names.
