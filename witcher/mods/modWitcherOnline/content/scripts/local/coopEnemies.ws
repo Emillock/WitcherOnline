@@ -2201,6 +2201,11 @@ class r_CoopEnemies
         return puppets[i].spawned;
     }
 
+    public function PuppetTarget(i : int) : Vector
+    {
+        return puppets[i].target;
+    }
+
     public function PuppetInHitAnim(i : int) : bool
     {
         return puppets[i].npc.IsInHitAnim();
