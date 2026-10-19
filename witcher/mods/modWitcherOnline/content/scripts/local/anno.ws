@@ -1003,6 +1003,7 @@ function OnDialogOptionAccepted(index : int)
 function OnBlockingSceneStarted( scene: CStoryScene )
 {
     theGame.r_getMultiplayerClient().stopRiding();
+    theGame.r_getMultiplayerClient().getCoopEnemies().OnSceneStarted(scene);
 
     wrappedMethod(scene);
 }
@@ -1011,6 +1012,7 @@ function OnBlockingSceneStarted( scene: CStoryScene )
 function OnBlockingSceneEnded( output : CStorySceneOutput )
 {
     theGame.r_getMultiplayerClient().clearActiveDialogChoices();
+    theGame.r_getMultiplayerClient().getCoopEnemies().OnSceneEnded();
 
     wrappedMethod(output);
 }
@@ -1019,6 +1021,7 @@ function OnBlockingSceneEnded( output : CStorySceneOutput )
 function OnDialogSkipped(value : int)
 {
     theGame.r_getMultiplayerClient().clearActiveDialogChoices();
+    theGame.r_getMultiplayerClient().getCoopEnemies().OnLocalSkip(value);
 
     wrappedMethod(value);
 }

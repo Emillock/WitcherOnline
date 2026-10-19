@@ -240,6 +240,9 @@ statemachine class r_MultiplayerClient
     private var wo_nativePresence : string;
     private var wo_isTeleporting : bool;
     private var coopEnemies : r_CoopEnemies;
+    private var remoteChoiceWaitCount : int;
+    private var remoteChoiceWaitSince : float;
+    public var dialogSyncTrace : string;
 
     public function getCoopEnemies() : r_CoopEnemies
     {
@@ -1113,6 +1116,8 @@ statemachine class r_MultiplayerClient
     {
         if(!remotePlayer)
         {
+            dialogSyncTrace = "no remote";
+
             return;
         }
 
@@ -1120,26 +1125,36 @@ statemachine class r_MultiplayerClient
 
         if(pendingSyncedDialogChoice)
         {
+            dialogSyncTrace = "pending";
+
             return;
         }
 
         if(remotePlayer.lastDialogIndex < 0)
         {
+            dialogSyncTrace = "no index";
+
             return;
         }
 
         if(remotePlayer.lastDialogCount <= 0)
         {
+            dialogSyncTrace = "no count";
+
             return;
         }
 
         if(remotePlayer.lastDialogCount == remotePlayer.prevDialogCount)
         {
+            dialogSyncTrace = "consumed already";
+
             return;
         }
 
         if(!isRemotePlayerCloseForDialogSync(remotePlayer))
         {
+            dialogSyncTrace = "too far";
+
             consumeRemoteDialogChoice(remotePlayer);
             return;
         }
@@ -1147,17 +1162,32 @@ statemachine class r_MultiplayerClient
 
         if(!hasActiveDialogChoices())
         {
-            // auto consume
+            // a follower a few lines behind gets the leader's pick when it reaches the same choices (up to 20 s)
+            if(remoteChoiceWaitCount != remotePlayer.lastDialogCount)
+            {
+                remoteChoiceWaitCount = remotePlayer.lastDialogCount;
+                remoteChoiceWaitSince = theGame.GetEngineTimeAsSeconds();
+            }
+            if(theGame.GetEngineTimeAsSeconds() - remoteChoiceWaitSince < 20.0)
+            {
+                dialogSyncTrace = "waiting";
+                return;
+            }
+            dialogSyncTrace = "wait expired";
+
             consumeRemoteDialogChoice(remotePlayer);
             return;
         }
 
         if(!dialogChoicesMatch(dialogChoices, remotePlayer.dialogChoices))
         {
+            dialogSyncTrace = "choices differ";
+
             consumeRemoteDialogChoice(remotePlayer);
             return;
         }
 
+        dialogSyncTrace = "started";
         startPendingSyncedDialogChoice(remotePlayer);
     }
 
@@ -1222,20 +1252,15 @@ statemachine class r_MultiplayerClient
             return false;
         }
 
-        if(localChoice.playGoChunk != '')
-        {
-            localPlayGoChunk = NameToString(localChoice.playGoChunk);
-        }
-        else
+        // an empty chunk can arrive as "", "none" or "None" (NameToString of an empty name)
+        localPlayGoChunk = StrLower(NameToString(localChoice.playGoChunk));
+        if(localPlayGoChunk == "")
         {
             localPlayGoChunk = "none";
         }
 
-        if(remoteChoice.playGoChunk != "")
-        {
-            remotePlayGoChunk = remoteChoice.playGoChunk;
-        }
-        else
+        remotePlayGoChunk = StrLower(remoteChoice.playGoChunk);
+        if(remotePlayGoChunk == "")
         {
             remotePlayGoChunk = "none";
         }

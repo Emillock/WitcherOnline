@@ -115,6 +115,18 @@ class r_CoopEnemies
     private var journalIndexEntries : array<CJournalBase>;
     private var journalIndexBuiltAt : float;
 
+    // scenes and the leader's tracking (sent with the journal list)
+    private var currentScene : string;
+    private var sceneSkipSeq : int;
+    private var sceneSkipValue : int;
+    private var applyingSkip : bool;
+    private var sentTrackedQuest : name;
+    private var sentHighlighted : name;
+    private var leaderTrackedQuest : name;
+    private var leaderHighlighted : name;
+    private var leaderSceneSeen : string;
+    private var leaderSkipSeen : int;
+
     // set while this game changes a puppet itself, so the damage hook lets it through
     public var applyingHostState : bool;
 
@@ -143,6 +155,9 @@ class r_CoopEnemies
     public var journalMessages : int;   // journal lists accepted from the leader
     public var journalMissing : int;    // entries this game could not find
     public var lastJournalSeen : string;
+    public var trackedApplied : int;
+    public var lastTrackedApplied : name;
+    public var skipsApplied : int;
     public var lastJournalAppliedStatus : int;
 
     default lastHostSend = -999;
@@ -223,6 +238,10 @@ class r_CoopEnemies
                 lastHostSend = now;
             }
             SendHurts(now);
+            if(TrackingChanged())
+            {
+                lastJournalSend = -999;
+            }
             SendJournal(now);
             wasHost = true;
         }
@@ -1746,8 +1765,31 @@ class r_CoopEnemies
         lastJournalSend = -999;
     }
 
-    // "jr epoch tick count {tag status}"; the tick changes every send so a member that joins later still gets
-    // the list (the client passes unchanged state on only once)
+    private function TrackingChanged() : bool
+    {
+        var manager : CWitcherJournalManager;
+        var trackedTag, highlightedTag : name;
+
+        manager = theGame.GetJournalManager();
+        if(manager.GetTrackedQuest())
+        {
+            trackedTag = manager.GetTrackedQuest().GetUniqueScriptTag();
+        }
+        if(manager.GetHighlightedObjective())
+        {
+            highlightedTag = manager.GetHighlightedObjective().GetUniqueScriptTag();
+        }
+        if(trackedTag == sentTrackedQuest && highlightedTag == sentHighlighted)
+        {
+            return false;
+        }
+        sentTrackedQuest = trackedTag;
+        sentHighlighted = highlightedTag;
+        return true;
+    }
+
+    // "jr epoch tick trackedQuest highlightedObjective scene skipSeq skipValue count {tag status}"; the tick
+    // changes every send so a member that joins later still gets it (the client passes unchanged state once)
     private function SendJournal(now : float)
     {
         var text : string;
@@ -1758,7 +1800,9 @@ class r_CoopEnemies
             return;
         }
         journalTick += 1;
-        text = "coop jr " + epoch + " " + journalTick + " " + journalTags.Size();
+        text = "coop jr " + epoch + " " + journalTick + " " + CoopEncode(NameToString(sentTrackedQuest))
+            + " " + CoopEncode(NameToString(sentHighlighted)) + " " + CoopEncode(currentScene) + " " + sceneSkipSeq
+            + " " + sceneSkipValue + " " + journalTags.Size();
         for(i = 0; i < journalTags.Size(); i += 1)
         {
             // tags can contain spaces ("Win unique card from crossroads innkeeper A485F434-...")
@@ -1772,18 +1816,28 @@ class r_CoopEnemies
     {
         var manager : CWitcherJournalManager;
         var journalEntry : CJournalBase;
-        var tag : name;
+        var tag, trackedTag, highlightedTag : name;
         var status, current, n, i, idx : int;
 
-        if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 4 || StringToInt(WO_Str(1), 0) != leaderEpoch)
+        if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 9 || StringToInt(WO_Str(1), 0) != leaderEpoch)
         {
             return;
         }
 
         manager = theGame.GetJournalManager();
         journalMessages += 1;
-        n = StringToInt(WO_Str(3), 0);
-        idx = 4;
+        if(WO_Str(3) != "-")
+        {
+            trackedTag = WO_NameAt(3);
+        }
+        if(WO_Str(4) != "-")
+        {
+            highlightedTag = WO_NameAt(4);
+        }
+        ApplyLeaderSkip(CoopDecode(WO_Str(5)), StringToInt(WO_Str(6), 0), StringToInt(WO_Str(7), 0));
+
+        n = StringToInt(WO_Str(8), 0);
+        idx = 9;
         for(i = 0; i < n && idx + 1 < count; i += 1)
         {
             // the client restores the spaces of encoded fields, so this is the exact tag
@@ -1809,6 +1863,110 @@ class r_CoopEnemies
                 lastJournalAppliedStatus = status;
             }
         }
+
+        // after the statuses: a quest the leader just activated can be tracked here too
+        ApplyLeaderTracking(trackedTag, highlightedTag);
+    }
+
+    // The leader's tracked quest and highlighted objective, applied when the leader changes them (so a member
+    // can still track something else in between) and only for quests that are active here.
+    private function ApplyLeaderTracking(trackedTag : name, highlightedTag : name)
+    {
+        var manager : CWitcherJournalManager;
+        var journalQuest : CJournalQuest;
+        var journalObjective : CJournalQuestObjective;
+
+        manager = theGame.GetJournalManager();
+        if(trackedTag != leaderTrackedQuest)
+        {
+            journalQuest = (CJournalQuest)FindJournalEntry(trackedTag);
+            if(!IsNameValid(trackedTag) || (journalQuest && manager.GetEntryStatus(journalQuest) == JS_Active))
+            {
+                leaderTrackedQuest = trackedTag;
+            }
+            if(journalQuest && manager.GetEntryStatus(journalQuest) == JS_Active && manager.GetTrackedQuest() != journalQuest)
+            {
+                manager.SetTrackedQuest(journalQuest);
+                trackedApplied += 1;
+                lastTrackedApplied = trackedTag;
+            }
+        }
+        if(highlightedTag != leaderHighlighted)
+        {
+            journalObjective = (CJournalQuestObjective)FindJournalEntry(highlightedTag);
+            if(!IsNameValid(highlightedTag) || (journalObjective && manager.GetEntryStatus(journalObjective) == JS_Active))
+            {
+                leaderHighlighted = highlightedTag;
+            }
+            if(journalObjective && manager.GetEntryStatus(journalObjective) == JS_Active)
+            {
+                manager.SetHighlightedObjective(journalObjective);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- scenes
+
+    public function OnSceneStarted(scene : CStoryScene)
+    {
+        if(scene)
+        {
+            currentScene = scene.GetPath();
+        }
+    }
+
+    public function OnSceneEnded()
+    {
+        currentScene = "";
+    }
+
+    // the bots have no quest scene to share; they name one
+    public function SetSceneForTest(path : string)
+    {
+        currentScene = path;
+    }
+
+    // The leader skipped a line or cutscene: members in the same scene skip with it.
+    public function OnLocalSkip(value : int)
+    {
+        if(!wasHost || applyingSkip)
+        {
+            return;
+        }
+        sceneSkipSeq += 1;
+        sceneSkipValue = value;
+        lastJournalSend = -999;
+    }
+
+    private function ApplyLeaderSkip(scene : string, skipSeq : int, skipValue : int)
+    {
+        var count, i : int;
+
+        // a new scene of the leader's: its earlier skips belong to another scene
+        if(scene != leaderSceneSeen)
+        {
+            leaderSceneSeen = scene;
+            leaderSkipSeen = skipSeq;
+            return;
+        }
+        if(skipSeq <= leaderSkipSeen)
+        {
+            return;
+        }
+        count = Min(skipSeq - leaderSkipSeen, 3);
+        leaderSkipSeen = skipSeq;
+        if(scene == "" || scene != currentScene)
+        {
+            return;
+        }
+
+        applyingSkip = true;
+        for(i = 0; i < count; i += 1)
+        {
+            theGame.GetStorySceneSystem().SendSignal(SSST_Skip, skipValue);
+        }
+        applyingSkip = false;
+        skipsApplied += count;
     }
 
     private function FindJournalEntry(tag : name) : CJournalBase
