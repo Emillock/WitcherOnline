@@ -22,6 +22,14 @@ class r_CoopHostEnemy
     public var moveSeq : int;        // its other animated moves (dodges, taunts, ...), for members to replay
     public var moveAnim : name;
     public var moveAnimTime : float;
+    public var projSeq : int;        // its last projectile, for members to fire a harmless copy
+    public var projAt : float;
+    public var projTemplate : string;
+    public var projFrom : Vector;
+    public var projTo : Vector;
+    public var projAngle : float;
+    public var projSpeed : float;
+    public var projRange : float;
     public var stride : r_CoopStride;
 }
 
@@ -40,6 +48,7 @@ class r_CoopPuppet
     public var attackPlayedAt : float;
     public var slotAnimAt : float;  // an attack or move started playing (it stands meanwhile)
     public var moveSeq : int;
+    public var projSeq : int;
     public var animAiId : int;
     public var hitSeq : int;
     public var wasInHitAnim : bool;
@@ -333,6 +342,9 @@ class r_CoopEnemies
     public var lastMoveAnim : name;
     public var movesPlayed : int;
     public var movePlayFailures : int;
+    public var projectilesSeen : int;
+    public var projectilesFired : int;
+    public var projectileFailures : int;
     public var lastHurtDelay : float;
     public var hitReactionsMirrored : int;
     public var hitAnimsSeen : int;  // puppets entering a hit animation (shows the reactions really play)
@@ -577,7 +589,8 @@ class r_CoopEnemies
     }
 
     // "en epoch seq area acks{user session lastSeq} templates{path}
-    //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim hitSeq hitBy hitReaction moveSeq moveAnim}"
+    //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim hitSeq hitBy hitReaction moveSeq moveAnim
+    //  projSeq [projTpl fromX fromY fromZ toX toY toZ angle speed range]}" (projSeq 0 = no projectile in the last 1.5 s)
     private function HostSend()
     {
         var templates : array<string>;
@@ -588,7 +601,9 @@ class r_CoopEnemies
         var tplIndex : int;
         var alive : int;
         var i : int;
+        var now : float;
 
+        now = theGame.GetEngineTimeAsSeconds();
         hostSeq += 1;
         body = "";
         for(i = 0; i < hostEnemies.Size(); i += 1)
@@ -615,6 +630,25 @@ class r_CoopEnemies
                 + " " + alive + " " + e.attackSeq + " " + CoopEncode(NameToString(e.attackAnim))
                 + " " + e.hitSeq + " " + CoopEncode(e.hitBy) + " " + e.hitReaction
                 + " " + e.moveSeq + " " + CoopEncode(NameToString(e.moveAnim));
+
+            if(e.projSeq > 0 && now - e.projAt < 1.5)
+            {
+                tpl = CoopEncode(e.projTemplate);
+                tplIndex = templates.FindFirst(tpl);
+                if(tplIndex < 0)
+                {
+                    templates.PushBack(tpl);
+                    tplIndex = templates.Size() - 1;
+                }
+                body += " " + e.projSeq + " " + tplIndex
+                    + " " + FloatToStringPrec(e.projFrom.X, 2) + " " + FloatToStringPrec(e.projFrom.Y, 2) + " " + FloatToStringPrec(e.projFrom.Z, 2)
+                    + " " + FloatToStringPrec(e.projTo.X, 2) + " " + FloatToStringPrec(e.projTo.Y, 2) + " " + FloatToStringPrec(e.projTo.Z, 2)
+                    + " " + FloatToStringPrec(e.projAngle, 1) + " " + FloatToStringPrec(e.projSpeed, 1) + " " + FloatToStringPrec(e.projRange, 1);
+            }
+            else
+            {
+                body += " 0";
+            }
         }
 
         WO_Send("coop en " + epoch + " " + hostSeq + " " + WO_CurrentAreaCode() + " " + AcksText() + " " + TemplatesText(templates)
@@ -1065,6 +1099,32 @@ class r_CoopEnemies
 
     // One of its other animated moves (a behavior-tree task that plays an animation: dodge, jump back, taunt,
     // shot, ...); every animation event of it arrives here, a new one is a new name or a restart.
+    // A shared monster shot a projectile (arrow, bolt, spit, boulder, ...).
+    public function OnEnemyProjectile(proj : W3AdvancedProjectile, angle : float, speed : float, target : Vector, range : float)
+    {
+        var e : r_CoopHostEnemy;
+
+        if(!wasHost)
+        {
+            return;
+        }
+        e = FindHostEnemyByNpc((CNewNPC)proj.caster);
+        if(!e)
+        {
+            return;
+        }
+        e.projSeq += 1;
+        e.projAt = theGame.GetEngineTimeAsSeconds();
+        e.projTemplate = proj.GetReadableName();
+        e.projFrom = proj.GetWorldPosition();
+        e.projTo = target;
+        e.projAngle = angle;
+        e.projSpeed = speed;
+        e.projRange = range;
+        projectilesSeen += 1;
+        lastHostSend = -999;
+    }
+
     public function OnEnemyMove(npc : CNewNPC, animInfo : SAnimationEventAnimInfo)
     {
         var e : r_CoopHostEnemy;
@@ -1178,9 +1238,10 @@ class r_CoopEnemies
         var seen : array<int>;
         var pos : Vector;
         var attackAnim, moveAnim : name;
-        var hitBy : string;
-        var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq : int;
-        var hp, yaw : float;
+        var hitBy, projTpl : string;
+        var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, projSeq, projIndex : int;
+        var hp, yaw, projAngle, projSpeed, projRange : float;
+        var projFrom, projTo : Vector;
         var alive : bool;
         var app : string;
 
@@ -1256,11 +1317,36 @@ class r_CoopEnemies
                 moveAnim = WO_NameAt(idx + 15);
             }
             idx += 16;
+            projSeq = StringToInt(WO_Str(idx), 0);
+            idx += 1;
+            projTpl = "";
+            if(projSeq != 0)
+            {
+                if(idx + 9 >= count)
+                {
+                    break;
+                }
+                projIndex = StringToInt(WO_Str(idx), 0);
+                if(projIndex >= 0 && projIndex < templates.Size())
+                {
+                    projTpl = templates[projIndex];
+                }
+                projFrom = Vector(StringToFloat(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0), StringToFloat(WO_Str(idx + 3), 0));
+                projTo = Vector(StringToFloat(WO_Str(idx + 4), 0), StringToFloat(WO_Str(idx + 5), 0), StringToFloat(WO_Str(idx + 6), 0));
+                projAngle = StringToFloat(WO_Str(idx + 7), 0);
+                projSpeed = StringToFloat(WO_Str(idx + 8), 0);
+                projRange = StringToFloat(WO_Str(idx + 9), 0);
+                idx += 10;
+            }
 
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
                 ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackAnim, hitSeq, hitBy, hitReaction,
                     moveSeq, moveAnim);
+                if(projSeq != 0 && projTpl != "")
+                {
+                    ApplyProjectile(netId, projSeq, projTpl, projFrom, projTo, projAngle, projSpeed, projRange);
+                }
                 seen.PushBack(netId);
             }
         }
@@ -1634,6 +1720,44 @@ class r_CoopEnemies
             attackPlayFailures += 1;
             lastError = "attack animation '" + NameToString(anim) + "' did not play";
         }
+    }
+
+    // The leader's monster fired a projectile (in the last 1.5 s): a harmless copy flies from this world's puppet
+    // (the hit itself arrives as a hurt, and a puppet's own damage is dropped anyway).
+    private function ApplyProjectile(netId : int, seq : int, tpl : string, from : Vector, to : Vector, angle : float, speed : float,
+        range : float)
+    {
+        var p : r_CoopPuppet;
+        var template : CEntityTemplate;
+        var proj : W3AdvancedProjectile;
+
+        p = FindPuppet(netId);
+        if(!p || seq == p.projSeq)
+        {
+            return;
+        }
+        p.projSeq = seq;
+        if(!p.alive)
+        {
+            return;
+        }
+        template = (CEntityTemplate)LoadResource(tpl, true);
+        if(template)
+        {
+            proj = (W3AdvancedProjectile)theGame.CreateEntity(template, from, VecToRotation(to - from));
+        }
+        if(!proj)
+        {
+            projectileFailures += 1;
+            lastError = "projectile '" + tpl + "' could not be fired";
+            return;
+        }
+        proj.Init(p.npc);
+        proj.projDMG = 0;
+        proj.projSilverDMG = 0;
+        proj.projEfect = EET_Undefined;
+        proj.ShootProjectileAtPosition(angle, speed, to, range);
+        projectilesFired += 1;
     }
 
     private function PlayMove(p : r_CoopPuppet, anim : name)
@@ -2573,6 +2697,45 @@ function OnPreAttackEvent(animEventName : name, animEventType : EAnimationEventT
         client.getCoopEnemies().OnEnemyAttack(this, animEventType, animInfo);
     }
     return wrappedMethod(animEventName, animEventType, data, animInfo);
+}
+
+function CoopProjectileShot(proj : W3AdvancedProjectile, angle : float, speed : float, target : Vector, range : float)
+{
+    var client : r_MultiplayerClient;
+
+    client = theGame.r_getMultiplayerClient();
+    if(client)
+    {
+        client.getCoopEnemies().OnEnemyProjectile(proj, angle, speed, target, range);
+    }
+}
+
+@wrapMethod(W3AdvancedProjectile)
+function ShootProjectileAtPosition(angle : float, velocity : float, target : Vector, optional range : float, optional collisionGroups : array<name>)
+{
+    wrappedMethod(angle, velocity, target, range, collisionGroups);
+    CoopProjectileShot(this, angle, velocity, target, range);
+}
+
+@wrapMethod(W3AdvancedProjectile)
+function ShootProjectileAtNode(angle : float, velocity : float, target : CNode, optional range : float, optional collisionGroups : array<name>)
+{
+    wrappedMethod(angle, velocity, target, range, collisionGroups);
+    CoopProjectileShot(this, angle, velocity, target.GetWorldPosition(), range);
+}
+
+@wrapMethod(W3AdvancedProjectile)
+function ShootProjectileAtBone(angle : float, velocity : float, target : CEntity, targetBone : name, optional range : float, optional collisionGroups : array<name>)
+{
+    wrappedMethod(angle, velocity, target, targetBone, range, collisionGroups);
+    CoopProjectileShot(this, angle, velocity, target.GetWorldPosition(), range);
+}
+
+@wrapMethod(W3AdvancedProjectile)
+function ShootCakeProjectileAtPosition(cakeAngle : float, cakeHeight : float, shootAngle : float, velocity : float, target : Vector, range : float, optional collisionGroups : array<name>)
+{
+    wrappedMethod(cakeAngle, cakeHeight, shootAngle, velocity, target, range, collisionGroups);
+    CoopProjectileShot(this, shootAngle, velocity, target, range);
 }
 
 @wrapMethod(CBTTaskPlayAnimationEventDecorator)
