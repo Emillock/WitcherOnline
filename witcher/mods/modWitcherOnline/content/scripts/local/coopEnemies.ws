@@ -19,6 +19,9 @@ class r_CoopHostEnemy
     public var hitSeq : int;         // hits it took, for members to replay the reaction
     public var hitBy : string;
     public var hitReaction : int;
+    public var moveSeq : int;        // its other animated moves (dodges, taunts, ...), for members to replay
+    public var moveAnim : name;
+    public var moveAnimTime : float;
     public var stride : r_CoopStride;
 }
 
@@ -35,6 +38,8 @@ class r_CoopPuppet
     public var predictUntil : float;
     public var attackSeq : int;
     public var attackPlayedAt : float;
+    public var slotAnimAt : float;  // an attack or move started playing (it stands meanwhile)
+    public var moveSeq : int;
     public var animAiId : int;
     public var hitSeq : int;
     public var wasInHitAnim : bool;
@@ -323,6 +328,10 @@ class r_CoopEnemies
     public var attacksSeen : int;
     public var attacksPlayed : int;
     public var attackPlayFailures : int;
+    public var movesSeen : int;
+    public var lastMoveAnim : name;
+    public var movesPlayed : int;
+    public var movePlayFailures : int;
     public var lastHurtDelay : float;
     public var hitReactionsMirrored : int;
     public var hitAnimsSeen : int;  // puppets entering a hit animation (shows the reactions really play)
@@ -567,7 +576,7 @@ class r_CoopEnemies
     }
 
     // "en epoch seq area acks{user session lastSeq} templates{path}
-    //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim hitSeq hitBy hitReaction}"
+    //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim hitSeq hitBy hitReaction moveSeq moveAnim}"
     private function HostSend()
     {
         var templates : array<string>;
@@ -603,7 +612,8 @@ class r_CoopEnemies
                 + " " + FloatToStringPrec(pos.X, 2) + " " + FloatToStringPrec(pos.Y, 2) + " " + FloatToStringPrec(pos.Z, 2)
                 + " " + FloatToStringPrec(e.npc.GetHeading(), 1) + " " + FloatToStringPrec(MaxF(0, e.npc.GetHealthPercents()), 4)
                 + " " + alive + " " + e.attackSeq + " " + CoopEncode(NameToString(e.attackAnim))
-                + " " + e.hitSeq + " " + CoopEncode(e.hitBy) + " " + e.hitReaction;
+                + " " + e.hitSeq + " " + CoopEncode(e.hitBy) + " " + e.hitReaction
+                + " " + e.moveSeq + " " + CoopEncode(NameToString(e.moveAnim));
         }
 
         WO_Send("coop en " + epoch + " " + hostSeq + " " + WO_CurrentAreaCode() + " " + AcksText() + " " + TemplatesText(templates)
@@ -1052,6 +1062,38 @@ class r_CoopEnemies
         }
     }
 
+    // One of its other animated moves (a behavior-tree task that plays an animation: dodge, jump back, taunt,
+    // shot, ...); every animation event of it arrives here, a new one is a new name or a restart.
+    public function OnEnemyMove(npc : CNewNPC, animInfo : SAnimationEventAnimInfo)
+    {
+        var e : r_CoopHostEnemy;
+        var anim : name;
+        var t : float;
+
+        if(!wasHost)
+        {
+            return;
+        }
+        e = FindHostEnemyByNpc(npc);
+        anim = GetAnimNameFromEventAnimInfo(animInfo);
+        if(!e || !IsNameValid(anim))
+        {
+            return;
+        }
+        t = GetLocalAnimTimeFromEventAnimInfo(animInfo);
+        if(anim == e.moveAnim && t >= e.moveAnimTime)
+        {
+            e.moveAnimTime = t;
+            return;
+        }
+        e.moveSeq += 1;
+        e.moveAnim = anim;
+        e.moveAnimTime = t;
+        movesSeen += 1;
+        lastMoveAnim = anim;
+        lastHostSend = -999;
+    }
+
     // A shared monster took damage here: members replay the hit reaction on its puppet (the hitter's own game
     // already played it).
     public function OnEnemyDamaged(npc : CNewNPC, action : W3DamageAction)
@@ -1134,9 +1176,9 @@ class r_CoopEnemies
         var templates : array<string>;
         var seen : array<int>;
         var pos : Vector;
-        var attackAnim : name;
+        var attackAnim, moveAnim : name;
         var hitBy : string;
-        var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction : int;
+        var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq : int;
         var hp, yaw : float;
         var alive : bool;
         var app : string;
@@ -1185,7 +1227,7 @@ class r_CoopEnemies
 
         n = StringToInt(WO_Str(idx), 0);
         idx += 1;
-        for(i = 0; i < n && idx + 13 < count; i += 1)
+        for(i = 0; i < n && idx + 15 < count; i += 1)
         {
             netId = StringToInt(WO_Str(idx), 0);
             tplIndex = StringToInt(WO_Str(idx + 1), 0);
@@ -1206,11 +1248,18 @@ class r_CoopEnemies
             hitSeq = StringToInt(WO_Str(idx + 11), 0);
             hitBy = CoopDecode(WO_Str(idx + 12));
             hitReaction = StringToInt(WO_Str(idx + 13), 0);
-            idx += 14;
+            moveSeq = StringToInt(WO_Str(idx + 14), 0);
+            moveAnim = '';
+            if(WO_Str(idx + 15) != "-")
+            {
+                moveAnim = WO_NameAt(idx + 15);
+            }
+            idx += 16;
 
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
-                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackAnim, hitSeq, hitBy, hitReaction);
+                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackAnim, hitSeq, hitBy, hitReaction,
+                    moveSeq, moveAnim);
                 seen.PushBack(netId);
             }
         }
@@ -1357,7 +1406,7 @@ class r_CoopEnemies
     }
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
-        attackSeq : int, attackAnim : name, hitSeq : int, hitBy : string, hitReaction : int)
+        attackSeq : int, attackAnim : name, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name)
     {
         var p : r_CoopPuppet;
         var npc : CNewNPC;
@@ -1388,8 +1437,9 @@ class r_CoopEnemies
                 return;
             }
             p = MakePuppet(npc, netId, spawned);
-            p.attackSeq = attackSeq;  // don't replay an attack or a hit from before this puppet existed
+            p.attackSeq = attackSeq;  // don't replay an attack, move or hit from before this puppet existed
             p.hitSeq = hitSeq;
+            p.moveSeq = moveSeq;
         }
 
         // hits by others (this player's own hits already reacted here)
@@ -1408,6 +1458,16 @@ class r_CoopEnemies
             if(p.alive && IsNameValid(attackAnim))
             {
                 PlayAttack(p, attackAnim);
+            }
+        }
+
+        // the newest of its attacks and moves plays, as on the leader
+        if(moveSeq != p.moveSeq)
+        {
+            p.moveSeq = moveSeq;
+            if(p.alive && IsNameValid(moveAnim))
+            {
+                PlayMove(p, moveAnim);
             }
         }
 
@@ -1563,9 +1623,36 @@ class r_CoopEnemies
     // tree owns the puppet's actions); when the animation ends the puppet is idle again.
     private function PlayAttack(p : r_CoopPuppet, anim : name)
     {
+        p.attackPlayedAt = theGame.GetEngineTimeAsSeconds();
+        if(PlaySlotAnim(p, anim))
+        {
+            attacksPlayed += 1;
+        }
+        else
+        {
+            attackPlayFailures += 1;
+            lastError = "attack animation '" + NameToString(anim) + "' did not play";
+        }
+    }
+
+    private function PlayMove(p : r_CoopPuppet, anim : name)
+    {
+        if(PlaySlotAnim(p, anim))
+        {
+            movesPlayed += 1;
+        }
+        else
+        {
+            movePlayFailures += 1;
+            lastError = "move animation '" + NameToString(anim) + "' did not play";
+        }
+    }
+
+    private function PlaySlotAnim(p : r_CoopPuppet, anim : name) : bool
+    {
         var action : CAIPlayAnimationSlotAction;
 
-        p.attackPlayedAt = theGame.GetEngineTimeAsSeconds();
+        p.slotAnimAt = theGame.GetEngineTimeAsSeconds();
         if(p.animAiId != 0)
         {
             p.npc.CancelAIBehavior(p.animAiId);
@@ -1577,15 +1664,7 @@ class r_CoopEnemies
         action.blendInTime = 0.1;
         action.blendOutTime = 0.2;
         p.animAiId = p.npc.ForceAIBehavior(action, BTAP_Emergency);
-        if(p.animAiId != 0)
-        {
-            attacksPlayed += 1;
-        }
-        else
-        {
-            attackPlayFailures += 1;
-            lastError = "attack animation '" + NameToString(anim) + "' did not play";
-        }
+        return p.animAiId != 0;
     }
 
     // within sharing range of the leader, in the same area
@@ -1674,8 +1753,8 @@ class r_CoopEnemies
 
         agent = p.npc.GetMovingAgentComponent();
         now = theGame.GetEngineTimeAsSeconds();
-        // standing: slow target, a mirrored attack playing, or no snapshot lately (stalled link)
-        if(!puppetLocomotion || p.targetSpeed < 0.4 || now - p.attackPlayedAt < 1.2 || now - p.lastTargetAt > 0.5)
+        // standing: slow target, a mirrored attack or move playing, or no snapshot lately (stalled link)
+        if(!puppetLocomotion || p.targetSpeed < 0.4 || now - p.slotAnimAt < 1.2 || now - p.lastTargetAt > 0.5)
         {
             agent.SetGameplayRelativeMoveSpeed(0);
             return;
@@ -2487,6 +2566,27 @@ function OnPreAttackEvent(animEventName : name, animEventType : EAnimationEventT
         client.getCoopEnemies().OnEnemyAttack(this, animEventType, animInfo);
     }
     return wrappedMethod(animEventName, animEventType, data, animInfo);
+}
+
+@wrapMethod(CBTTaskPlayAnimationEventDecorator)
+function OnAnimEvent(animEventName : name, animEventType : EAnimationEventType, animInfo : SAnimationEventAnimInfo) : bool
+{
+    var client : r_MultiplayerClient;
+    var attack : CBTTaskAttack;
+    var reaction : CBTTaskHitReactionDecorator;
+
+    // attacks and hit reactions are mirrored on their own
+    attack = (CBTTaskAttack)this;
+    reaction = (CBTTaskHitReactionDecorator)this;
+    if(!attack && !reaction)
+    {
+        client = theGame.r_getMultiplayerClient();
+        if(client)
+        {
+            client.getCoopEnemies().OnEnemyMove(GetNPC(), animInfo);
+        }
+    }
+    return wrappedMethod(animEventName, animEventType, animInfo);
 }
 
 // Spaces separate fields on the wire; '*' can't appear in depot paths or appearance names.
