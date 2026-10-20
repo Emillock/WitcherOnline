@@ -4132,7 +4132,8 @@ statemachine class r_MultiplayerClient
                                             channeling : bool, menuName : string, lastActionTime : float, lastAction : EPlayerExplorationAction,
                                             steel : name, silver : name, armor : name, gloves : name, pants : name, boots : name, head : name, hair : name, steelScab : name, silverScab : name, crossbow : name, mask : name,
                                             isRiding : bool, ridingPlayerId : int, outgoingTradeTo : string, outgoingTradeItem : name, outgoingTradePrice : int, outgoingTradeFlag : int, horseAppearance : string,
-                                            morphActive : bool, morphType : name, morphAppearance : name, morphRotation : float) 
+                                            morphActive : bool, morphType : name, morphAppearance : name, morphRotation : float,
+                                            quenUp : bool)
     {
         var i : int;
         var p : r_RemotePlayer;
@@ -4398,6 +4399,7 @@ statemachine class r_MultiplayerClient
         p.morphType = morphType;
         p.morphAppearance = morphAppearance;
         p.morphRotation = morphRotation;
+        p.quenUp = quenUp;
 
         p.eq_steel = steel;
         p.eq_silver = silver;
@@ -5525,7 +5527,8 @@ statemachine class r_MultiplayerClient
             WO_NameAt(58), WO_NameAt(59), WO_NameAt(60), WO_NameAt(61),
             WO_Bool(62), WO_Int(63), WO_Str(64), WO_NameAt(65),
             WO_Int(66), WO_Int(67), WO_Str(68),
-            WO_Bool(69), WO_NameAt(70), WO_NameAt(71), WO_Float(72)
+            WO_Bool(69), WO_NameAt(70), WO_NameAt(71), WO_Float(72),
+            WO_Bool(73)
         );
     }
     function WO_ApplyUpdate2()
@@ -6125,6 +6128,10 @@ statemachine class r_MultiplayerClient
         {
             list += "0";
         }
+        list += " ";
+
+        // field 73: this player's Quen shield is up (others' copies drop theirs when it goes)
+        list += thePlayer.HasBuff(EET_BasicQuen);
         list += " ";
 
         WO_Send("wo "+wo_getMovementData()+list);

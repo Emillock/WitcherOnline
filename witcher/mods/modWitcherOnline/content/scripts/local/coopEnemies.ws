@@ -351,6 +351,11 @@ class r_CoopEnemies
     public var hitEffectsHeld : int;     // leader: of those, ones the monster had right after
     public var signVisualsPlayed : int;  // other players' sign visuals shown at their copies (remotePlayer.ws)
     public var signVisualsActive : int;
+    public var signVisualsByType : array<int>;  // by ESignType
+    public var quenShieldsShown : int;
+    public var quenHitsShown : int;      // shields that went down with the sign's burst
+    public var yrdenRunesShown : int;
+    public var lastSignVisual : string;  // the last one's type, effects and whether the first went active
     public var meleeHitsSent : int;
     public var signHitsSent : int;
     public var projectilesFired : int;
@@ -689,6 +694,24 @@ class r_CoopEnemies
             text += " " + templates[i];
         }
         return text;
+    }
+
+    public function CountSignVisual(type : ESignType)
+    {
+        while(signVisualsByType.Size() <= (int)type)
+        {
+            signVisualsByType.PushBack(0);
+        }
+        signVisualsByType[(int)type] += 1;
+    }
+
+    public function SignVisualsOf(type : ESignType) : int
+    {
+        if((int)type < signVisualsByType.Size())
+        {
+            return signVisualsByType[(int)type];
+        }
+        return 0;
     }
 
     public function SetPuppetLocomotion(on : bool)

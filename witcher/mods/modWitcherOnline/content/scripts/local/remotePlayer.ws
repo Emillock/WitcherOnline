@@ -99,6 +99,12 @@ statemachine class r_RemotePlayer
     public var prevSignTime : float;
     public var signVisualAt : float;       // when to show the last cast's area visual (with its throw)
     public var signVisualType : ESignType;
+    public var quenShield : name;          // Quen's lasting shield shown on the copy
+    public var quenShieldUntil : float;    // when to drop it if the player's game never says its shield is up
+    public var quenUp : bool;              // the player's own Quen shield is up (snapshot field 73)
+    public var quenSeenUp : bool;          // quenUp was seen since the copy's shield went up
+    public var yrdenRunes : array<CEntity>;  // Yrden's trap drawn around the copy, and until when
+    public var yrdenRunesUntil : float;
     public var prevJumpTime : float;
     public var prevClimbTime : float;
     public var isLadder : bool;
@@ -2880,15 +2886,19 @@ statemachine class r_RemotePlayer
         }
     }
 
-    // The sign's own area visual at this player's copy (Igni's fire, Aard's wave): the sign entity is created only to
-    // play its throw effect (no projectile, no damage) and removed shortly after.
+    // The sign's own visual at this player's copy (Igni's fire, Aard's wave, Axii, Yrden's trap, Quen): the sign entity
+    // is created only to play its effects (no projectile, no damage, no slowing trap) and removed after a while.
     private function PlaySignVisual(type : ESignType)
     {
         var template : CEntityTemplate;
         var sign : W3SignEntity;
         var igni : W3IgniEntity;
         var aard : W3AardEntity;
-        var effect : name;
+        var axii : W3AxiiEntity;
+        var yrden : W3YrdenEntity;
+        var quen : W3QuenEntity;
+        var effect, second : name;
+        var lasting : float;
         var coop : r_CoopEnemies;
 
         template = GetWitcherPlayer().GetSignTemplate(type);
@@ -2897,8 +2907,16 @@ statemachine class r_RemotePlayer
             return;
         }
         sign = (W3SignEntity)theGame.CreateEntity(template, ghost.GetWorldPosition(), ghost.GetWorldRotation());
+        if(!sign)
+        {
+            return;
+        }
         igni = (W3IgniEntity)sign;
         aard = (W3AardEntity)sign;
+        axii = (W3AxiiEntity)sign;
+        yrden = (W3YrdenEntity)sign;
+        quen = (W3QuenEntity)sign;
+        lasting = 3.0;
         if(igni && igni.effects.Size() > 0)
         {
             effect = igni.effects[0].throwEffect;
@@ -2907,19 +2925,189 @@ statemachine class r_RemotePlayer
         {
             effect = aard.effects[0].baseCommonThrowEffect;
         }
-        if(!sign)
+        else if(axii && axii.effects.Size() > 0)
+        {
+            effect = axii.effects[0].castEffect;
+            second = axii.effects[0].throwEffect;
+        }
+        else if(yrden && yrden.effects.Size() > 0)
+        {
+            effect = yrden.effects[0].placeEffect;
+            second = yrden.effects[0].castEffect;
+            lasting = 10.0;
+            PlaceYrdenRunes(yrden);
+        }
+        coop = theGame.r_getMultiplayerClient().getCoopEnemies();
+        coop.signVisualsPlayed += 1;
+        if(quen)
+        {
+            // nothing to play on the sign: its cast effect is empty; what shows is the lasting shield on the copy
+            if(quen.effects.Size() > 0)
+            {
+                effect = QuenShieldEffect(quen);
+            }
+            sign.Destroy();
+            if(ShowQuenShield(effect))
+            {
+                coop.signVisualsActive += 1;
+                coop.CountSignVisual(type);
+            }
+            coop.lastSignVisual = type + ":" + quenShield;
+            return;
+        }
+        // Yrden's trap stays where it was cast; the others go with the caster
+        if(!yrden)
+        {
+            sign.CreateAttachment(ghost);
+        }
+        sign.PlayEffect(effect);
+        if(IsNameValid(second))
+        {
+            sign.PlayEffect(second);
+        }
+        sign.DestroyAfter(lasting);
+        coop.lastSignVisual = type + ":" + effect + "=" + sign.IsEffectActive(effect) + "," + second;
+        if(sign.IsEffectActive(effect) || (IsNameValid(second) && sign.IsEffectActive(second)))
+        {
+            coop.signVisualsActive += 1;
+            coop.CountSignVisual(type);
+        }
+    }
+
+    // the lasting shield by the S_Magic_s13 level, as GetLastingFxName picks it (this game's own Geralt's level)
+    private function QuenShieldEffect(quen : W3QuenEntity) : name
+    {
+        if(thePlayer.CanUseSkill(S_Magic_s13))
+        {
+            switch(thePlayer.GetSkillLevel(S_Magic_s13))
+            {
+                case 1: return quen.effects[0].lastingEffectUpg1;
+                case 2: return quen.effects[0].lastingEffectUpg2;
+                case 0: break;
+                default: return quen.effects[0].lastingEffectUpg3;
+            }
+        }
+        return quen.effects[0].lastingEffectUpgNone;
+    }
+
+    // true if it went up
+    private function ShowQuenShield(effect : name) : bool
+    {
+        var coop : r_CoopEnemies;
+
+        StopQuenShield();
+        if(!IsNameValid(effect) || !ghost.PlayEffect(effect))
+        {
+            return false;
+        }
+        quenShield = effect;
+        quenShieldUntil = theGame.GetEngineTimeAsSeconds() + 30;
+        quenSeenUp = false;
+        if(!ghost.IsEffectActive(effect))
+        {
+            return false;
+        }
+        coop = theGame.r_getMultiplayerClient().getCoopEnemies();
+        coop.quenShieldsShown += 1;
+        return true;
+    }
+
+    private function StopQuenShield()
+    {
+        if(IsNameValid(quenShield))
+        {
+            if(ghost)
+            {
+                ghost.StopEffect(quenShield);
+            }
+            quenShield = '';
+        }
+    }
+
+    // Yrden's trap as the sign draws it (CreateTrap): rune entities on a circle and one in the middle, visuals only.
+    // Range and duration are this game's own Yrden's (duration with sign intensity, as GetSignStats has it).
+    private function PlaceYrdenRunes(yrden : W3YrdenEntity)
+    {
+        var settings : SYrdenEffectSettings;
+        var att : SAbilityAttributeValue;
+        var center : Vector;
+        var range, duration : float;
+        var i, j, count : int;
+
+        ClearYrdenRunes();
+        range = CalculateAttributeValue(thePlayer.GetSkillAttributeValue(S_Magic_3, 'range', false, true));
+        if(range <= 0)
+        {
+            range = 4;
+        }
+        att = thePlayer.GetSkillAttributeValue(S_Magic_3, 'trap_duration', false, true);
+        att += thePlayer.GetTotalSignSpellPower(S_Magic_3);
+        att.valueMultiplicative -= 1;
+        duration = CalculateAttributeValue(att);
+        if(duration <= 0)
+        {
+            duration = 10;
+        }
+        yrdenRunesUntil = theGame.GetEngineTimeAsSeconds() + duration;
+        center = yrden.GetWorldPosition();
+        for(i = 0; i < yrden.runeTemplates.Size(); i += 1)
+        {
+            PlaceYrdenRune(yrden.runeTemplates[i], center, range, 2 * Pi() * i / yrden.runeTemplates.Size());
+        }
+        for(i = 0; i < yrden.radialEffects.Size(); i += 1)
+        {
+            settings = yrden.radialEffects[i];
+            count = settings.count;
+            if(settings.calculateCountFromSpacing && settings.desiredSpacing > 0)
+            {
+                count = (int)((2 * Pi() * range) / settings.desiredSpacing);
+            }
+            for(j = 0; j < count; j += 1)
+            {
+                PlaceYrdenRune(settings.effectEntityTemplate, center, range * settings.rangeModifier, 2 * Pi() * j / count);
+            }
+        }
+        PlaceYrdenRune(yrden.centerRuneTemplate, center, 0, 0);
+    }
+
+    private function PlaceYrdenRune(template : CEntityTemplate, center : Vector, range : float, angle : float)
+    {
+        var pos : Vector;
+        var rune : CEntity;
+        var coop : r_CoopEnemies;
+
+        if(!template)
         {
             return;
         }
-        sign.CreateAttachment(ghost);
-        sign.PlayEffect(effect);
-        sign.DestroyAfter(3.0);
-        coop = theGame.r_getMultiplayerClient().getCoopEnemies();
-        coop.signVisualsPlayed += 1;
-        if(sign.IsEffectActive(effect))
+        pos = center;
+        pos.X += range * CosF(angle);
+        pos.Y += range * SinF(angle);
+        pos = TraceFloor(pos);
+        pos.Z += 0.05;
+        rune = theGame.CreateEntity(template, pos, ghost.GetWorldRotation());
+        if(rune)
         {
-            coop.signVisualsActive += 1;
+            yrdenRunes.PushBack(rune);
+            coop = theGame.r_getMultiplayerClient().getCoopEnemies();
+            coop.yrdenRunesShown += 1;
         }
+    }
+
+    // fades out like the sign's own trap
+    private function ClearYrdenRunes()
+    {
+        var i : int;
+
+        for(i = 0; i < yrdenRunes.Size(); i += 1)
+        {
+            if(yrdenRunes[i])
+            {
+                yrdenRunes[i].StopAllEffects();
+                yrdenRunes[i].DestroyAfter(5.0);
+            }
+        }
+        yrdenRunes.Clear();
     }
 
     private function updateGeraltAnims()
@@ -2928,11 +3116,34 @@ statemachine class r_RemotePlayer
         var ids : array<SItemUniqueId>;
         var inv : CInventoryComponent;
         var rand : int;
+        var coop : r_CoopEnemies;
 
         if(signVisualAt > 0 && theGame.GetEngineTimeAsSeconds() >= signVisualAt)
         {
             signVisualAt = 0;
             PlaySignVisual(signVisualType);
+        }
+        if(IsNameValid(quenShield))
+        {
+            quenSeenUp = quenSeenUp || quenUp;
+            if(quenSeenUp && !quenUp)
+            {
+                // the player's shield went, nearly always to a hit: the burst the sign plays then (ShieldActive)
+                if(ghost && ghost.PlayEffect('quen_lasting_shield_hit'))
+                {
+                    coop = theGame.r_getMultiplayerClient().getCoopEnemies();
+                    coop.quenHitsShown += 1;
+                }
+                StopQuenShield();
+            }
+            else if(!quenSeenUp && theGame.GetEngineTimeAsSeconds() > quenShieldUntil)
+            {
+                StopQuenShield();
+            }
+        }
+        if(yrdenRunes.Size() > 0 && theGame.GetEngineTimeAsSeconds() > yrdenRunesUntil)
+        {
+            ClearYrdenRunes();
         }
 
         if(!initSmooth)
@@ -5462,7 +5673,7 @@ statemachine class r_RemotePlayer
         }
         else if (lastSign != prevSignTime && !channeling)
         {
-            if(signType == ST_Igni || signType == ST_Aard)
+            if(signType != ST_None)
             {
                 signVisualType = signType;
                 signVisualAt = theGame.GetEngineTimeAsSeconds() + 0.4;
