@@ -234,6 +234,7 @@ class r_CoopHit
     public var seq : int;
     public var netId : int;
     public var frac : float;
+    public var effects : array<int>;  // what the hit applies (burning, knockdown, ...), applied by the leader
 }
 
 // a leader monster's hit on a member's ghost: raw damage before the ghost's own stats
@@ -283,6 +284,8 @@ class r_CoopEnemies
     private var leaderEpoch : int;
     private var lastSnapshotAt : float;
     private var pendingHits : array<r_CoopHit>;
+    private var lastPuppetAction : W3DamageAction;  // this player's last damaging hit on a puppet, and its claim
+    private var lastPuppetHit : r_CoopHit;
     private var lastHitSend : float;
     private var lastHitSentCount : int;
     private var hurtAck : int;
@@ -343,6 +346,11 @@ class r_CoopEnemies
     public var movesPlayed : int;
     public var movePlayFailures : int;
     public var projectilesSeen : int;
+    public var hitEffectsSent : int;     // member: effects its hits carried
+    public var hitEffectsApplied : int;  // leader: effects of members' hits applied to its monsters
+    public var hitEffectsHeld : int;     // leader: of those, ones the monster had right after
+    public var meleeHitsSent : int;
+    public var signHitsSent : int;
     public var projectilesFired : int;
     public var projectileFailures : int;
     public var lastHurtDelay : float;
@@ -767,7 +775,8 @@ class r_CoopEnemies
     {
         var client : r_MultiplayerClient;
         var ack : r_CoopAck;
-        var n, i, idx, seq : int;
+        var effects : array<int>;
+        var n, i, j, idx, seq, effectCount : int;
 
         client = theGame.r_getMultiplayerClient();
         if(count < 6 || WO_Str(1) != client.getUsername() || StringToInt(WO_Str(2), 0) != epoch || !IsMyPartyMember(sender))
@@ -779,27 +788,35 @@ class r_CoopEnemies
         ack = FindAck(sender, StringToInt(WO_Str(3), 0));
         n = StringToInt(WO_Str(5), 0);
         idx = 6;
-        for(i = 0; i < n && idx + 2 < count; i += 1)
+        // "seq netId frac effectCount {effect}" per hit
+        for(i = 0; i < n && idx + 3 < count; i += 1)
         {
             seq = StringToInt(WO_Str(idx), 0);
+            effectCount = StringToInt(WO_Str(idx + 3), 0);
+            effects.Clear();
+            for(j = 0; j < effectCount && idx + 4 + j < count; j += 1)
+            {
+                effects.PushBack(StringToInt(WO_Str(idx + 4 + j), 0));
+            }
             if(seq > ack.lastSeq)
             {
-                ApplyHit(sender, StringToInt(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0));
+                ApplyHit(sender, StringToInt(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0), effects);
                 ack.lastSeq = seq;
             }
-            idx += 3;
+            idx += 4 + effectCount;
         }
     }
 
-    private function ApplyHit(sender : string, netId : int, frac : float)
+    private function ApplyHit(sender : string, netId : int, frac : float, effects : array<int>)
     {
         var e : r_CoopHostEnemy;
         var action : W3DamageAction;
         var attacker : CActor;
         var difficultyMult : float;
+        var i : int;
 
         e = FindHostEnemy(netId);
-        if(!e || !e.npc || !e.npc.IsAlive() || frac <= 0)
+        if(!e || !e.npc || !e.npc.IsAlive() || (frac <= 0 && effects.Size() == 0))
         {
             return;
         }
@@ -820,10 +837,30 @@ class r_CoopEnemies
 
         action = new W3DamageAction in theGame.damageMgr;
         action.Initialize(attacker, e.npc, theGame, "W3Coop", EHRT_Light, CPS_Undefined, false, false, false, false);
-        action.AddDamage(theGame.params.DAMAGE_NAME_DIRECT, MinF(frac, 1) * e.npc.GetMaxHealth() / difficultyMult);
+        if(frac > 0)
+        {
+            action.AddDamage(theGame.params.DAMAGE_NAME_DIRECT, MinF(frac, 1) * e.npc.GetMaxHealth() / difficultyMult);
+        }
+        // its own resistances decide whether they take hold; processed also without damage, as Aard's are
+        for(i = 0; i < effects.Size(); i += 1)
+        {
+            action.AddEffectInfo((EEffectType)effects[i]);
+        }
+        if(effects.Size() > 0)
+        {
+            action.SetProcessBuffsIfNoDamage(true);
+        }
+        hitEffectsApplied += effects.Size();
         action.SetCannotReturnDamage(true);
         theGame.damageMgr.ProcessAction(action);
         delete action;
+        for(i = 0; i < effects.Size(); i += 1)
+        {
+            if(e.npc.HasBuff((EEffectType)effects[i]))
+            {
+                hitEffectsHeld += 1;
+            }
+        }
         hitsApplied += 1;
     }
 
@@ -959,7 +996,8 @@ class r_CoopEnemies
         {
             return false;
         }
-        if(attacker && attacker.HasTag('MPEntity') && act.GetBuffSourceName() != "W3Coop")
+        // ...and effects applied for a member's hit (burning) tick only in the member's world, which claims them
+        if(attacker && attacker.HasTag('MPEntity') && (act.GetBuffSourceName() != "W3Coop" || act.IsDoTDamage()))
         {
             return true;
         }
@@ -2135,11 +2173,76 @@ class r_CoopEnemies
             return;
         }
 
+        hit = NewHit(p);
+        hit.frac = MinF(1, dmg / maxHp);
+        lastHitFrac = hit.frac;
+        if(action.IsActionMelee())
+        {
+            meleeHitsSent += 1;
+        }
+        if(action.IsActionWitcherSign())
+        {
+            signHitsSent += 1;
+        }
+        // its effects are added after the damage; OnAfterDamage puts them on this hit
+        lastPuppetAction = action;
+        lastPuppetHit = hit;
+
+        p.hp = MaxF(0.001, p.hp - hit.frac);
+        p.predictUntil = theGame.GetEngineTimeAsSeconds() + 0.6;
+    }
+
+    // After this player's hit on a puppet was fully processed: the effects it applied (Igni's burning, Aard's
+    // knockdown, ...) go to the leader with the hit, or alone if it did no damage. Damage over time stays here:
+    // this world's effect ticks with this player's skills and its ticks are claimed, and the leader's copy of the
+    // effect does no damage (a ghost's own damage is dropped there).
+    public function OnAfterDamage(action : W3DamageAction)
+    {
+        var p : r_CoopPuppet;
+        var hit : r_CoopHit;
+        var effects : array<EEffectType>;
+        var i : int;
+
+        if(action.attacker != thePlayer || action.IsDoTDamage())
+        {
+            return;
+        }
+        p = FindPuppetByNpc((CNewNPC)action.victim);
+        if(!p || !p.alive)
+        {
+            return;
+        }
+        action.GetEffectTypes(effects);
+        if(effects.Size() == 0)
+        {
+            return;
+        }
+        if(action == lastPuppetAction && pendingHits.Contains(lastPuppetHit))
+        {
+            hit = lastPuppetHit;
+        }
+        else
+        {
+            hit = NewHit(p);
+            if(action.IsActionWitcherSign())
+            {
+                signHitsSent += 1;
+            }
+        }
+        for(i = 0; i < effects.Size(); i += 1)
+        {
+            hit.effects.PushBack((int)effects[i]);
+        }
+        hitEffectsSent += effects.Size();
+    }
+
+    private function NewHit(p : r_CoopPuppet) : r_CoopHit
+    {
+        var hit : r_CoopHit;
+
         hit = new r_CoopHit in this;
         hit.seq = nextHitSeq;
         hit.netId = p.netId;
-        hit.frac = MinF(1, dmg / maxHp);
-        lastHitFrac = hit.frac;
         nextHitSeq += 1;
         pendingHits.PushBack(hit);
         if(pendingHits.Size() > 32)
@@ -2147,10 +2250,8 @@ class r_CoopEnemies
             pendingHits.Erase(0);
         }
         hitsSent += 1;
-
-        p.hp = MaxF(0.001, p.hp - hit.frac);
-        p.predictUntil = theGame.GetEngineTimeAsSeconds() + 0.6;
         lastHitSend = -999;
+        return hit;
     }
 
     private function PruneHits(lastSeq : int)
@@ -2170,7 +2271,7 @@ class r_CoopEnemies
     private function SendHits(now : float)
     {
         var text : string;
-        var i : int;
+        var i, j : int;
 
         if(pendingHits.Size() == 0 && lastHitSentCount == 0 && hurtAck == lastSentHurtAck && !leaderListsMyHurts)
         {
@@ -2184,7 +2285,12 @@ class r_CoopEnemies
         text = "coop hit " + leaderName + " " + leaderEpoch + " " + session + " " + hurtAck + " " + pendingHits.Size();
         for(i = 0; i < pendingHits.Size(); i += 1)
         {
-            text += " " + pendingHits[i].seq + " " + pendingHits[i].netId + " " + FloatToStringPrec(pendingHits[i].frac, 4);
+            text += " " + pendingHits[i].seq + " " + pendingHits[i].netId + " " + FloatToStringPrec(pendingHits[i].frac, 4)
+                + " " + pendingHits[i].effects.Size();
+            for(j = 0; j < pendingHits[i].effects.Size(); j += 1)
+            {
+                text += " " + pendingHits[i].effects[j];
+            }
         }
         WO_Send(text);
         lastHitSend = now;
@@ -2795,6 +2901,10 @@ function ProcessAction(act : W3DamageAction)
     }
 
     wrappedMethod(act);
+    if(coop)
+    {
+        coop.OnAfterDamage(act);
+    }
 }
 
 // Damage to a puppet is computed here as usual, sent to the leader, and not applied locally: the leader's
