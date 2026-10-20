@@ -349,6 +349,8 @@ class r_CoopEnemies
     public var hitEffectsSent : int;     // member: effects its hits carried
     public var hitEffectsApplied : int;  // leader: effects of members' hits applied to its monsters
     public var hitEffectsHeld : int;     // leader: of those, ones the monster had right after
+    public var signVisualsPlayed : int;  // other players' sign visuals shown at their copies (remotePlayer.ws)
+    public var signVisualsActive : int;
     public var meleeHitsSent : int;
     public var signHitsSent : int;
     public var projectilesFired : int;

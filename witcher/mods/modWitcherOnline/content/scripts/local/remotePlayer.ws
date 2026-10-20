@@ -97,6 +97,8 @@ statemachine class r_RemotePlayer
     public var prevDodgeTime : float;
     public var prevFinisherTime : float;
     public var prevSignTime : float;
+    public var signVisualAt : float;       // when to show the last cast's area visual (with its throw)
+    public var signVisualType : ESignType;
     public var prevJumpTime : float;
     public var prevClimbTime : float;
     public var isLadder : bool;
@@ -2878,12 +2880,60 @@ statemachine class r_RemotePlayer
         }
     }
 
+    // The sign's own area visual at this player's copy (Igni's fire, Aard's wave): the sign entity is created only to
+    // play its throw effect (no projectile, no damage) and removed shortly after.
+    private function PlaySignVisual(type : ESignType)
+    {
+        var template : CEntityTemplate;
+        var sign : W3SignEntity;
+        var igni : W3IgniEntity;
+        var aard : W3AardEntity;
+        var effect : name;
+        var coop : r_CoopEnemies;
+
+        template = GetWitcherPlayer().GetSignTemplate(type);
+        if(!ghost || !template)
+        {
+            return;
+        }
+        sign = (W3SignEntity)theGame.CreateEntity(template, ghost.GetWorldPosition(), ghost.GetWorldRotation());
+        igni = (W3IgniEntity)sign;
+        aard = (W3AardEntity)sign;
+        if(igni && igni.effects.Size() > 0)
+        {
+            effect = igni.effects[0].throwEffect;
+        }
+        else if(aard && aard.effects.Size() > 0)
+        {
+            effect = aard.effects[0].baseCommonThrowEffect;
+        }
+        if(!sign)
+        {
+            return;
+        }
+        sign.CreateAttachment(ghost);
+        sign.PlayEffect(effect);
+        sign.DestroyAfter(3.0);
+        coop = theGame.r_getMultiplayerClient().getCoopEnemies();
+        coop.signVisualsPlayed += 1;
+        if(sign.IsEffectActive(effect))
+        {
+            coop.signVisualsActive += 1;
+        }
+    }
+
     private function updateGeraltAnims()
     {
         var anim : r_Anim;
         var ids : array<SItemUniqueId>;
         var inv : CInventoryComponent;
         var rand : int;
+
+        if(signVisualAt > 0 && theGame.GetEngineTimeAsSeconds() >= signVisualAt)
+        {
+            signVisualAt = 0;
+            PlaySignVisual(signVisualType);
+        }
 
         if(!initSmooth)
         {
@@ -5412,6 +5462,11 @@ statemachine class r_RemotePlayer
         }
         else if (lastSign != prevSignTime && !channeling)
         {
+            if(signType == ST_Igni || signType == ST_Aard)
+            {
+                signVisualType = signType;
+                signVisualAt = theGame.GetEngineTimeAsSeconds() + 0.4;
+            }
             if(inCombat)
             {
                 if(heldItem == "silver" || heldItem == "steel")

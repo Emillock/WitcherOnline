@@ -372,6 +372,20 @@ function EvadePressed( bufferAction : EBufferActionType )
     wrappedMethod(bufferAction);
 }
 
+// a sign cast that really happened, however it was started (the input wraps above and below only see key presses)
+@wrapMethod(W3PlayerWitcher)
+function CastSign(optional skipCastingAnimation : bool) : bool
+{
+    var cast : bool;
+
+    cast = wrappedMethod(skipCastingAnimation);
+    if(cast && theGame.r_getMultiplayerClient())
+    {
+        theGame.r_getMultiplayerClient().setLastSignTime(theGame.GetEngineTimeAsSeconds());
+    }
+    return cast;
+}
+
 @wrapMethod(CPlayerInput)
 function OnCastSign( action : SInputAction )
 {
