@@ -372,7 +372,9 @@ function EvadePressed( bufferAction : EBufferActionType )
     wrappedMethod(bufferAction);
 }
 
-// a sign cast that really happened, however it was started (the input wraps above and below only see key presses)
+// a sign cast that really happened, however it was started. Key presses (OnCastSign, AltCastSign) end up here a few
+// frames later through the combat action buffer; marking them too sent each cast twice, the first time before the
+// sign was known.
 @wrapMethod(W3PlayerWitcher)
 function CastSign(optional skipCastingAnimation : bool) : bool
 {
@@ -382,22 +384,22 @@ function CastSign(optional skipCastingAnimation : bool) : bool
     if(cast && theGame.r_getMultiplayerClient())
     {
         theGame.r_getMultiplayerClient().setLastSignTime(theGame.GetEngineTimeAsSeconds());
+        theGame.r_getMultiplayerClient().RecordSignCast(this);
     }
     return cast;
 }
 
-@wrapMethod(CPlayerInput)
-function OnCastSign( action : SInputAction )
+// what other players' copies need to draw this player's Yrden trap (both set by GetSignStats)
+@addMethod(W3YrdenEntity)
+public function WO_TrapRange() : float
 {
-    theGame.r_getMultiplayerClient().setLastSignTime(theGame.GetEngineTimeAsSeconds());
-    wrappedMethod(action);
+    return baseModeRange;
 }
 
-@wrapMethod(CPlayerInput)
-function AltCastSign(signType : ESignType)
+@addMethod(W3YrdenEntity)
+public function WO_TrapDuration() : float
 {
-    theGame.r_getMultiplayerClient().setLastSignTime(theGame.GetEngineTimeAsSeconds());
-    wrappedMethod(signType);
+    return trapDuration;
 }
 
 @wrapMethod(CPlayerInput)

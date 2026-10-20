@@ -100,9 +100,20 @@ statemachine class r_RemotePlayer
     public var signVisualAt : float;       // when to show the last cast's area visual (with its throw)
     public var signVisualType : ESignType;
     public var quenShield : name;          // Quen's lasting shield shown on the copy
-    public var quenShieldUntil : float;    // when to drop it if the player's game never says its shield is up
-    public var quenUp : bool;              // the player's own Quen shield is up (snapshot field 73)
-    public var quenSeenUp : bool;          // quenUp was seen since the copy's shield went up
+    public var quenShieldUntil : float;    // when to drop it, for a player whose game doesn't send signFx
+    public var quenShieldNames : array<name>;  // the template's lasting shields by S_Magic_s13 level 0-3
+    // snapshot fields 73-79, sent by games that have them (signFx): the player's own Quen shield is up; the last
+    // cast's sign, Yrden range and duration, and Quen shield level; how often their Quen played its hit burst and impulse
+    public var signFx : bool;
+    public var quenUp : bool;
+    public var castSignType : ESignType;
+    public var castYrdenRange : float;
+    public var castYrdenDuration : float;
+    public var castQuenLevel : int;
+    public var quenBurstSeq : int;
+    public var quenImpulseSeq : int;
+    public var prevQuenBurstSeq : int;
+    public var prevQuenImpulseSeq : int;
     public var yrdenRunes : array<CEntity>;  // Yrden's trap drawn around the copy, and until when
     public var yrdenRunesUntil : float;
     public var prevJumpTime : float;
@@ -1053,6 +1064,8 @@ statemachine class r_RemotePlayer
         prevDodgeTime = -1;
         prevFinisherTime = -1;
         prevSignTime = -1;
+        prevQuenBurstSeq = -1;
+        prevQuenImpulseSeq = -1;
         prevEmoteTime = -1;
         prevChatTime = -1;
         prevActionTime = -1;
@@ -2942,16 +2955,9 @@ statemachine class r_RemotePlayer
         if(quen)
         {
             // nothing to play on the sign: its cast effect is empty; what shows is the lasting shield on the copy
-            if(quen.effects.Size() > 0)
-            {
-                effect = QuenShieldEffect(quen);
-            }
+            CacheQuenShieldNames(quen);
             sign.Destroy();
-            if(ShowQuenShield(effect))
-            {
-                coop.signVisualsActive += 1;
-                coop.CountSignVisual(type);
-            }
+            UpdateQuenShield(true);
             coop.lastSignVisual = type + ":" + quenShield;
             return;
         }
@@ -2974,24 +2980,104 @@ statemachine class r_RemotePlayer
         }
     }
 
-    // the lasting shield by the S_Magic_s13 level, as GetLastingFxName picks it (this game's own Geralt's level)
-    private function QuenShieldEffect(quen : W3QuenEntity) : name
+    // Quen's lasting shield on the copy. From a game that sends signFx it is up exactly while the player's own is,
+    // at their S_Magic_s13 level; otherwise it goes up with the cast for as long as this game's own Quen would last.
+    private function UpdateQuenShield(cast : bool)
+    {
+        if(!ghost)
+        {
+            return;
+        }
+        if(signFx)
+        {
+            if(quenUp && !IsNameValid(quenShield))
+            {
+                ShowQuenShield(QuenShieldEffect(castQuenLevel), 0);
+            }
+            else if(!quenUp && IsNameValid(quenShield))
+            {
+                StopQuenShield();
+            }
+        }
+        else if(cast)
+        {
+            ShowQuenShield(QuenShieldEffect(LocalQuenLevel()), LocalQuenDuration());
+        }
+        else if(IsNameValid(quenShield) && theGame.GetEngineTimeAsSeconds() > quenShieldUntil)
+        {
+            StopQuenShield();
+        }
+    }
+
+    // the lasting shield by S_Magic_s13 level, as GetLastingFxName picks it
+    private function QuenShieldEffect(level : int) : name
+    {
+        CacheQuenShieldNames(NULL);
+        if(quenShieldNames.Size() < 4)
+        {
+            return '';
+        }
+        return quenShieldNames[Min(Max(level, 0), 3)];
+    }
+
+    // the names come from the sign's template; without a cast at hand, from an entity made only to read them
+    private function CacheQuenShieldNames(quen : W3QuenEntity)
+    {
+        var made : bool;
+
+        if(quenShieldNames.Size() == 4)
+        {
+            return;
+        }
+        if(!quen)
+        {
+            quen = (W3QuenEntity)theGame.CreateEntity(GetWitcherPlayer().GetSignTemplate(ST_Quen), ghost.GetWorldPosition());
+            made = true;
+        }
+        if(quen && quen.effects.Size() > 0)
+        {
+            quenShieldNames.PushBack(quen.effects[0].lastingEffectUpgNone);
+            quenShieldNames.PushBack(quen.effects[0].lastingEffectUpg1);
+            quenShieldNames.PushBack(quen.effects[0].lastingEffectUpg2);
+            quenShieldNames.PushBack(quen.effects[0].lastingEffectUpg3);
+        }
+        if(made && quen)
+        {
+            quen.Destroy();
+        }
+    }
+
+    // this game's own Geralt's Quen, for a player whose game doesn't send theirs
+    private function LocalQuenLevel() : int
     {
         if(thePlayer.CanUseSkill(S_Magic_s13))
         {
-            switch(thePlayer.GetSkillLevel(S_Magic_s13))
-            {
-                case 1: return quen.effects[0].lastingEffectUpg1;
-                case 2: return quen.effects[0].lastingEffectUpg2;
-                case 0: break;
-                default: return quen.effects[0].lastingEffectUpg3;
-            }
+            return thePlayer.GetSkillLevel(S_Magic_s13);
         }
-        return quen.effects[0].lastingEffectUpgNone;
+        return 0;
+    }
+
+    // as the sign's GetSignStats has it
+    private function LocalQuenDuration() : float
+    {
+        var fortified : SAbilityAttributeValue;
+        var duration : float;
+
+        duration = CalculateAttributeValue(thePlayer.GetSkillAttributeValue(S_Magic_4, 'shield_duration', true, true));
+        if(thePlayer.CanUseSkill(S_Magic_s36))
+        {
+            fortified = thePlayer.GetSkillAttributeValue(S_Magic_s36, 'duration', false, true);
+            duration *= 1 + fortified.valueMultiplicative * thePlayer.GetSkillLevel(S_Magic_s36);
+        }
+        if(duration <= 0)
+        {
+            duration = 30;
+        }
+        return duration;
     }
 
     // true if it went up
-    private function ShowQuenShield(effect : name) : bool
+    private function ShowQuenShield(effect : name, duration : float) : bool
     {
         var coop : r_CoopEnemies;
 
@@ -3001,14 +3087,15 @@ statemachine class r_RemotePlayer
             return false;
         }
         quenShield = effect;
-        quenShieldUntil = theGame.GetEngineTimeAsSeconds() + 30;
-        quenSeenUp = false;
+        quenShieldUntil = theGame.GetEngineTimeAsSeconds() + duration;
         if(!ghost.IsEffectActive(effect))
         {
             return false;
         }
         coop = theGame.r_getMultiplayerClient().getCoopEnemies();
         coop.quenShieldsShown += 1;
+        coop.signVisualsActive += 1;
+        coop.CountSignVisual(ST_Quen);
         return true;
     }
 
@@ -3025,7 +3112,8 @@ statemachine class r_RemotePlayer
     }
 
     // Yrden's trap as the sign draws it (CreateTrap): rune entities on a circle and one in the middle, visuals only.
-    // Range and duration are this game's own Yrden's (duration with sign intensity, as GetSignStats has it).
+    // Range and duration are the caster's from a game that sends signFx, otherwise this game's own Yrden's (duration
+    // with sign intensity, as GetSignStats has it).
     private function PlaceYrdenRunes(yrden : W3YrdenEntity)
     {
         var settings : SYrdenEffectSettings;
@@ -3035,15 +3123,20 @@ statemachine class r_RemotePlayer
         var i, j, count : int;
 
         ClearYrdenRunes();
-        range = CalculateAttributeValue(thePlayer.GetSkillAttributeValue(S_Magic_3, 'range', false, true));
+        range = castYrdenRange;
+        duration = castYrdenDuration;
+        if(!signFx || range <= 0 || duration <= 0)
+        {
+            range = CalculateAttributeValue(thePlayer.GetSkillAttributeValue(S_Magic_3, 'range', false, true));
+            att = thePlayer.GetSkillAttributeValue(S_Magic_3, 'trap_duration', false, true);
+            att += thePlayer.GetTotalSignSpellPower(S_Magic_3);
+            att.valueMultiplicative -= 1;
+            duration = CalculateAttributeValue(att);
+        }
         if(range <= 0)
         {
             range = 4;
         }
-        att = thePlayer.GetSkillAttributeValue(S_Magic_3, 'trap_duration', false, true);
-        att += thePlayer.GetTotalSignSpellPower(S_Magic_3);
-        att.valueMultiplicative -= 1;
-        duration = CalculateAttributeValue(att);
         if(duration <= 0)
         {
             duration = 10;
@@ -3117,29 +3210,28 @@ statemachine class r_RemotePlayer
         var inv : CInventoryComponent;
         var rand : int;
         var coop : r_CoopEnemies;
+        var castType : ESignType;
 
         if(signVisualAt > 0 && theGame.GetEngineTimeAsSeconds() >= signVisualAt)
         {
             signVisualAt = 0;
             PlaySignVisual(signVisualType);
         }
-        if(IsNameValid(quenShield))
+        UpdateQuenShield(false);
+        if(signFx && ghost)
         {
-            quenSeenUp = quenSeenUp || quenUp;
-            if(quenSeenUp && !quenUp)
+            // the player's Quen played its hit burst (a hit on the shield, or the one that broke it) or its impulse
+            if(prevQuenBurstSeq >= 0 && quenBurstSeq != prevQuenBurstSeq && ghost.PlayEffect('quen_lasting_shield_hit'))
             {
-                // the player's shield went, nearly always to a hit: the burst the sign plays then (ShieldActive)
-                if(ghost && ghost.PlayEffect('quen_lasting_shield_hit'))
-                {
-                    coop = theGame.r_getMultiplayerClient().getCoopEnemies();
-                    coop.quenHitsShown += 1;
-                }
-                StopQuenShield();
+                coop = theGame.r_getMultiplayerClient().getCoopEnemies();
+                coop.quenHitsShown += 1;
             }
-            else if(!quenSeenUp && theGame.GetEngineTimeAsSeconds() > quenShieldUntil)
+            if(prevQuenImpulseSeq >= 0 && quenImpulseSeq != prevQuenImpulseSeq)
             {
-                StopQuenShield();
+                ghost.PlayEffect('lasting_shield_impulse');
             }
+            prevQuenBurstSeq = quenBurstSeq;
+            prevQuenImpulseSeq = quenImpulseSeq;
         }
         if(yrdenRunes.Size() > 0 && theGame.GetEngineTimeAsSeconds() > yrdenRunesUntil)
         {
@@ -5673,16 +5765,23 @@ statemachine class r_RemotePlayer
         }
         else if (lastSign != prevSignTime && !channeling)
         {
-            if(signType != ST_None)
+            // the sign of the cast itself from a game that sends it; signType is whatever was being cast when the
+            // snapshot was taken
+            castType = signType;
+            if(signFx)
             {
-                signVisualType = signType;
+                castType = castSignType;
+            }
+            if(castType != ST_None)
+            {
+                signVisualType = castType;
                 signVisualAt = theGame.GetEngineTimeAsSeconds() + 0.4;
             }
             if(inCombat)
             {
                 if(heldItem == "silver" || heldItem == "steel")
                 {
-                    if(signType == ST_Igni)
+                    if(castType == ST_Igni)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5695,7 +5794,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Aard)
+                    else if(castType == ST_Aard)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5708,7 +5807,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Axii)
+                    else if(castType == ST_Axii)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5721,7 +5820,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Quen)
+                    else if(castType == ST_Quen)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5734,7 +5833,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Yrden)
+                    else if(castType == ST_Yrden)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5750,7 +5849,7 @@ statemachine class r_RemotePlayer
                 }
                 else if(heldItem == "none")
                 {
-                    if(signType == ST_Igni)
+                    if(castType == ST_Igni)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5763,7 +5862,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Aard)
+                    else if(castType == ST_Aard)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5776,7 +5875,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Axii)
+                    else if(castType == ST_Axii)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5789,7 +5888,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Quen)
+                    else if(castType == ST_Quen)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5802,7 +5901,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Yrden)
+                    else if(castType == ST_Yrden)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5821,7 +5920,7 @@ statemachine class r_RemotePlayer
             {
                 if(heldItem == "silver" || heldItem == "steel")
                 {
-                    if(signType == ST_Igni)
+                    if(castType == ST_Igni)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5834,7 +5933,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Aard)
+                    else if(castType == ST_Aard)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5847,7 +5946,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Axii)
+                    else if(castType == ST_Axii)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5860,7 +5959,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Quen)
+                    else if(castType == ST_Quen)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5873,7 +5972,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Yrden)
+                    else if(castType == ST_Yrden)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5889,7 +5988,7 @@ statemachine class r_RemotePlayer
                 }
                 else if(heldItem == "none")
                 {
-                    if(signType == ST_Igni)
+                    if(castType == ST_Igni)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5902,7 +6001,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Aard)
+                    else if(castType == ST_Aard)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5915,7 +6014,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Axii)
+                    else if(castType == ST_Axii)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5928,7 +6027,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Quen)
+                    else if(castType == ST_Quen)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {
@@ -5941,7 +6040,7 @@ statemachine class r_RemotePlayer
 
                         smoothDelayedNext = true;
                     }
-                    else if(signType == ST_Yrden)
+                    else if(castType == ST_Yrden)
                     {
                         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
                         {

@@ -103,6 +103,16 @@ statemachine class r_MultiplayerClient
     private var lastRollTime : float;
     private var lastDodgeTime : float;
     private var lastSignTime : float;
+    // the last cast as other players' copies draw it (snapshot fields 74-77), and how often this player's Quen
+    // played its hit burst and impulse (78-79)
+    private var castSignType : ESignType;
+    private var castYrdenRange : float;
+    private var castYrdenDuration : float;
+    private var castQuenLevel : int;
+    private var quenBurstSeq : int;
+    private var quenImpulseSeq : int;
+    private var quenBurstOn : bool;
+    private var quenImpulseOn : bool;
     private var lastActionTime : float;
     private var lastAction : EPlayerExplorationAction;
 
@@ -3721,6 +3731,88 @@ statemachine class r_MultiplayerClient
         this.lastSignTime = val;
     }
 
+    // right after a cast succeeded: the sign entity has its stats (GetSignStats ran in Init)
+    public function RecordSignCast(witcher : W3PlayerWitcher)
+    {
+        var yrden : W3YrdenEntity;
+        var min, max : SAbilityAttributeValue;
+
+        castSignType = witcher.GetCurrentlyCastSign();
+        if(castSignType == ST_Yrden)
+        {
+            yrden = (W3YrdenEntity)witcher.GetSignEntity(ST_Yrden);
+            if(yrden)
+            {
+                castYrdenRange = yrden.WO_TrapRange();
+                castYrdenDuration = yrden.WO_TrapDuration();
+                // CreateTrap widens it with the Gryphon set
+                if(witcher.IsSetBonusActive(EISB_Gryphon_2))
+                {
+                    theGame.GetDefinitionsManager().GetAbilityAttributeValue('GryphonSetBonusYrdenEffect', 'trigger_scale', min, max);
+                    castYrdenRange *= min.valueAdditive;
+                }
+            }
+        }
+        else if(castSignType == ST_Quen)
+        {
+            castQuenLevel = 0;
+            if(witcher.CanUseSkill(S_Magic_s13))
+            {
+                castQuenLevel = witcher.GetSkillLevel(S_Magic_s13);
+            }
+        }
+    }
+
+    // each snapshot (every 50 ms): counts the starts of this player's Quen hit burst and impulse, which the sign plays
+    // on the player
+    public function PollQuenFx()
+    {
+        var on : bool;
+
+        on = thePlayer.IsEffectActive('quen_lasting_shield_hit');
+        if(on && !quenBurstOn)
+        {
+            quenBurstSeq += 1;
+        }
+        quenBurstOn = on;
+        on = thePlayer.IsEffectActive('lasting_shield_impulse');
+        if(on && !quenImpulseOn)
+        {
+            quenImpulseSeq += 1;
+        }
+        quenImpulseOn = on;
+    }
+
+    public function getCastSignType() : ESignType
+    {
+        return castSignType;
+    }
+
+    public function getCastYrdenRange() : float
+    {
+        return castYrdenRange;
+    }
+
+    public function getCastYrdenDuration() : float
+    {
+        return castYrdenDuration;
+    }
+
+    public function getCastQuenLevel() : int
+    {
+        return castQuenLevel;
+    }
+
+    public function getQuenBurstSeq() : int
+    {
+        return quenBurstSeq;
+    }
+
+    public function getQuenImpulseSeq() : int
+    {
+        return quenImpulseSeq;
+    }
+
     public function setLastActionTime(val : float)
     {
         this.lastActionTime = val;
@@ -4133,7 +4225,8 @@ statemachine class r_MultiplayerClient
                                             steel : name, silver : name, armor : name, gloves : name, pants : name, boots : name, head : name, hair : name, steelScab : name, silverScab : name, crossbow : name, mask : name,
                                             isRiding : bool, ridingPlayerId : int, outgoingTradeTo : string, outgoingTradeItem : name, outgoingTradePrice : int, outgoingTradeFlag : int, horseAppearance : string,
                                             morphActive : bool, morphType : name, morphAppearance : name, morphRotation : float,
-                                            quenUp : bool)
+                                            quenUp : bool, signFx : bool, castSignType : ESignType, castYrdenRange : float, castYrdenDuration : float,
+                                            castQuenLevel : int, quenBurstSeq : int, quenImpulseSeq : int)
     {
         var i : int;
         var p : r_RemotePlayer;
@@ -4400,6 +4493,13 @@ statemachine class r_MultiplayerClient
         p.morphAppearance = morphAppearance;
         p.morphRotation = morphRotation;
         p.quenUp = quenUp;
+        p.signFx = signFx && !coopEnemies.assumeOldSigns;
+        p.castSignType = castSignType;
+        p.castYrdenRange = castYrdenRange;
+        p.castYrdenDuration = castYrdenDuration;
+        p.castQuenLevel = castQuenLevel;
+        p.quenBurstSeq = quenBurstSeq;
+        p.quenImpulseSeq = quenImpulseSeq;
 
         p.eq_steel = steel;
         p.eq_silver = silver;
@@ -5528,7 +5628,7 @@ statemachine class r_MultiplayerClient
             WO_Bool(62), WO_Int(63), WO_Str(64), WO_NameAt(65),
             WO_Int(66), WO_Int(67), WO_Str(68),
             WO_Bool(69), WO_NameAt(70), WO_NameAt(71), WO_Float(72),
-            WO_Bool(73)
+            WO_Bool(73), WO_Str(74) != "", (ESignType)WO_Int(74), WO_Float(75), WO_Float(76), WO_Int(77), WO_Int(78), WO_Int(79)
         );
     }
     function WO_ApplyUpdate2()
@@ -6132,6 +6232,22 @@ statemachine class r_MultiplayerClient
 
         // field 73: this player's Quen shield is up (others' copies drop theirs when it goes)
         list += thePlayer.HasBuff(EET_BasicQuen);
+        list += " ";
+
+        // 74-77: the last cast's sign, Yrden trap range and duration, Quen shield level; 78-79: Quen burst and impulse
+        // counts (fields 73-79 missing: an older version)
+        theGame.r_getMultiplayerClient().PollQuenFx();
+        list += (int)theGame.r_getMultiplayerClient().getCastSignType();
+        list += " ";
+        list += theGame.r_getMultiplayerClient().getCastYrdenRange();
+        list += " ";
+        list += theGame.r_getMultiplayerClient().getCastYrdenDuration();
+        list += " ";
+        list += theGame.r_getMultiplayerClient().getCastQuenLevel();
+        list += " ";
+        list += theGame.r_getMultiplayerClient().getQuenBurstSeq();
+        list += " ";
+        list += theGame.r_getMultiplayerClient().getQuenImpulseSeq();
         list += " ";
 
         WO_Send("wo "+wo_getMovementData()+list);

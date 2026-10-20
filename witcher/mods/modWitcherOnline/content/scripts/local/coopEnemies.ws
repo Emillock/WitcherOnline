@@ -356,6 +356,7 @@ class r_CoopEnemies
     public var quenHitsShown : int;      // shields that went down with the sign's burst
     public var yrdenRunesShown : int;
     public var lastSignVisual : string;  // the last one's type, effects and whether the first went active
+    public var assumeOldSigns : bool;    // tests: read others' snapshots as from a version without fields 73-79
     public var meleeHitsSent : int;
     public var signHitsSent : int;
     public var projectilesFired : int;
