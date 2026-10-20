@@ -715,6 +715,55 @@ class r_CoopEnemies
         return 0;
     }
 
+    // tests: zero the diagnostics between scenarios run in one game session
+    public function ResetDiagnostics()
+    {
+        hitsSent = 0;
+        hitsApplied = 0;
+        puppetsSpawned = 0;
+        puppetsKilled = 0;
+        twinsBound = 0;
+        spawnFailures = 0;
+        lastError = "";
+        lastHitFrac = 0;
+        hurtsCaptured = 0;
+        ghostHitsSeen = 0;
+        hurtsApplied = 0;
+        hurtsDodged = 0;
+        hurtDamageTaken = 0;
+        attacksSeen = 0;
+        attacksPlayed = 0;
+        attackPlayFailures = 0;
+        movesSeen = 0;
+        lastMoveAnim = '';
+        movesPlayed = 0;
+        movePlayFailures = 0;
+        projectilesSeen = 0;
+        hitEffectsSent = 0;
+        hitEffectsApplied = 0;
+        hitEffectsHeld = 0;
+        signVisualsPlayed = 0;
+        signVisualsActive = 0;
+        signVisualsByType.Clear();
+        quenShieldsShown = 0;
+        quenHitsShown = 0;
+        yrdenRunesShown = 0;
+        lastSignVisual = "";
+        assumeOldSigns = false;
+        meleeHitsSent = 0;
+        signHitsSent = 0;
+        projectilesFired = 0;
+        projectileFailures = 0;
+        lastHurtDelay = 0;
+        hitReactionsMirrored = 0;
+        hitAnimsSeen = 0;
+        hostMaxSwing = 0;
+        puppetMaxSwing = 0;
+        strideBone = "";
+        puppetLocomotion = true;
+        hurtEffectsApplied = 0;
+    }
+
     public function SetPuppetLocomotion(on : bool)
     {
         puppetLocomotion = on;
