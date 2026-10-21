@@ -15,6 +15,7 @@ class r_CoopHostEnemy
     public var deadAt : float;
     public var attackSeq : int;
     public var attackAnim : name;
+    public var attackTarget : string;  // the player it attacks, for members' copies to attack the same
     public var hitAnimTime : float;  // animation time of the current attack's hit
     public var hitSeq : int;         // hits it took, for members to replay the reaction
     public var hitBy : string;
@@ -46,12 +47,14 @@ class r_CoopPuppet
     public var predictUntil : float;
     public var attackSeq : int;
     public var attackPlayedAt : float;
+    public var attackActor : CActor;  // whom the leader's monster attacked (this player, or another player's character)
     public var slotAnimAt : float;  // an attack or move started playing (it stands meanwhile)
     public var moveSeq : int;
     public var projSeq : int;
     public var animAiId : int;
     public var hitSeq : int;
     public var wasInHitAnim : bool;
+    public var wasDodging : bool;
     public var targetSpeed : float;   // how fast the leader's monster moves (m/s, smoothed), for its locomotion
     public var lastTargetAt : float;
     public var stride : r_CoopStride;
@@ -341,6 +344,11 @@ class r_CoopEnemies
     public var attacksSeen : int;
     public var attacksPlayed : int;
     public var attackPlayFailures : int;
+    public var puppetAttackEvents : int;  // member: attack animations that really played on puppets
+    public var puppetOwnAttacks : int;    // member: attacks a puppet started by itself (should not happen)
+    public var puppetWrongTargets : int;  // member: mirrored attacks a puppet aimed at someone else than the leader's monster
+    public var puppetDodgesSeen : int;    // member: puppets really dodging
+    public var dodgesMirrored : int;      // member: the leader's monsters' dodges passed on to their puppets
     public var movesSeen : int;
     public var lastMoveAnim : name;
     public var movesPlayed : int;
@@ -501,6 +509,7 @@ class r_CoopEnemies
             }
             else
             {
+                ArmLeaderGhost();
                 UpdatePuppets(now);
             }
             ApplyDueHurts(now);
@@ -510,6 +519,10 @@ class r_CoopEnemies
         {
             ReleaseAll();
             leaderName = "";
+        }
+        if(role != 2 && !wasHost && armedGhosts.Size() > 0)
+        {
+            DisarmGhosts();
         }
     }
 
@@ -606,7 +619,8 @@ class r_CoopEnemies
 
     // "en epoch seq area acks{user session lastSeq} templates{path}
     //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim hitSeq hitBy hitReaction moveSeq moveAnim
-    //  projSeq [projTpl fromX fromY fromZ toX toY toZ angle speed range]}" (projSeq 0 = no projectile in the last 1.5 s)
+    //  attackTarget projSeq [projTpl fromX fromY fromZ toX toY toZ angle speed range]}" (projSeq 0 = no projectile in the
+    //  last 1.5 s)
     private function HostSend()
     {
         var templates : array<string>;
@@ -645,7 +659,7 @@ class r_CoopEnemies
                 + " " + FloatToStringPrec(e.npc.GetHeading(), 1) + " " + FloatToStringPrec(MaxF(0, e.npc.GetHealthPercents()), 4)
                 + " " + alive + " " + e.attackSeq + " " + CoopEncode(NameToString(e.attackAnim))
                 + " " + e.hitSeq + " " + CoopEncode(e.hitBy) + " " + e.hitReaction
-                + " " + e.moveSeq + " " + CoopEncode(NameToString(e.moveAnim));
+                + " " + e.moveSeq + " " + CoopEncode(NameToString(e.moveAnim)) + " " + CoopEncode(e.attackTarget);
 
             if(e.projSeq > 0 && now - e.projAt < 1.5)
             {
@@ -734,6 +748,11 @@ class r_CoopEnemies
         attacksSeen = 0;
         attacksPlayed = 0;
         attackPlayFailures = 0;
+        puppetAttackEvents = 0;
+        puppetOwnAttacks = 0;
+        puppetWrongTargets = 0;
+        puppetDodgesSeen = 0;
+        dodgesMirrored = 0;
         movesSeen = 0;
         lastMoveAnim = '';
         movesPlayed = 0;
@@ -957,6 +976,27 @@ class r_CoopEnemies
         return false;
     }
 
+    // the player behind an actor: this game's Geralt or another player's character here; "" for anyone else
+    private function UserOf(actor : CActor) : string
+    {
+        var players : array<r_RemotePlayer>;
+        var i : int;
+
+        if(actor && actor == thePlayer)
+        {
+            return theGame.r_getMultiplayerClient().getUsername();
+        }
+        players = theGame.r_getMultiplayerClient().getPlayers();
+        for(i = 0; actor && i < players.Size(); i += 1)
+        {
+            if(players[i] && players[i].ghost == actor)
+            {
+                return players[i].username;
+            }
+        }
+        return "";
+    }
+
     private function GhostOf(user : string) : CActor
     {
         var players : array<r_RemotePlayer>;
@@ -1011,6 +1051,25 @@ class r_CoopEnemies
             // Witcher Online hides ghosts from gameplay again in some states (e.g. mounting)
             ghost.SetGameplayVisibility(true);
         }
+    }
+
+    // a member: the leader's character too, so that puppets can go for it when their own AI plays the leader's monster's
+    // attacks on the leader (PlayAttack)
+    private function ArmLeaderGhost()
+    {
+        var ghost : CActor;
+
+        ghost = GhostOf(leaderName);
+        if(!ghost)
+        {
+            return;
+        }
+        if(!armedGhosts.Contains(ghost))
+        {
+            ghost.SetTemporaryAttitudeGroup(thePlayer.GetAttitudeGroup(), AGP_Default);
+            armedGhosts.PushBack(ghost);
+        }
+        ghost.SetGameplayVisibility(true);
     }
 
     private function Disarm(ghost : CActor)
@@ -1185,9 +1244,26 @@ class r_CoopEnemies
     public function OnEnemyAttack(npc : CNewNPC, eventType : EAnimationEventType, animInfo : SAnimationEventAnimInfo)
     {
         var e : r_CoopHostEnemy;
+        var p : r_CoopPuppet;
 
         if(!wasHost)
         {
+            // a member: the attack animation really plays on the puppet (its own attack events fire), soon after the
+            // leader's attack was mirrored (an attack started late in the 1.1 s window reaches its hit window up to a
+            // second later); any other is an attack of the puppet's own AI
+            p = FindPuppetByNpc(npc);
+            if(eventType == AET_DurationStart && p && theGame.GetEngineTimeAsSeconds() - p.attackPlayedAt < 2.5)
+            {
+                puppetAttackEvents += 1;
+                if(npc.GetTarget() != p.attackActor)
+                {
+                    puppetWrongTargets += 1;
+                }
+            }
+            else if(eventType == AET_DurationStart && p)
+            {
+                puppetOwnAttacks += 1;
+            }
             return;
         }
         e = FindHostEnemyByNpc(npc);
@@ -1200,6 +1276,11 @@ class r_CoopEnemies
         {
             e.attackSeq += 1;
             e.attackAnim = GetAnimNameFromEventAnimInfo(animInfo);
+            // the target can be momentarily unset: then still the last player it went for
+            if(UserOf(npc.GetTarget()) != "")
+            {
+                e.attackTarget = UserOf(npc.GetTarget());
+            }
             e.hitAnimTime = GetLocalAnimTimeFromEventAnimInfo(animInfo);
             attacksSeen += 1;
             lastHostSend = -999;  // send it now, not on the next 100 ms tick
@@ -1351,7 +1432,7 @@ class r_CoopEnemies
         var seen : array<int>;
         var pos : Vector;
         var attackAnim, moveAnim : name;
-        var hitBy, projTpl : string;
+        var hitBy, projTpl, attackTarget : string;
         var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, projSeq, projIndex : int;
         var hp, yaw, projAngle, projSpeed, projRange : float;
         var projFrom, projTo : Vector;
@@ -1402,7 +1483,7 @@ class r_CoopEnemies
 
         n = StringToInt(WO_Str(idx), 0);
         idx += 1;
-        for(i = 0; i < n && idx + 15 < count; i += 1)
+        for(i = 0; i < n && idx + 16 < count; i += 1)
         {
             netId = StringToInt(WO_Str(idx), 0);
             tplIndex = StringToInt(WO_Str(idx + 1), 0);
@@ -1429,7 +1510,8 @@ class r_CoopEnemies
             {
                 moveAnim = WO_NameAt(idx + 15);
             }
-            idx += 16;
+            attackTarget = CoopDecode(WO_Str(idx + 16));
+            idx += 17;
             projSeq = StringToInt(WO_Str(idx), 0);
             idx += 1;
             projTpl = "";
@@ -1455,7 +1537,7 @@ class r_CoopEnemies
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
                 ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackAnim, hitSeq, hitBy, hitReaction,
-                    moveSeq, moveAnim);
+                    moveSeq, moveAnim, attackTarget);
                 if(projSeq != 0 && projTpl != "")
                 {
                     ApplyProjectile(netId, projSeq, projTpl, projFrom, projTo, projAngle, projSpeed, projRange);
@@ -1606,7 +1688,8 @@ class r_CoopEnemies
     }
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
-        attackSeq : int, attackAnim : name, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name)
+        attackSeq : int, attackAnim : name, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name,
+        attackTarget : string)
     {
         var p : r_CoopPuppet;
         var npc : CNewNPC;
@@ -1657,7 +1740,7 @@ class r_CoopEnemies
             p.attackSeq = attackSeq;
             if(p.alive && IsNameValid(attackAnim))
             {
-                PlayAttack(p, attackAnim);
+                PlayAttack(p, attackAnim, attackTarget);
             }
         }
 
@@ -1819,20 +1902,49 @@ class r_CoopEnemies
         }
     }
 
-    // Through the AI, above the forced idle tree (a direct ActionPlaySlotAnimationAsync is refused while that
-    // tree owns the puppet's actions); when the animation ends the puppet is idle again.
-    private function PlayAttack(p : r_CoopPuppet, anim : name)
+    // The puppet's own AI attacks the player the leader's monster attacks (this game's Geralt, or that player's character
+    // here): its idle tree is off for the attack and it notices that player. The leader's exact animation can't be
+    // played: as a slot animation it is accepted and never runs (a monster's graph plays attacks only from combat), and
+    // the graph refuses the attack event out of combat. A puppet's own hits do no damage (OnBeforeDamage).
+    private function PlayAttack(p : r_CoopPuppet, anim : name, target : string)
     {
+        var actor : CActor;
+
         p.attackPlayedAt = theGame.GetEngineTimeAsSeconds();
-        if(PlaySlotAnim(p, anim))
+        if(target == theGame.r_getMultiplayerClient().getUsername())
         {
-            attacksPlayed += 1;
+            actor = thePlayer;
         }
         else
         {
-            attackPlayFailures += 1;
-            lastError = "attack animation '" + NameToString(anim) + "' did not play";
+            actor = GhostOf(target);
         }
+        if(!actor)
+        {
+            // not attacking a player (yet), or that player's character isn't spawned here
+            return;
+        }
+        if(p.aiId != 0)
+        {
+            p.npc.CancelAIBehavior(p.aiId);
+            p.aiId = 0;
+        }
+        if(p.animAiId != 0)
+        {
+            p.npc.CancelAIBehavior(p.animAiId);
+            p.animAiId = 0;
+        }
+        // long enough to start an attack, short enough not to start a second
+        p.reactUntil = MaxF(p.reactUntil, p.attackPlayedAt + 1.1);
+        p.attackActor = actor;
+        p.npc.SetAttitude(actor, AIA_Hostile);
+        // its AI keeps the first hostile it noticed (often this player): it has to forget the others to switch
+        if(p.npc.GetTarget() != actor)
+        {
+            p.npc.ForgetAllActors();
+        }
+        p.npc.NoticeActor(actor);
+        attacksPlayed += 1;
     }
 
     // The leader's monster fired a projectile (in the last 1.5 s): a harmless copy flies from this world's puppet
@@ -1873,8 +1985,15 @@ class r_CoopEnemies
         projectilesFired += 1;
     }
 
+    // KNOWN LIMIT: the slot animation is accepted but does not play on a monster's graph out of combat (see PlayAttack),
+    // so dodges, taunts and jump-backs don't show on puppets yet. Warning the puppet of an attack (as the game does for
+    // dodges) with its AI free didn't make it dodge either. enemy_moves fails on it (puppetDodgesSeen).
     private function PlayMove(p : r_CoopPuppet, anim : name)
     {
+        if(StrFindFirst(NameToString(anim), "dodge") >= 0)
+        {
+            dodgesMirrored += 1;
+        }
         if(PlaySlotAnim(p, anim))
         {
             movesPlayed += 1;
@@ -1966,10 +2085,21 @@ class r_CoopEnemies
                 hitAnimsSeen += 1;
             }
             p.wasInHitAnim = p.npc.IsInHitAnim();
+            if(p.npc.IsCurrentlyDodging() && !p.wasDodging)
+            {
+                puppetDodgesSeen += 1;
+            }
+            p.wasDodging = p.npc.IsCurrentlyDodging();
 
             if(p.aiId == 0 && now >= p.reactUntil)
             {
                 p.aiId = ForceIdle(p.npc);
+            }
+            // during a mirrored attack on another player, its perception keeps noticing this one: back to that player
+            else if(p.aiId == 0 && p.attackActor && p.attackActor != thePlayer && p.npc.GetTarget() == thePlayer)
+            {
+                p.npc.ForgetActor(thePlayer);
+                p.npc.NoticeActor(p.attackActor);
             }
 
             current = p.npc.GetHealthPercents();
