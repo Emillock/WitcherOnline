@@ -375,14 +375,16 @@ class r_CoopEnemies
     public var moveAnimEvents : int;      // member: animation events of any NPC's move tasks (diagnostics)
     public var tauntsMirrored : int;      // member: of movesPlayed
     public var puppetTauntsStarted : int; // member: of puppetMovesStarted
+    public var parriesMirrored : int;     // member: of movesPlayed
+    public var puppetParriesStarted : int;  // member: of puppetMovesStarted
     public var movesAnimOnly : int;       // member: other moves (or from an older leader), as slot animations
     public var moveTrace : string;        // member: how the last mirrored moves went (diagnostics)
     public var movesPlayed : int;
     public var movePlayFailures : int;
     public var puppetMovesStarted : int;  // member: mirrored moves a puppet's own AI started
     public var puppetMovesAnimated : int; // member: of those, ones whose animation was seen playing
+    public var puppetDodgesAnimated : int;
     public var puppetMovesMissed : int;   // member: mirrored moves it didn't start in time
-    public var puppetMovesSuperseded : int;  // member: ones the leader's monster followed with an attack before they started
     public var puppetOwnMoves : int;      // member: dodges, taunts, jump-backs a puppet started by itself (should not happen)
     public var projectilesSeen : int;
     public var hitEffectsSent : int;     // member: effects its hits carried
@@ -803,13 +805,15 @@ class r_CoopEnemies
         moveAnimEvents = 0;
         tauntsMirrored = 0;
         puppetTauntsStarted = 0;
+        parriesMirrored = 0;
+        puppetParriesStarted = 0;
         movesAnimOnly = 0;
         moveTrace = "";
         movesPlayed = 0;
         movePlayFailures = 0;
         puppetMovesStarted = 0;
         puppetMovesAnimated = 0;
-        puppetMovesSuperseded = 0;
+        puppetDodgesAnimated = 0;
         puppetMovesMissed = 0;
         puppetOwnMoves = 0;
         projectilesSeen = 0;
@@ -1463,6 +1467,10 @@ class r_CoopEnemies
         {
             p.moveAnimated = true;
             puppetMovesAnimated += 1;
+            if(kind == "dodge")
+            {
+                puppetDodgesAnimated += 1;
+            }
         }
     }
 
@@ -1477,6 +1485,11 @@ class r_CoopEnemies
             return;
         }
         line = p.moveKind + " " + outcome + " sig=" + p.moveSignals + " acc=" + p.moveAccepted + " retgt=" + p.moveRetargets;
+        if(p.moveKind == "parry")
+        {
+            line += " guarded=" + p.npc.IsGuarded() + " attacking=" + p.npc.IsAttacking() + " sinceAttack="
+                + FloatToStringPrec(p.movePlayedAt - p.attackPlayedAt, 1);
+        }
         if(p.moveActivatedAt >= 0)
         {
             line += " act=+" + FloatToStringPrec(p.moveActivatedAt, 2) + "/" + p.moveActStatus;
@@ -1539,6 +1552,10 @@ class r_CoopEnemies
         if(p.moveKind == "taunt")
         {
             puppetTauntsStarted += 1;
+        }
+        else if(p.moveKind == "parry")
+        {
+            puppetParriesStarted += 1;
         }
     }
 
@@ -2118,20 +2135,13 @@ class r_CoopEnemies
         now = theGame.GetEngineTimeAsSeconds();
         p.attackPlayedAt = now;
         p.attackFrom = now;
-        // the leader's monster attacked since: a move not started yet is over; one under way ends first (the
-        // leader's monster made it before this attack, the puppet only later)
-        if(p.moveKind != "" && !p.moveStarted)
-        {
-            TraceMove(p, "superseded");
-            p.moveKind = "";
-            puppetMovesSuperseded += 1;
-        }
-        else if(p.moveKind != "" && now < p.moveUntil)
+        // a move waiting or under way comes first, as on the leader (a parry, then the counter-attack): the attack
+        // follows once the move is over (EndMove), and the target switches only then
+        if(p.moveKind != "" && now < p.moveUntil)
         {
             p.attackFrom = p.moveUntil;
         }
-        // long enough to start an attack, short enough not to start a second; it switches targets once a move under
-        // way is over (UpdatePuppets)
+        // long enough to start an attack, short enough not to start a second
         if(FreeToAct(p, target, p.attackFrom - now + 1.1, p.attackFrom == now))
         {
             p.slotAnimAt = p.attackFrom;  // it stands for the attack (a lunge read as a run would break it off)
@@ -2259,6 +2269,10 @@ class r_CoopEnemies
         {
             tauntsMirrored += 1;
         }
+        else if(kind == "parry")
+        {
+            parriesMirrored += 1;
+        }
         p.moveKind = kind;
         p.moveParam = param;
         p.movePlayedAt = now;
@@ -2271,7 +2285,7 @@ class r_CoopEnemies
         p.moveAnimAt = -1;
         p.moveRetargets = 0;
         p.slotAnimAt = now;
-        if(kind != "taunt" && param >= 0)
+        if((kind == "dodge" || kind == "jumpback") && param >= 0)
         {
             p.npc.SetBehaviorVariable('DodgeDirection', param);
         }
@@ -2311,8 +2325,24 @@ class r_CoopEnemies
         return GetRole() == 2 && puppets.Size() > 0 && attacker != thePlayer && UserOf(attacker) != "";
     }
 
-    // its attack tasks may start only during a mirrored attack (once a move under way is over), and not during a newer
-    // mirrored move
+    // a move is over: an attack of the leader's monster that came meanwhile follows now, at its player
+    private function EndMove(p : r_CoopPuppet, now : float)
+    {
+        if(p.attackPlayedAt <= p.movePlayedAt || now - p.attackPlayedAt > 3.0)
+        {
+            return;
+        }
+        p.attackFrom = now;
+        p.slotAnimAt = now;
+        p.reactUntil = MaxF(p.reactUntil, now + 1.1);
+        if(p.attackActor && p.npc.GetTarget() != p.attackActor)
+        {
+            p.npc.ForgetAllActors();
+            p.npc.NoticeActor(p.attackActor);
+        }
+    }
+
+    // its attack tasks may start only during a mirrored attack, and not while a mirrored move waits or is under way
     public function PuppetAttackAllowed(npc : CNewNPC) : bool
     {
         var p : r_CoopPuppet;
@@ -2324,7 +2354,7 @@ class r_CoopEnemies
             return true;
         }
         now = theGame.GetEngineTimeAsSeconds();
-        if(p.moveKind != "" && p.movePlayedAt > p.attackPlayedAt && now < p.moveUntil)
+        if(p.moveKind != "" && now < p.moveUntil)
         {
             return false;
         }
@@ -2444,6 +2474,7 @@ class r_CoopEnemies
                     TraceMove(p, "started");
                 }
                 p.moveKind = "";
+                EndMove(p, now);
             }
             else if(p.moveKind == "dodge" && !p.moveAnimated && now - p.movePlayedAt >= 0.45)
             {
@@ -2461,6 +2492,25 @@ class r_CoopEnemies
                 {
                     p.npc.SignalGameplayEventParamInt('Time2Dodge', (int)EDT_Attack_Light);
                     p.moveSignals += 1;
+                }
+            }
+            else if(p.moveKind == "parry" && !p.moveAnimated && now - p.movePlayedAt >= 0.2)
+            {
+                // as the game does: the attack warning raises its guard (its parry task), then the blow is parried
+                // (as by Npc.OnParry); again 0.5 s on if no parry animation started
+                if(!p.npc.CanParryAttack())
+                {
+                    // by itself its guard came up only after about a second
+                    p.npc.RaiseGuard();
+                    p.npc.SignalGameplayEventParamInt('ParryStart', 0);
+                    p.moveSignals += 1;
+                }
+                else if(p.moveActivatedAt < 0 || now - p.movePlayedAt - p.moveActivatedAt > 0.5)
+                {
+                    p.moveActivatedAt = now - p.movePlayedAt;
+                    p.npc.SetBehaviorVariable('parryAttackType', (int)PAT_Light);
+                    p.npc.SignalGameplayEventParamInt('ParryPerform', 0);
+                    p.moveAccepted += 1;
                 }
             }
 
@@ -3463,6 +3513,15 @@ function CoopMoveKind(task : CBTTaskPlayAnimationEventDecorator, anim : name) : 
         return "jumpback";
     }
     text = StrLower(NameToString(anim));
+    // the parry task also raises the guard and plays counter-attacks (those come as attacks)
+    if((CBTTaskPerformParry)task)
+    {
+        if(StrFindFirst(text, "parry") >= 0)
+        {
+            return "parry";
+        }
+        return "";
+    }
     if(StrFindFirst(text, "dodge") >= 0 || StrFindFirst(text, "evade") >= 0)
     {
         return "dodge";
@@ -3568,6 +3627,24 @@ function OnActivate() : EBTNodeStatus
         coop.NotePuppetDodge(GetNPC(), true, status);
     }
     return status;
+}
+
+// a puppet parries when the leader's monster did, for sure then (no chance roll, no counter-attack instead), and
+// never by itself
+@wrapMethod(CBTTaskPerformParry)
+function IsAvailable() : bool
+{
+    if(CoopIsPuppet(GetNPC()))
+    {
+        checkParryChance = false;
+        interruptTaskToExecuteCounter = false;
+        if(!CoopEnemiesHere().PuppetMovePending(GetNPC(), "parry", false))
+        {
+            GetNPC().SetParryEnabled(false);
+            return false;
+        }
+    }
+    return wrappedMethod();
 }
 
 @wrapMethod(CBTTaskTaunt)
