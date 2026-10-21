@@ -16,6 +16,8 @@ class r_CoopHostEnemy
     public var attackSeq : int;
     public var attackAnim : name;
     public var attackTarget : string;  // the player it attacks, for members' copies to attack the same
+    public var attackTask : string;    // which attack task (CoopAttackId), for copies to make the same attack
+    public var attackTaskAt : float;   // when that task started (its hit windows belong to it for 2.5 s)
     public var hitAnimTime : float;  // animation time of the current attack's hit
     public var hitSeq : int;         // hits it took, for members to replay the reaction
     public var hitBy : string;
@@ -51,6 +53,13 @@ class r_CoopPuppet
     public var attackPlayedAt : float;
     public var attackActor : CActor;  // whom the leader's monster attacked (this player, or another player's character)
     public var attackFrom : float;    // its own attack may start from then (after a move under way) for 1.1 s
+    public var attackTask : string;   // the leader's monster's attack task (CoopAttackId): this one first
+    public var attackAnimText : string;  // and its animation, when known (diagnostics)
+    public var attackTaskTaken : bool;   // its first attack task since (diagnostics)
+    public var attackRunningSince : float;  // its attack task running since then (-1: none)
+    public var puppetAnimText : string;  // its own first attack animation since (diagnostics)
+    public var animsCompared : bool;
+    public var aimedAt : float;       // when it was last told whom to attack (AimPuppet)
     public var slotAnimAt : float;  // an attack or move started playing (it stands meanwhile)
     public var moveSeq : int;
     public var projSeq : int;
@@ -365,6 +374,18 @@ class r_CoopEnemies
     public var puppetAttackEvents : int;  // member: attack animations that really played on puppets
     public var puppetOwnAttacks : int;    // member: attacks a puppet started by itself (should not happen)
     public var puppetWrongTargets : int;  // member: mirrored attacks a puppet aimed at someone else than the leader's monster
+    public var puppetSameTasks : int;     // member: mirrored attacks a puppet made with the leader's monster's attack task
+    public var puppetOtherTasks : int;    // member: ... with another one (the same was not available in time)
+    public var puppetSameAnims : int;     // member: puppets' attack animations the same as the leader's monster's
+    public var lastAttackTask : string;   // leader
+    public var lastPuppetTask : string;   // member: the last mirrored attack task a puppet took (expected->taken if another)
+    public var puppetAttackQuickEnds : int;  // member: puppets' attack tasks over within 0.5 s (diagnostics)
+    public var spellWrongTargets : int;   // member: puppets' spells spawned while aimed at another player
+    public var attackAnimsCompared : int; // member: mirrored attacks whose two animations were compared (puppetSameAnims)
+    public var lastAnimPair : string;
+    public var spellSpawns : int;         // area spells (spawned roots, entities) by shared monsters (leader) or puppets (member)
+    public var projectilesMuted : int;    // member: puppets' own projectiles that didn't fly (MutesShot)
+    private var firingProjectileCopy : bool;
     public var puppetDodgesSeen : int;    // member: puppets really dodging
     public var dodgesMirrored : int;      // member: the leader's monsters' dodges passed on to their puppets
     public var movesSeen : int;
@@ -690,7 +711,7 @@ class r_CoopEnemies
             body += " " + e.netId + " " + tplIndex + " " + CoopEncode(NameToString(e.npc.GetAppearance()))
                 + " " + FloatToStringPrec(pos.X, 2) + " " + FloatToStringPrec(pos.Y, 2) + " " + FloatToStringPrec(pos.Z, 2)
                 + " " + FloatToStringPrec(e.npc.GetHeading(), 1) + " " + FloatToStringPrec(MaxF(0, e.npc.GetHealthPercents()), 4)
-                + " " + alive + " " + e.attackSeq + " " + CoopEncode(NameToString(e.attackAnim))
+                + " " + alive + " " + e.attackSeq + " " + CoopEncode(AttackText(e))
                 + " " + e.hitSeq + " " + CoopEncode(e.hitBy) + " " + e.hitReaction
                 + " " + e.moveSeq + " " + CoopEncode(MoveText(e)) + " " + CoopEncode(e.attackTarget);
 
@@ -716,6 +737,21 @@ class r_CoopEnemies
 
         WO_Send("coop en " + epoch + " " + hostSeq + " " + WO_CurrentAreaCode() + " " + AcksText() + " " + TemplatesText(templates)
             + " " + hostEnemies.Size() + body);
+    }
+
+    // "task|anim" for an attack task (CoopAttackId; the animation follows with its hit window), else the bare
+    // animation name as 0.2.0 sent it (0.2.0 members ignore the animation and take the text as a name, so they attack)
+    private function AttackText(e : r_CoopHostEnemy) : string
+    {
+        if(e.attackTask == "")
+        {
+            return NameToString(e.attackAnim);
+        }
+        if(!IsNameValid(e.attackAnim))
+        {
+            return e.attackTask + "|";
+        }
+        return e.attackTask + "|" + NameToString(e.attackAnim);
     }
 
     // "kind:param:anim" for a move members' copies make themselves, else the bare animation name (as 0.2.0 sent it;
@@ -795,6 +831,16 @@ class r_CoopEnemies
         puppetAttackEvents = 0;
         puppetOwnAttacks = 0;
         puppetWrongTargets = 0;
+        puppetSameTasks = 0;
+        puppetOtherTasks = 0;
+        puppetSameAnims = 0;
+        lastAttackTask = "";
+        lastPuppetTask = "";
+        spellSpawns = 0;
+        spellWrongTargets = 0;
+        attackAnimsCompared = 0;
+        puppetAttackQuickEnds = 0;
+        projectilesMuted = 0;
         puppetDodgesSeen = 0;
         dodgesMirrored = 0;
         movesSeen = 0;
@@ -1299,7 +1345,8 @@ class r_CoopEnemies
     }
 
     // A shared monster started (AET_DurationStart) or finished (AET_DurationEnd, where the hit is processed) an
-    // attack's hit window. Members replay the animation on its puppet.
+    // attack's hit window. An attack task that started (OnAttackTask) is already sent: this only adds the animation and
+    // hit time. Any other (e.g. a counter-attack from its parry task) is sent here.
     public function OnEnemyAttack(npc : CNewNPC, eventType : EAnimationEventType, animInfo : SAnimationEventAnimInfo)
     {
         var e : r_CoopHostEnemy;
@@ -1318,6 +1365,11 @@ class r_CoopEnemies
                 {
                     puppetWrongTargets += 1;
                 }
+                if(p.puppetAnimText == "")
+                {
+                    p.puppetAnimText = NameToString(GetAnimNameFromEventAnimInfo(animInfo));
+                    CompareAttackAnims(p);
+                }
             }
             else if(eventType == AET_DurationStart && p)
             {
@@ -1333,7 +1385,12 @@ class r_CoopEnemies
 
         if(eventType == AET_DurationStart)
         {
-            e.attackSeq += 1;
+            if(theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 2.5)
+            {
+                e.attackSeq += 1;
+                e.attackTask = "";
+                attacksSeen += 1;
+            }
             e.attackAnim = GetAnimNameFromEventAnimInfo(animInfo);
             // the target can be momentarily unset: then still the last player it went for
             if(UserOf(npc.GetTarget()) != "")
@@ -1341,13 +1398,79 @@ class r_CoopEnemies
                 e.attackTarget = UserOf(npc.GetTarget());
             }
             e.hitAnimTime = GetLocalAnimTimeFromEventAnimInfo(animInfo);
-            attacksSeen += 1;
             lastHostSend = -999;  // send it now, not on the next 100 ms tick
         }
         else if(eventType == AET_DurationEnd)
         {
             e.hitAnimTime = GetLocalAnimTimeFromEventAnimInfo(animInfo);
         }
+    }
+
+    // An attack task (CBTTaskAttack and its many kinds: swings, charges, spells, signs, summons, projectiles) started
+    // (`active`) or ended. On the leader it is sent at once, with which task it is (CoopAttackId), so members' copies
+    // make the same attack, also when it has no hit window (a spell that only spawns its area effect). On a member,
+    // it tells whether the puppet took the leader's attack.
+    public function OnAttackTask(task : CBTTaskAttack, active : bool)
+    {
+        var e : r_CoopHostEnemy;
+        var p : r_CoopPuppet;
+        var npc : CNewNPC;
+
+        npc = task.GetNPC();
+        if(!wasHost)
+        {
+            p = FindPuppetByNpc(npc);
+            // its idle tree waits for the attack to end (a spell's loop runs for seconds, its effect comes late)
+            if(p && active)
+            {
+                p.attackRunningSince = theGame.GetEngineTimeAsSeconds();
+            }
+            else if(p)
+            {
+                if(p.attackRunningSince >= 0 && theGame.GetEngineTimeAsSeconds() - p.attackRunningSince < 0.5)
+                {
+                    puppetAttackQuickEnds += 1;
+                }
+                p.attackRunningSince = -1;
+            }
+            if(p && active && p.attackTask != "" && !p.attackTaskTaken)
+            {
+                p.attackTaskTaken = true;
+                if(task.CoopAttackId() == p.attackTask)
+                {
+                    puppetSameTasks += 1;
+                    lastPuppetTask = task.CoopAttackId();
+                }
+                else
+                {
+                    puppetOtherTasks += 1;
+                    lastPuppetTask = p.attackTask + "->" + task.CoopAttackId();
+                }
+            }
+            return;
+        }
+        e = FindHostEnemyByNpc(npc);
+        if(!e)
+        {
+            return;
+        }
+        if(!active)
+        {
+            e.attackTaskAt = -999;
+            return;
+        }
+        e.attackSeq += 1;
+        e.attackTask = task.CoopAttackId();
+        e.attackTaskAt = theGame.GetEngineTimeAsSeconds();
+        e.attackAnim = '';
+        e.hitAnimTime = 0;
+        if(UserOf(npc.GetTarget()) != "")
+        {
+            e.attackTarget = UserOf(npc.GetTarget());
+        }
+        attacksSeen += 1;
+        lastAttackTask = e.attackTask;
+        lastHostSend = -999;
     }
 
     // One of its other animated moves (a behavior-tree task that plays an animation: dodge, jump back, taunt,
@@ -1641,8 +1764,8 @@ class r_CoopEnemies
         var templates : array<string>;
         var seen : array<int>;
         var pos : Vector;
-        var attackAnim, moveAnim : name;
-        var hitBy, projTpl, attackTarget, moveText, moveKind : string;
+        var moveAnim : name;
+        var hitBy, projTpl, attackTarget, attackTask, attackAnimText, moveText, moveKind : string;
         var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, moveParam, projSeq, projIndex : int;
         var hp, yaw, projAngle, projSpeed, projRange : float;
         var projFrom, projTo : Vector;
@@ -1706,10 +1829,17 @@ class r_CoopEnemies
             hp = StringToFloat(WO_Str(idx + 7), 0);
             alive = WO_Str(idx + 8) == "1";
             attackSeq = StringToInt(WO_Str(idx + 9), 0);
-            attackAnim = '';
-            if(WO_Str(idx + 10) != "-")
+            // "task|anim", or just the animation from an older leader (see AttackText)
+            attackTask = "";
+            attackAnimText = CoopDecode(WO_Str(idx + 10));
+            if(StrFindFirst(attackAnimText, "|") >= 0)
             {
-                attackAnim = WO_NameAt(idx + 10);
+                attackTask = StrBeforeFirst(attackAnimText, "|");
+                attackAnimText = StrAfterFirst(attackAnimText, "|");
+            }
+            if(attackAnimText == "None")
+            {
+                attackAnimText = "";
             }
             hitSeq = StringToInt(WO_Str(idx + 11), 0);
             hitBy = CoopDecode(WO_Str(idx + 12));
@@ -1754,7 +1884,7 @@ class r_CoopEnemies
 
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
-                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackAnim, hitSeq, hitBy, hitReaction,
+                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackTask, attackAnimText, hitSeq, hitBy, hitReaction,
                     moveSeq, moveAnim, moveKind, moveParam, attackTarget);
                 if(projSeq != 0 && projTpl != "")
                 {
@@ -1906,7 +2036,7 @@ class r_CoopEnemies
     }
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
-        attackSeq : int, attackAnim : name, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name,
+        attackSeq : int, attackTask : string, attackAnimText : string, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name,
         moveKind : string, moveParam : int, attackTarget : string)
     {
         var p : r_CoopPuppet;
@@ -1956,10 +2086,15 @@ class r_CoopEnemies
         if(attackSeq != p.attackSeq)
         {
             p.attackSeq = attackSeq;
-            if(p.alive && IsNameValid(attackAnim))
+            if(p.alive && (attackTask != "" || attackAnimText != ""))
             {
-                PlayAttack(p, attackAnim, attackTarget);
+                PlayAttack(p, attackTask, attackAnimText, attackTarget);
             }
+        }
+        else if(attackAnimText != "" && p.attackAnimText == "")
+        {
+            p.attackAnimText = attackAnimText;  // the animation follows its task's start
+            CompareAttackAnims(p);
         }
 
         // the newest of its attacks and moves plays, as on the leader
@@ -2076,6 +2211,7 @@ class r_CoopEnemies
         p.target = npc.GetWorldPosition();
         p.yaw = npc.GetHeading();
         p.aiId = ForceIdle(npc);
+        p.attackRunningSince = -1;
         // a finisher would kill it here, outside the leader's say ('DisableFinishers' blocks the killing-blow
         // finisher, 'DisableFinisher' the one on a living target)
         BlockFinisher(p, 'DisableFinishers');
@@ -2128,13 +2264,18 @@ class r_CoopEnemies
     // here): its idle tree is off for the attack and it notices that player. The leader's exact animation can't be
     // played: as a slot animation it is accepted and never runs (a monster's graph plays attacks only from combat), and
     // the graph refuses the attack event out of combat. A puppet's own hits do no damage (OnBeforeDamage).
-    private function PlayAttack(p : r_CoopPuppet, anim : name, target : string)
+    private function PlayAttack(p : r_CoopPuppet, task : string, anim : string, target : string)
     {
         var now : float;
 
         now = theGame.GetEngineTimeAsSeconds();
         p.attackPlayedAt = now;
         p.attackFrom = now;
+        p.attackTask = task;
+        p.attackAnimText = anim;
+        p.attackTaskTaken = false;
+        p.puppetAnimText = "";
+        p.animsCompared = false;
         // a move waiting or under way comes first, as on the leader (a parry, then the counter-attack): the attack
         // follows once the move is over (EndMove), and the target switches only then
         if(p.moveKind != "" && now < p.moveUntil)
@@ -2181,17 +2322,29 @@ class r_CoopEnemies
         p.reactUntil = MaxF(p.reactUntil, theGame.GetEngineTimeAsSeconds() + seconds);
         p.attackActor = actor;
         p.npc.SetAttitude(actor, AIA_Hostile);
-        // its AI keeps the first hostile it noticed (often this player): it has to forget the others to switch
-        if(retarget && p.npc.GetTarget() != actor)
-        {
-            p.npc.ForgetAllActors();
-            if(p.moveKind != "")
-            {
-                p.moveRetargets += 1;
-            }
-        }
         p.npc.NoticeActor(actor);
+        if(retarget)
+        {
+            AimPuppet(p, actor);
+        }
         return true;
+    }
+
+    // Its AI keeps the first hostile it noticed (often this player): its combat target selection is told to take
+    // `actor` ('ForceTarget', as quests do). Forgetting the others instead restarted its combat tree each time, which
+    // broke attacks and spells off.
+    private function AimPuppet(p : r_CoopPuppet, actor : CActor)
+    {
+        p.aimedAt = theGame.GetEngineTimeAsSeconds();
+        if(p.npc.GetTarget() == actor)
+        {
+            return;
+        }
+        p.npc.SignalGameplayEventParamObject('ForceTarget', actor);
+        if(p.moveKind != "")
+        {
+            p.moveRetargets += 1;
+        }
     }
 
     // The leader's monster fired a projectile (in the last 1.5 s): a harmless copy flies from this world's puppet
@@ -2228,7 +2381,9 @@ class r_CoopEnemies
         proj.projDMG = 0;
         proj.projSilverDMG = 0;
         proj.projEfect = EET_Undefined;
+        firingProjectileCopy = true;
         proj.ShootProjectileAtPosition(angle, speed, to, range);
+        firingProjectileCopy = false;
         projectilesFired += 1;
     }
 
@@ -2335,30 +2490,92 @@ class r_CoopEnemies
         p.attackFrom = now;
         p.slotAnimAt = now;
         p.reactUntil = MaxF(p.reactUntil, now + 1.1);
-        if(p.attackActor && p.npc.GetTarget() != p.attackActor)
+        if(p.attackActor)
         {
-            p.npc.ForgetAllActors();
             p.npc.NoticeActor(p.attackActor);
+            AimPuppet(p, p.attackActor);
         }
     }
 
-    // its attack tasks may start only during a mirrored attack, and not while a mirrored move waits or is under way
-    public function PuppetAttackAllowed(npc : CNewNPC) : bool
+    // A puppet's attack tasks may start only during a mirrored attack, and not while a mirrored move waits or is under
+    // way. For the first 0.6 s only the leader's monster's own attack task may (the same swing, spell or sign), then
+    // any (the same can be out of reach for it). It never summons: what the leader's monster summons is shared.
+    public function PuppetAttackAllowed(task : CBTTaskAttack) : bool
     {
         var p : r_CoopPuppet;
         var now : float;
 
-        p = FindPuppetByNpc(npc);
+        p = FindPuppetByNpc(task.GetNPC());
         if(!p)
         {
             return true;
+        }
+        if((CBTTaskSummonCreatures)task || (CBTTaskSummonCreaturesWithLevel)task)
+        {
+            return false;
         }
         now = theGame.GetEngineTimeAsSeconds();
         if(p.moveKind != "" && now < p.moveUntil)
         {
             return false;
         }
-        return now >= p.attackFrom && now - p.attackFrom < 1.1;
+        if(now < p.attackFrom || now - p.attackFrom >= 1.1)
+        {
+            return false;
+        }
+        return p.attackTask == "" || now - p.attackFrom >= 0.6 || task.CoopAttackId() == p.attackTask;
+    }
+
+    // a spell of `npc` spawned its area entity: counted for a shared monster on the leader, a puppet on a member
+    // (and on a member, whether the puppet aimed it at the player the leader's monster attacks)
+    public function OnSpellSpawn(npc : CNewNPC)
+    {
+        var p : r_CoopPuppet;
+
+        if(wasHost && FindHostEnemyByNpc(npc))
+        {
+            spellSpawns += 1;
+            return;
+        }
+        p = FindPuppetByNpc(npc);
+        if(!wasHost && p)
+        {
+            spellSpawns += 1;
+            if(p.attackActor && npc.GetTarget() != p.attackActor)
+            {
+                spellWrongTargets += 1;
+            }
+        }
+    }
+
+    // diagnostics: once both the leader's monster's and the puppet's animation of a mirrored attack are known
+    private function CompareAttackAnims(p : r_CoopPuppet)
+    {
+        if(p.animsCompared || p.attackAnimText == "" || p.puppetAnimText == "")
+        {
+            return;
+        }
+        p.animsCompared = true;
+        attackAnimsCompared += 1;
+        lastAnimPair = p.attackAnimText + "/" + p.puppetAnimText;
+        if(p.attackAnimText == p.puppetAnimText)
+        {
+            puppetSameAnims += 1;
+        }
+    }
+
+    // member: a puppet's own projectile (its AI fired it) doesn't fly; the leader's monster's comes as a copy
+    // (ApplyProjectile)
+    public function MutesShot(proj : W3AdvancedProjectile) : bool
+    {
+        var npc : CNewNPC;
+
+        npc = (CNewNPC)proj.caster;
+        if(wasHost || firingProjectileCopy || !npc)
+        {
+            return false;
+        }
+        return IsPuppet(npc);
     }
 
     // from an older leader: just the animation. The slot animation is accepted but doesn't play on a monster's graph
@@ -2514,16 +2731,22 @@ class r_CoopEnemies
                 }
             }
 
+            // an attack of its own AI that started in a window runs to its end (up to 6 s), standing (see MoveStarted)
+            if(p.attackRunningSince >= 0 && now - p.attackRunningSince < 6.0)
+            {
+                p.reactUntil = MaxF(p.reactUntil, now + 0.1);
+                p.slotAnimAt = now;
+            }
             if(p.aiId == 0 && now >= p.reactUntil)
             {
                 p.aiId = ForceIdle(p.npc);
             }
-            // during a mirrored attack on another player, its perception keeps noticing this one: back to that player
-            // (not during a move: each switch restarts its combat tree, which broke the move off)
-            else if(p.aiId == 0 && p.moveKind == "" && p.attackActor && p.attackActor != thePlayer && p.npc.GetTarget() == thePlayer)
+            // in a mirrored attack's window, before its attack starts: still at someone else, it is told again (not
+            // during a move or an attack: a switch then would break it off)
+            else if(p.aiId == 0 && p.moveKind == "" && p.attackRunningSince < 0 && p.attackActor
+                && p.npc.GetTarget() != p.attackActor && now - p.aimedAt > 0.5)
             {
-                p.npc.ForgetActor(thePlayer);
-                p.npc.NoticeActor(p.attackActor);
+                AimPuppet(p, p.attackActor);
             }
 
             current = p.npc.GetHealthPercents();
@@ -2638,6 +2861,8 @@ class r_CoopEnemies
         }
         else
         {
+            // a local twin picks its own targets again
+            p.npc.SignalGameplayEvent('UnforceTarget');
             for(i = 0; i < p.addedNoFinishers.Size(); i += 1)
             {
                 p.npc.RemoveAbility(p.addedNoFinishers[i]);
@@ -3434,6 +3659,21 @@ function OnPreAttackEvent(animEventName : name, animEventType : EAnimationEventT
     return wrappedMethod(animEventName, animEventType, data, animInfo);
 }
 
+// a puppet's own projectile on a member: it doesn't fly and goes (see MutesShot)
+function CoopMutesShot(proj : W3AdvancedProjectile) : bool
+{
+    var coop : r_CoopEnemies;
+
+    coop = CoopEnemiesHere();
+    if(coop && coop.MutesShot(proj))
+    {
+        coop.projectilesMuted += 1;
+        proj.DestroyAfter(0.1);
+        return true;
+    }
+    return false;
+}
+
 function CoopProjectileShot(proj : W3AdvancedProjectile, angle : float, speed : float, target : Vector, range : float)
 {
     var client : r_MultiplayerClient;
@@ -3448,6 +3688,10 @@ function CoopProjectileShot(proj : W3AdvancedProjectile, angle : float, speed : 
 @wrapMethod(W3AdvancedProjectile)
 function ShootProjectileAtPosition(angle : float, velocity : float, target : Vector, optional range : float, optional collisionGroups : array<name>)
 {
+    if(CoopMutesShot(this))
+    {
+        return;
+    }
     wrappedMethod(angle, velocity, target, range, collisionGroups);
     CoopProjectileShot(this, angle, velocity, target, range);
 }
@@ -3455,6 +3699,10 @@ function ShootProjectileAtPosition(angle : float, velocity : float, target : Vec
 @wrapMethod(W3AdvancedProjectile)
 function ShootProjectileAtNode(angle : float, velocity : float, target : CNode, optional range : float, optional collisionGroups : array<name>)
 {
+    if(CoopMutesShot(this))
+    {
+        return;
+    }
     wrappedMethod(angle, velocity, target, range, collisionGroups);
     CoopProjectileShot(this, angle, velocity, target.GetWorldPosition(), range);
 }
@@ -3462,6 +3710,10 @@ function ShootProjectileAtNode(angle : float, velocity : float, target : CNode, 
 @wrapMethod(W3AdvancedProjectile)
 function ShootProjectileAtBone(angle : float, velocity : float, target : CEntity, targetBone : name, optional range : float, optional collisionGroups : array<name>)
 {
+    if(CoopMutesShot(this))
+    {
+        return;
+    }
     wrappedMethod(angle, velocity, target, targetBone, range, collisionGroups);
     CoopProjectileShot(this, angle, velocity, target.GetWorldPosition(), range);
 }
@@ -3469,6 +3721,10 @@ function ShootProjectileAtBone(angle : float, velocity : float, target : CEntity
 @wrapMethod(W3AdvancedProjectile)
 function ShootCakeProjectileAtPosition(cakeAngle : float, cakeHeight : float, shootAngle : float, velocity : float, target : Vector, range : float, optional collisionGroups : array<name>)
 {
+    if(CoopMutesShot(this))
+    {
+        return;
+    }
     wrappedMethod(cakeAngle, cakeHeight, shootAngle, velocity, target, range, collisionGroups);
     CoopProjectileShot(this, shootAngle, velocity, target, range);
 }
@@ -3693,10 +3949,7 @@ function SetAttackData(data : CPreAttackEventData)
 @wrapMethod(CBTTaskAttack)
 function IsAvailable() : bool
 {
-    var coop : r_CoopEnemies;
-
-    coop = CoopEnemiesHere();
-    if(coop && !coop.PuppetAttackAllowed(GetNPC()))
+    if(!CoopPuppetMayAttack(this, isActive))
     {
         return false;
     }
@@ -3799,4 +4052,241 @@ function OnQuestObjectiveEvent(journalQuest : CJournalQuest, journalObjective : 
         client.getCoopEnemies().OnJournalChange(journalObjective);
     }
     return wrappedMethod(journalQuest, journalObjective);
+}
+
+// Which attack it is, the same in every copy of a monster: the task's class and attack type (its animation set)
+@addMethod(CBTTaskAttack)
+function CoopAttackId() : string
+{
+    return ToString() + ":" + (int)attackType;
+}
+
+// true unless a puppet's attack task may not start now (r_CoopEnemies.PuppetAttackAllowed)
+// (an attack under way, `running`, goes on: the tree asks again while it runs, and a spell's loop outlasts the window)
+function CoopPuppetMayAttack(task : CBTTaskAttack, running : bool) : bool
+{
+    var coop : r_CoopEnemies;
+
+    coop = CoopEnemiesHere();
+    if(!coop || running)
+    {
+        return true;
+    }
+    return coop.PuppetAttackAllowed(task);
+}
+
+@wrapMethod(CBTTaskAttack)
+function OnActivate() : EBTNodeStatus
+{
+    var status : EBTNodeStatus;
+    var coop : r_CoopEnemies;
+
+    status = wrappedMethod();
+    coop = CoopEnemiesHere();
+    if(coop)
+    {
+        coop.OnAttackTask(this, true);
+    }
+    return status;
+}
+
+@wrapMethod(CBTTaskAttack)
+function OnDeactivate()
+{
+    var coop : r_CoopEnemies;
+
+    coop = CoopEnemiesHere();
+    if(coop)
+    {
+        coop.OnAttackTask(this, false);
+    }
+    wrappedMethod();
+}
+
+// these attack tasks decide their availability without CBTTaskAttack.IsAvailable
+
+@wrapMethod(CBTTask3StateCharge)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTask3StateLightCharge)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskBiesCharge)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskCastSign)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskCastAard)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskCastIgni)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskCastQuen)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskDettlaffDash)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskIceGiantFallingIcicles)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskMagicFXAttack)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskMagicMeleeAttack)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskPlaySyncAnimAttack)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskProjectileAttack)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskSummonCreatures)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskSummonCreaturesWithLevel)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+@wrapMethod(CBTTaskThrowBomb)
+function IsAvailable() : bool
+{
+    if(!CoopPuppetMayAttack(this, isActive))
+    {
+        return false;
+    }
+    return wrappedMethod();
+}
+
+// area spells, counted (OnSpellSpawn)
+function CoopSpellSpawn(npc : CNewNPC)
+{
+    var coop : r_CoopEnemies;
+
+    coop = CoopEnemiesHere();
+    if(coop)
+    {
+        coop.OnSpellSpawn(npc);
+    }
+}
+
+@wrapMethod(CBTTaskSpawnEntityAttack)
+function SpawnEntity()
+{
+    wrappedMethod();
+    CoopSpellSpawn(GetNPC());
+}
+
+@wrapMethod(CBTTaskLeshyRootAttack)
+function ShootProjectile()
+{
+    wrappedMethod();
+    CoopSpellSpawn(GetNPC());
 }
