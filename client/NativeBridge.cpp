@@ -703,6 +703,24 @@ namespace wo_native
 		ReturnName(frame, result, CurrentField(index));
 	}
 
+	// milliseconds on the performance counter, the same clock in every process (tests time events across two games)
+	static void WO_ClockMs(void *, void *frame, void *result)
+	{
+		LARGE_INTEGER count, freq;
+		QueryPerformanceCounter(&count);
+		QueryPerformanceFrequency(&freq);
+		WNB_ReturnInt(frame, result, static_cast<int>((count.QuadPart / (freq.QuadPart / 1000)) & 0x7fffffff));
+	}
+
+	// a script string as a name (scripts have no conversion; the co-op layer plays animations it gets by name)
+	static void WO_ToName(void *, void *frame, void *result)
+	{
+		WNB_String text{};
+		const int size = WNB_ReadStringParameter(frame, &text);
+
+		ReturnName(frame, result, size > 0 ? NarrowPayload(text) : std::string());
+	}
+
 	bool RegisterNatives()
 	{
 		if (g_registrationAttempted.exchange(true))
@@ -725,7 +743,7 @@ namespace wo_native
 		};
 
 		const NativeRegistration registrations[] = {
-		    {"WO_Send", &WO_Send}, {"WO_Poll", &WO_Poll}, {"WO_Tick", &WO_Tick}, {"WO_Str", &WO_Str}, {"WO_NameAt", &WO_NameAt},
+		    {"WO_Send", &WO_Send}, {"WO_Poll", &WO_Poll}, {"WO_Tick", &WO_Tick}, {"WO_Str", &WO_Str}, {"WO_NameAt", &WO_NameAt}, {"WO_ToName", &WO_ToName}, {"WO_ClockMs", &WO_ClockMs},
 		    {"WO_FactsBaseline", &WO_FactsBaseline}, {"WO_FactsPage", &WO_FactsPage},
 		};
 

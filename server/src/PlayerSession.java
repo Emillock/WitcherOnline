@@ -17,8 +17,10 @@ public class PlayerSession
     public volatile List<String> update3Fields = Collections.emptyList();
     public volatile List<String> update4Fields = Collections.emptyList();
 
-    // co-op state by channel (first field): latest value, rebroadcast like the updates above
+    // co-op state by channel (first field): latest value, forwarded on arrival and rebroadcast like the updates above
     public final Map<String, List<String>> coopFields = new ConcurrentHashMap<>();
+    // when each channel was last forwarded on arrival (System.nanoTime): the broadcast tick doesn't repeat it so soon
+    public final Map<String, Long> coopForwardedAt = new ConcurrentHashMap<>();
 
     public PlayerSession(int playerId, String username, ClientEndpoint endpoint, long lastSeen)
     {

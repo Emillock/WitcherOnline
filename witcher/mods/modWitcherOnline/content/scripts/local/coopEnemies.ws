@@ -18,6 +18,15 @@ class r_CoopHostEnemy
     public var attackTarget : string;  // the player it attacks, for members' copies to attack the same
     public var attackTask : string;    // which attack task (CoopAttackId), for copies to make the same attack
     public var attackTaskAt : float;   // when that task started (its hit windows belong to it for 2.5 s)
+    public var windowSeq : int;        // the attack whose first hit window was seen (tests: LogSync)
+    public var pendingTask : string;   // an attack task that started but may yet be refused (see CommitAttack)
+    public var pendingAt : float;
+    public var pendingWall : int;
+    public var pendingFrames : int;
+    public var attackAnimAt : float;   // the animation's own time when it was named, and when that was (engine time)
+    public var attackNamedAt : float;
+    public var lastHitAt : float;      // when it was last hit, and whether that cut its current attack short
+    public var attackCut : bool;
     public var hitAnimTime : float;  // animation time of the current attack's hit
     public var hitSeq : int;         // hits it took, for members to replay the reaction
     public var hitBy : string;
@@ -61,6 +70,17 @@ class r_CoopPuppet
     public var animsCompared : bool;
     public var aimedAt : float;       // when it was last told whom to attack (AimPuppet)
     public var slotAnimAt : float;  // an attack or move started playing (it stands meanwhile)
+    public var slotAttackAt : float;  // the leader's attack animation started on its slot (SlotAttack)
+    public var slotChecked : bool;    // whether that animation's hit window came (SlotAttackCheck)
+    public var hitMirroredAt : float;
+    public var attackCut : bool;      // the leader's monster's attack was cut short (StopSlotAttack)
+    public var attackAnimAt : float;  // how far into the animation the leader's monster was when it was sent
+    public var attackAnimGotAt : float;
+    public var catchUpId : int;       // a faster animation speed while a late slot attack catches up (until catchUpUntil)
+    public var catchUpUntil : float;
+    public var taskPending : string;  // its own attack task that started but may yet be refused (ConfirmPuppetTask)
+    public var taskPendingAt : float;
+    public var taskPendingFrames : int;
     public var moveSeq : int;
     public var projSeq : int;
     public var animAiId : int;
@@ -392,6 +412,19 @@ class r_CoopEnemies
     public var puppetFxTasks : int;       // member: puppets' FX spawn tasks that started
     public var puppetAiFree : bool;       // puppets' AI free while their monster fights (tests can turn it off)
         default puppetAiFree = true;
+    public var slotAttacks : bool;        // member: the leader's swing animations play on puppets' slots (tests can turn it off)
+        default slotAttacks = true;
+    public var attackSlot : name;         // the graph slot they play on
+        default attackSlot = 'NPC_ANIM_SLOT';
+    public var slotAttacksPlayed : int;   // member: attack animations started on a slot
+    public var slotAttacksRefused : int;
+    public var lastSlotState : string;    // diagnostics: the puppet's graph when its last slot attack started
+    public var slotAttacksMissed : int;   // member: slot attacks whose hit window never came
+    public var slotCatchUps : int;        // member: slot attacks sped up to catch up
+    public var attackFalseStarts : int;   // leader: attack tasks refused right away (not sent)
+    private var slotMissedOnce : array<string>;  // monsters (templates) whose last slot attack missed
+    private var slotless : array<string>;        // ...and those that missed twice in a row: no slot attacks
+    public var syncLog : array<string>;   // tests: "kind netId seq what engineTime wall=ms" events (LogSync), drained by the test bot
     public var spellSpawns : int;         // area spells (spawned roots, entities) by shared monsters (leader) or puppets (member)
     public var projectilesMuted : int;    // member: puppets' own projectiles that didn't fly (MutesShot)
     private var firingProjectileCopy : bool;
@@ -527,7 +560,7 @@ class r_CoopEnemies
 
         if(role == 1)
         {
-            if(now - lastHostSend >= 0.1)
+            if(CommitDueAttacks(now) || now - lastHostSend >= 0.1)
             {
                 HostCollect(client, now);
                 HostSend();
@@ -749,19 +782,27 @@ class r_CoopEnemies
             + " " + hostEnemies.Size() + body);
     }
 
-    // "task|anim" for an attack task (CoopAttackId; the animation follows with its hit window), else the bare
-    // animation name as 0.2.0 sent it (0.2.0 members ignore the animation and take the text as a name, so they attack)
+    // "task|anim|time|cut" (CoopAttackId, "" without a task; the animation as soon as it is known, how far into it the
+    // monster is now, and "1" once a hit cut it short). 0.2.0 members take the text as an animation name, which they
+    // don't use, and attack.
     private function AttackText(e : r_CoopHostEnemy) : string
     {
-        if(e.attackTask == "")
+        var cut : string;
+
+        if(e.attackCut)
         {
-            return NameToString(e.attackAnim);
+            cut = "|1";
         }
         if(!IsNameValid(e.attackAnim))
         {
+            if(e.attackCut)
+            {
+                return e.attackTask + "||0" + cut;
+            }
             return e.attackTask + "|";
         }
-        return e.attackTask + "|" + NameToString(e.attackAnim);
+        return e.attackTask + "|" + NameToString(e.attackAnim) + "|"
+            + FloatToStringPrec(e.attackAnimAt + theGame.GetEngineTimeAsSeconds() - e.attackNamedAt, 2) + cut;
     }
 
     // "kind:param:anim" for a move members' copies make themselves, else the bare animation name (as 0.2.0 sent it;
@@ -855,6 +896,11 @@ class r_CoopEnemies
         gateOtherTask = 0;
         spellWrongTargets = 0;
         attackAnimsCompared = 0;
+        slotAttacksPlayed = 0;
+        slotAttacksRefused = 0;
+        slotAttacksMissed = 0;
+        slotCatchUps = 0;
+        attackFalseStarts = 0;
         puppetAttackQuickEnds = 0;
         projectilesMuted = 0;
         puppetDodgesSeen = 0;
@@ -1383,6 +1429,7 @@ class r_CoopEnemies
                 }
                 if(p.puppetAnimText == "")
                 {
+                    LogSync("MA", p.netId, p.attackSeq, NameToString(GetAnimNameFromEventAnimInfo(animInfo)));
                     p.puppetAnimText = NameToString(GetAnimNameFromEventAnimInfo(animInfo));
                     CompareAttackAnims(p);
                 }
@@ -1401,13 +1448,31 @@ class r_CoopEnemies
 
         if(eventType == AET_DurationStart)
         {
+            if(e.pendingTask != "")
+            {
+                CommitAttack(e);
+            }
             if(theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 2.5)
             {
                 e.attackSeq += 1;
                 e.attackTask = "";
                 attacksSeen += 1;
+                LogSync("L", e.netId, e.attackSeq, "-");
             }
-            e.attackAnim = GetAnimNameFromEventAnimInfo(animInfo);
+            if(e.windowSeq != e.attackSeq)
+            {
+                e.windowSeq = e.attackSeq;
+                LogSync("LA", e.netId, e.attackSeq, NameToString(GetAnimNameFromEventAnimInfo(animInfo)));
+            }
+            // the hit window's animation is the attack's (an early name can be another's)
+            if(e.attackAnim != GetAnimNameFromEventAnimInfo(animInfo))
+            {
+                e.attackAnimAt = GetLocalAnimTimeFromEventAnimInfo(animInfo);
+                e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
+                e.attackAnim = GetAnimNameFromEventAnimInfo(animInfo);
+                HostSend();
+                lastHostSend = theGame.GetEngineTimeAsSeconds();
+            }
             // the target can be momentarily unset: then still the last player it went for
             if(UserOf(npc.GetTarget()) != "")
             {
@@ -1423,9 +1488,11 @@ class r_CoopEnemies
     }
 
     // An attack task (CBTTaskAttack and its many kinds: swings, charges, spells, signs, summons, projectiles) started
-    // (`active`) or ended. On the leader it is sent at once, with which task it is (CoopAttackId), so members' copies
-    // make the same attack, also when it has no hit window (a spell that only spawns its area effect). On a member,
-    // it tells whether the puppet took the leader's attack.
+    // (`active`) or ended. It counts once it really plays (CommitAttack, ConfirmPuppetTask): a task whose animation
+    // event the graph refuses ends at once and starts again the next frame (a bear between its attacks, a human copy).
+    // On the leader it is sent then, with which task it is (CoopAttackId), so members' copies make the same attack,
+    // also when it has no hit window (a spell that only spawns its area effect). On a member, it tells whether the
+    // puppet took the leader's attack.
     public function OnAttackTask(task : CBTTaskAttack, active : bool)
     {
         var e : r_CoopHostEnemy;
@@ -1436,37 +1503,27 @@ class r_CoopEnemies
         if(!wasHost)
         {
             p = FindPuppetByNpc(npc);
-            // its idle tree waits for the attack to end (a spell's loop runs for seconds, its effect comes late)
-            if(p && active)
+            if(!p)
             {
-                p.attackRunningSince = theGame.GetEngineTimeAsSeconds();
+                return;
             }
-            else if(p)
+            if(active)
             {
-                if(p.attackRunningSince >= 0 && theGame.GetEngineTimeAsSeconds() - p.attackRunningSince < 0.5)
-                {
-                    puppetAttackQuickEnds += 1;
-                }
-                p.attackRunningSince = -1;
+                p.taskPending = task.CoopAttackId();
+                p.taskPendingAt = theGame.GetEngineTimeAsSeconds();
+                p.taskPendingFrames = 0;
+                return;
             }
-            if(p && active && p.attackTask != "" && !p.attackTaskTaken)
+            if(p.taskPending != "")
             {
-                p.attackTaskTaken = true;
-                if(task.CoopAttackId() == p.attackTask)
-                {
-                    puppetSameTasks += 1;
-                    lastPuppetTask = task.CoopAttackId();
-                }
-                else if(StrBeforeFirst(p.attackTask, ":") == "CBTTaskAttack" && StrBeforeFirst(task.CoopAttackId(), ":") == "CBTTaskAttack")
-                {
-                    puppetSwingSwaps += 1;  // another plain swing (see PuppetAttackAllowed)
-                }
-                else
-                {
-                    puppetOtherTasks += 1;
-                    lastPuppetTask = p.attackTask + "->" + task.CoopAttackId();
-                }
+                p.taskPending = "";
+                return;
             }
+            if(p.attackRunningSince >= 0 && theGame.GetEngineTimeAsSeconds() - p.attackRunningSince < 0.5)
+            {
+                puppetAttackQuickEnds += 1;
+            }
+            p.attackRunningSince = -1;
             return;
         }
         e = FindHostEnemyByNpc(npc);
@@ -1474,23 +1531,141 @@ class r_CoopEnemies
         {
             return;
         }
-        if(!active)
+        if(!active && e.pendingTask != "")
+        {
+            e.pendingTask = "";
+            attackFalseStarts += 1;
+        }
+        else if(!active)
         {
             e.attackTaskAt = -999;
-            return;
+            // a hit ended it (an attack can also go on through a hit): members' copies stop it too
+            if(theGame.GetEngineTimeAsSeconds() - e.lastHitAt < 0.5 && !e.attackCut)
+            {
+                e.attackCut = true;
+                LogSync("LC", e.netId, e.attackSeq, "-");
+                HostSend();
+                lastHostSend = theGame.GetEngineTimeAsSeconds();
+            }
         }
-        e.attackSeq += 1;
-        e.attackTask = task.CoopAttackId();
-        e.attackTaskAt = theGame.GetEngineTimeAsSeconds();
-        e.attackAnim = '';
-        e.hitAnimTime = 0;
-        if(UserOf(npc.GetTarget()) != "")
+        else
         {
-            e.attackTarget = UserOf(npc.GetTarget());
+            e.pendingTask = task.CoopAttackId();
+            e.pendingAt = theGame.GetEngineTimeAsSeconds();
+            e.pendingWall = WO_ClockMs();
+            e.pendingFrames = 0;
+        }
+    }
+
+    // A shared monster's attack task really started: its first animation event, its hit window, or still running two
+    // frames later (CommitDueAttacks). A new attack for members, timed from the task's start.
+    private function CommitAttack(e : r_CoopHostEnemy)
+    {
+        e.attackSeq += 1;
+        e.attackTask = e.pendingTask;
+        e.attackTaskAt = e.pendingAt;
+        e.pendingTask = "";
+        LogSync("L", e.netId, e.attackSeq, e.attackTask, e.pendingWall);
+        e.attackAnim = '';
+        e.attackCut = false;
+        e.hitAnimTime = 0;
+        if(UserOf(e.npc.GetTarget()) != "")
+        {
+            e.attackTarget = UserOf(e.npc.GetTarget());
         }
         attacksSeen += 1;
         lastAttackTask = e.attackTask;
-        lastHostSend = -999;
+    }
+
+    // attack tasks still running two frames (and 50 ms) after they started, without an animation event yet
+    private function CommitDueAttacks(now : float) : bool
+    {
+        var i : int;
+        var committed : bool;
+
+        for(i = 0; i < hostEnemies.Size(); i += 1)
+        {
+            if(hostEnemies[i].pendingTask != "")
+            {
+                hostEnemies[i].pendingFrames += 1;
+                if(hostEnemies[i].pendingFrames >= 2 && now - hostEnemies[i].pendingAt >= 0.05)
+                {
+                    CommitAttack(hostEnemies[i]);
+                    committed = true;
+                }
+            }
+        }
+        return committed;
+    }
+
+    // a puppet's own attack task plays (see OnAttackTask): its idle tree waits for it to end (a spell's loop runs for
+    // seconds, its effect comes late), and whether it took the leader's attack is counted
+    private function ConfirmPuppetTask(p : r_CoopPuppet)
+    {
+        var id : string;
+
+        id = p.taskPending;
+        p.taskPending = "";
+        p.attackRunningSince = p.taskPendingAt;
+        LogSync("M", p.netId, p.attackSeq, id);
+        if(p.attackTask == "" || p.attackTaskTaken)
+        {
+            return;
+        }
+        p.attackTaskTaken = true;
+        if(id == p.attackTask)
+        {
+            puppetSameTasks += 1;
+            lastPuppetTask = id;
+        }
+        else if(StrBeforeFirst(p.attackTask, ":") == "CBTTaskAttack" && StrBeforeFirst(id, ":") == "CBTTaskAttack")
+        {
+            puppetSwingSwaps += 1;  // another plain swing (see PuppetAttackAllowed)
+        }
+        else
+        {
+            puppetOtherTasks += 1;
+            lastPuppetTask = p.attackTask + "->" + id;
+        }
+    }
+
+    // An animation event while an attack task runs. On the leader the first commits the attack and names its
+    // animation, sent at once so members' copies start it nearly together (the hit window, which names it for sure,
+    // opens much later). On a member it shows the puppet's own task plays.
+    public function OnAttackAnimEvent(task : CBTTaskAttack, eventName : name, animInfo : SAnimationEventAnimInfo)
+    {
+        var e : r_CoopHostEnemy;
+        var p : r_CoopPuppet;
+
+        if(!wasHost)
+        {
+            p = FindPuppetByNpc(task.GetNPC());
+            if(p && p.taskPending != "")
+            {
+                ConfirmPuppetTask(p);
+            }
+            return;
+        }
+        e = FindHostEnemyByNpc(task.GetNPC());
+        if(!e)
+        {
+            return;
+        }
+        if(e.pendingTask != "")
+        {
+            CommitAttack(e);
+        }
+        if(IsNameValid(e.attackAnim) || theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 2.5)
+        {
+            return;
+        }
+        e.attackAnim = GetAnimNameFromEventAnimInfo(animInfo);
+        e.attackAnimAt = GetLocalAnimTimeFromEventAnimInfo(animInfo);
+        e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
+        LogSync("LE", e.netId, e.attackSeq, NameToString(e.attackAnim) + "/" + NameToString(eventName));
+        // right now, not on the next frame's tick
+        HostSend();
+        lastHostSend = theGame.GetEngineTimeAsSeconds();
     }
 
     // One of its other animated moves (a behavior-tree task that plays an animation: dodge, jump back, taunt,
@@ -1730,7 +1905,9 @@ class r_CoopEnemies
             e.hitBy = GhostOwner(attacker);
         }
         e.hitSeq += 1;
+        e.lastHitAt = theGame.GetEngineTimeAsSeconds();
         e.hitReaction = (int)action.GetHitReactionType();
+        LogSync("LH", e.netId, e.attackSeq, IntToString(e.hitReaction));
         lastHostSend = -999;
     }
 
@@ -1786,6 +1963,9 @@ class r_CoopEnemies
         var pos : Vector;
         var moveAnim : name;
         var hitBy, projTpl, attackTarget, attackTask, attackAnimText, moveText, moveKind : string;
+        var attackAnimAt : float;
+        var animTime : string;
+        var attackCut : bool;
         var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, moveParam, projSeq, projIndex : int;
         var hp, yaw, projAngle, projSpeed, projRange : float;
         var projFrom, projTo : Vector;
@@ -1857,6 +2037,19 @@ class r_CoopEnemies
                 attackTask = StrBeforeFirst(attackAnimText, "|");
                 attackAnimText = StrAfterFirst(attackAnimText, "|");
             }
+            attackAnimAt = 0;
+            attackCut = false;
+            if(StrFindFirst(attackAnimText, "|") >= 0)
+            {
+                animTime = StrAfterFirst(attackAnimText, "|");
+                attackAnimText = StrBeforeFirst(attackAnimText, "|");
+                if(StrFindFirst(animTime, "|") >= 0)
+                {
+                    attackCut = StrAfterFirst(animTime, "|") == "1";
+                    animTime = StrBeforeFirst(animTime, "|");
+                }
+                attackAnimAt = StringToFloat(animTime, 0);
+            }
             if(attackAnimText == "None")
             {
                 attackAnimText = "";
@@ -1904,7 +2097,7 @@ class r_CoopEnemies
 
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
-                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackTask, attackAnimText, hitSeq, hitBy, hitReaction,
+                ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackTask, attackAnimText, attackAnimAt, attackCut, hitSeq, hitBy, hitReaction,
                     moveSeq, moveAnim, moveKind, moveParam, attackTarget);
                 if(projSeq != 0 && projTpl != "")
                 {
@@ -2056,7 +2249,7 @@ class r_CoopEnemies
     }
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
-        attackSeq : int, attackTask : string, attackAnimText : string, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name,
+        attackSeq : int, attackTask : string, attackAnimText : string, attackAnimAt : float, attackCut : bool, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name,
         moveKind : string, moveParam : int, attackTarget : string)
     {
         var p : r_CoopPuppet;
@@ -2106,15 +2299,39 @@ class r_CoopEnemies
         if(attackSeq != p.attackSeq)
         {
             p.attackSeq = attackSeq;
-            if(p.alive && (attackTask != "" || attackAnimText != ""))
+            // (one already cut short isn't played)
+            if(p.alive && (attackTask != "" || attackAnimText != "") && !attackCut)
             {
+                p.attackAnimAt = attackAnimAt;
+                p.attackAnimGotAt = theGame.GetEngineTimeAsSeconds();
                 PlayAttack(p, attackTask, attackAnimText, attackTarget);
             }
         }
-        else if(attackAnimText != "" && p.attackAnimText == "")
+        else if(attackAnimText != "" && attackAnimText != p.attackAnimText && !p.attackCut)
         {
-            p.attackAnimText = attackAnimText;  // the animation follows its task's start
-            CompareAttackAnims(p);
+            // the animation follows its task's start; a later one is the attack's next part (a counter: its dodge, then
+            // its lunge)
+            p.attackAnimAt = attackAnimAt;
+            p.attackAnimGotAt = theGame.GetEngineTimeAsSeconds();
+            if(p.attackAnimText == "")
+            {
+                p.attackAnimText = attackAnimText;
+                CompareAttackAnims(p);
+                SlotAttack(p, false);
+            }
+            else
+            {
+                p.attackAnimText = attackAnimText;
+                SlotAttack(p, true);
+            }
+        }
+        if(attackSeq == p.attackSeq && attackCut && !p.attackCut)
+        {
+            p.attackCut = true;
+            if(p.slotAttackAt >= p.attackPlayedAt)
+            {
+                StopSlotAttack(p);
+            }
         }
 
         // the newest of its attacks and moves plays, as on the leader
@@ -2259,6 +2476,8 @@ class r_CoopEnemies
         var action : W3DamageAction;
 
         OpenReactionWindow(p);
+        p.hitMirroredAt = theGame.GetEngineTimeAsSeconds();
+        LogSync("MH", p.netId, p.attackSeq, IntToString(hitReaction));
 
         action = new W3DamageAction in theGame.damageMgr;
         action.Initialize(GhostOf(hitBy), p.npc, theGame, "W3CoopHitFx", (EHitReactionType)hitReaction, CPS_Undefined, true, false, false, false);
@@ -2281,9 +2500,9 @@ class r_CoopEnemies
     }
 
     // The puppet's own AI attacks the player the leader's monster attacks (this game's Geralt, or that player's character
-    // here): its idle tree is off for the attack and it notices that player. The leader's exact animation can't be
-    // played: as a slot animation it is accepted and never runs (a monster's graph plays attacks only from combat), and
-    // the graph refuses the attack event out of combat. A puppet's own hits do no damage (OnBeforeDamage).
+    // here): its idle tree is off for the attack and it notices that player. A plain swing's exact animation plays on its
+    // slot at once (SlotAttack); a spell or special attack is its own AI's same task. A puppet's own hits do no damage
+    // (OnBeforeDamage).
     private function PlayAttack(p : r_CoopPuppet, task : string, anim : string, target : string)
     {
         var now : float;
@@ -2291,11 +2510,19 @@ class r_CoopEnemies
         now = theGame.GetEngineTimeAsSeconds();
         p.attackPlayedAt = now;
         p.attackFrom = now;
+        LogSync("R", p.netId, p.attackSeq, task);
         p.attackTask = task;
         p.attackAnimText = anim;
         p.attackTaskTaken = false;
+        p.attackCut = false;
         p.puppetAnimText = "";
         p.animsCompared = false;
+        // a spell or special attack is its own AI's: a swing still on its slot would hide it (and its animation's
+        // events, which spawn the spell)
+        if(task != "" && StrBeforeFirst(task, ":") != "CBTTaskAttack")
+        {
+            StopSlotAttack(p);
+        }
         // a move waiting or under way comes first, as on the leader (a parry, then the counter-attack): the attack
         // follows once the move is over (EndMove), and the target switches only then
         if(p.moveKind != "" && now < p.moveUntil)
@@ -2306,6 +2533,51 @@ class r_CoopEnemies
         {
             p.slotAnimAt = p.attackFrom;  // it stands for the attack (a lunge read as a run would break it off)
             attacksPlayed += 1;
+            SlotAttack(p, false);
+        }
+    }
+
+    // The leader's monster's exact attack animation, played straight on the puppet's graph slot as soon as it
+    // arrives: its own AI would take a while to pick an attack, and a swing's variant at random. Only for plain swings
+    // and attacks without a task (a spell's effect comes from its task), and not behind a move. `nextPart`: a later
+    // animation of the same attack, after one already on the slot.
+    private function SlotAttack(p : r_CoopPuppet, nextPart : bool)
+    {
+        var settings : SAnimatedComponentSlotAnimationSettings;
+        var comp : CAnimatedComponent;
+        var now : float;
+
+        now = theGame.GetEngineTimeAsSeconds();
+        if(nextPart && (p.slotAttackAt < p.attackPlayedAt || now - p.slotAttackAt > 4.0))
+        {
+            return;
+        }
+        // (an older leader names it only at its hit window: by then the puppet may have started its own swing)
+        if(!nextPart && (!slotAttacks || p.attackAnimText == "" || p.slotAttackAt >= p.attackPlayedAt || now - p.attackPlayedAt > 0.7
+            || p.attackFrom > now || p.attackTaskTaken || (p.attackTask != "" && StrBeforeFirst(p.attackTask, ":") != "CBTTaskAttack")))
+        {
+            return;
+        }
+        comp = p.npc.GetRootAnimatedComponent();
+        if(!comp || slotless.Contains(p.npc.GetReadableName()))
+        {
+            return;
+        }
+        settings.blendIn = 0.1;
+        settings.blendOut = 0.2;
+        lastSlotState = p.npc.GetBehaviorGraphInstanceName();
+        if(comp.PlaySlotAnimationAsync(WO_ToName(p.attackAnimText), attackSlot, settings))
+        {
+            p.slotAttackAt = now;
+            p.slotChecked = false;
+            CatchUp(p, comp, p.attackAnimAt + 0.03 + now - p.attackAnimGotAt);
+            slotAttacksPlayed += 1;
+            LogSync("MS", p.netId, p.attackSeq, p.attackAnimText);
+        }
+        else
+        {
+            slotAttacksRefused += 1;
+            LogSync("MX", p.netId, p.attackSeq, p.attackAnimText);
         }
     }
 
@@ -2415,6 +2687,7 @@ class r_CoopEnemies
         var now, window : float;
 
         now = theGame.GetEngineTimeAsSeconds();
+        StopSlotAttack(p);  // a swing still on its slot would hide the move
         if(p.moveKind != "" && !p.moveStarted)
         {
             puppetMovesMissed += 1;
@@ -2565,6 +2838,17 @@ class r_CoopEnemies
         {
             return false;
         }
+        if(p.slotAttackAt >= p.attackPlayedAt || p.attackCut)
+        {
+            return false;
+        }
+        // the leader's plain swing (or attack without a task) is named at its first animation event, for some at its
+        // hit window: up to 0.7 s its own swing waits for it to play on the slot
+        if(slotAttacks && p.attackAnimText == "" && now - p.attackPlayedAt < 0.7 && !slotless.Contains(p.npc.GetReadableName())
+            && (p.attackTask == "" || StrBeforeFirst(p.attackTask, ":") == "CBTTaskAttack"))
+        {
+            return false;
+        }
         offered = task.CoopAttackId();
         plain = StrBeforeFirst(offered, ":") == "CBTTaskAttack";
         if(p.attackTask == "" || offered == p.attackTask || (plain && (now - p.attackFrom >= 0.6
@@ -2575,6 +2859,97 @@ class r_CoopEnemies
         gateOtherTask += 1;
         lastGateDenied = p.attackTask + "/" + task.CoopAttackId();
         return false;
+    }
+
+    // The leader's monster's attack was cut short (a hit ended it), the puppet died, or it is to make a move or spell
+    // of its own AI: its slot animation stops (playing no animation on the slot ends the one there), so its own hit
+    // reaction, death, move or spell shows.
+    private function StopSlotAttack(p : r_CoopPuppet)
+    {
+        EndCatchUp(p);
+        if(p.slotAttackAt <= 0 || theGame.GetEngineTimeAsSeconds() - p.slotAttackAt > 4.0 || !p.npc.GetRootAnimatedComponent())
+        {
+            return;
+        }
+        p.npc.GetRootAnimatedComponent().PlaySlotAnimationAsync('', attackSlot);
+        LogSync("MK", p.netId, p.attackSeq, "-");
+    }
+
+    // A slot attack named late (at its hit window: some animations have no event before it) starts that far behind
+    // the leader's: it plays faster (at most twice as fast) until it has caught up, so the hit lands closer to the
+    // leader's. `behind`: seconds (the transfer counted as 30 ms).
+    private function CatchUp(p : r_CoopPuppet, comp : CAnimatedComponent, behind : float)
+    {
+        var speed : float;
+
+        EndCatchUp(p);
+        if(behind < 0.08)
+        {
+            return;
+        }
+        speed = MinF(2.0, 1 + behind / 0.3);
+        p.catchUpId = comp.SetAnimationSpeedMultiplier(speed);
+        p.catchUpUntil = theGame.GetEngineTimeAsSeconds() + behind / (speed - 1);
+        slotCatchUps += 1;
+        LogSync("MC", p.netId, p.attackSeq, FloatToStringPrec(behind, 2));
+    }
+
+    private function EndCatchUp(p : r_CoopPuppet)
+    {
+        if(p.catchUpUntil > 0 && p.npc.GetRootAnimatedComponent())
+        {
+            p.npc.GetRootAnimatedComponent().ResetAnimationSpeedMultiplier(p.catchUpId);
+        }
+        p.catchUpUntil = 0;
+    }
+
+    // A slot attack shows its hit window soon (its animation's own events). None in 2.5 s (unless a hit cut it short or
+    // another attack followed): its graph may lack the slot, and after two misses in a row that monster's puppets swing
+    // with their own AI again (gated as before).
+    private function SlotAttackCheck(p : r_CoopPuppet, now : float)
+    {
+        var key : string;
+
+        if(p.slotChecked || p.slotAttackAt < p.attackPlayedAt || p.attackCut || now - p.slotAttackAt < 2.5)
+        {
+            return;
+        }
+        p.slotChecked = true;
+        key = p.npc.GetReadableName();
+        if(p.puppetAnimText == p.attackAnimText)
+        {
+            slotMissedOnce.Remove(key);
+            return;
+        }
+        if(p.hitMirroredAt >= p.slotAttackAt)
+        {
+            return;
+        }
+        slotAttacksMissed += 1;
+        LogSync("MM", p.netId, p.attackSeq, p.attackAnimText);
+        if(slotMissedOnce.Contains(key))
+        {
+            slotless.PushBack(key);
+        }
+        else
+        {
+            slotMissedOnce.PushBack(key);
+        }
+    }
+
+    // tests: one attack-sync event; at most 400 kept until the test bot drains them
+    private function LogSync(kind : string, netId : int, seq : int, what : string, optional wall : int)
+    {
+        if(syncLog.Size() >= 400)
+        {
+            syncLog.Erase(0);
+        }
+        if(wall == 0)
+        {
+            wall = WO_ClockMs();
+        }
+        syncLog.PushBack(kind + " " + netId + " " + seq + " " + what + " " + FloatToStringPrec(theGame.GetEngineTimeAsSeconds(), 3)
+            + " wall=" + wall);
     }
 
     // a spell of `npc` spawned its area entity: counted for a shared monster on the leader, a puppet on a member
@@ -2653,8 +3028,8 @@ class r_CoopEnemies
         return IsPuppet(npc);
     }
 
-    // from an older leader: just the animation. The slot animation is accepted but doesn't play on a monster's graph
-    // out of combat (see PlayAttack).
+    // from an older leader: just the animation. As an AI slot action it is accepted but doesn't play on a monster's
+    // graph out of combat (SlotAttack plays on the animated component instead).
     private function PlayMoveAnim(p : r_CoopPuppet, anim : name)
     {
         if(PlaySlotAnim(p, anim))
@@ -2748,6 +3123,19 @@ class r_CoopEnemies
                 hitAnimsSeen += 1;
             }
             p.wasInHitAnim = p.npc.IsInHitAnim();
+            SlotAttackCheck(p, now);
+            if(p.catchUpUntil > 0 && now >= p.catchUpUntil)
+            {
+                EndCatchUp(p);
+            }
+            if(p.taskPending != "")
+            {
+                p.taskPendingFrames += 1;
+                if(p.taskPendingFrames >= 2 && now - p.taskPendingAt >= 0.05)
+                {
+                    ConfirmPuppetTask(p);
+                }
+            }
             if(p.npc.IsCurrentlyDodging() && !p.wasDodging)
             {
                 puppetDodgesSeen += 1;
@@ -2903,6 +3291,7 @@ class r_CoopEnemies
     {
         p.alive = false;
         puppetsKilled += 1;
+        StopSlotAttack(p);
         if(p.animAiId != 0)
         {
             p.npc.CancelAIBehavior(p.animAiId);
@@ -2927,6 +3316,7 @@ class r_CoopEnemies
         {
             return;
         }
+        StopSlotAttack(p);
         if(p.animAiId != 0)
         {
             p.npc.CancelAIBehavior(p.animAiId);
@@ -3821,7 +4211,15 @@ function OnAnimEvent(animEventName : name, animEventType : EAnimationEventType, 
     // attacks and hit reactions are mirrored on their own
     attack = (CBTTaskAttack)this;
     reaction = (CBTTaskHitReactionDecorator)this;
-    if(!attack && !reaction)
+    if(attack)
+    {
+        client = theGame.r_getMultiplayerClient();
+        if(client)
+        {
+            client.getCoopEnemies().OnAttackAnimEvent(attack, animEventName, animInfo);
+        }
+    }
+    else if(!reaction)
     {
         client = theGame.r_getMultiplayerClient();
         if(client)
@@ -4163,8 +4561,13 @@ function OnActivate() : EBTNodeStatus
     var status : EBTNodeStatus;
     var coop : r_CoopEnemies;
 
-    status = wrappedMethod();
     coop = CoopEnemiesHere();
+    // a puppet's swing the gate holds: human trees start their attack tasks without asking IsAvailable
+    if(coop && !coop.PuppetAttackAllowed(this))
+    {
+        return BTNS_Failed;
+    }
+    status = wrappedMethod();
     if(coop)
     {
         coop.OnAttackTask(this, true);

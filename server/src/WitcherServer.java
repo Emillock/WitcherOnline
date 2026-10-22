@@ -51,6 +51,7 @@ public class WitcherServer
     private static final long USERNAME_HOLD_NANOS = 60_000_000_000L;
     private static final long BROADCAST_HEARTBEAT_NANOS = 60_000_000_000L;
     private static final int MAX_COOP_CHANNELS = 4;
+    private static final long COOP_REPEAT_NANOS = 100_000_000L;
 
     private static final int DEFAULT_PORT = 40000;
     private static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -735,6 +736,10 @@ public class WitcherServer
                     && (current.coopFields.containsKey(channel) || current.coopFields.size() < MAX_COOP_CHANNELS))
             {
                 current.coopFields.put(channel, frozenFields);
+                // forwarded at once: a monster's attack shouldn't wait up to a broadcast tick (100 ms) to reach members
+                int sent = broadcastChunk(socket, snapshotRecipients(), current, "COOP", frozenFields);
+                totalPacketsSent.addAndGet(sent);
+                current.coopForwardedAt.put(channel, System.nanoTime());
             }
             return;
         }
@@ -830,9 +835,15 @@ public class WitcherServer
                     packetsSentThisTick += broadcastChunk(socket, recipients, session, "UPDATE3", session.update3Fields);
                     packetsSentThisTick += broadcastChunk(socket, recipients, session, "UPDATE4", session.update4Fields);
 
-                    for (List<String> coop : session.coopFields.values())
+                    for (Map.Entry<String, List<String>> coop : session.coopFields.entrySet())
                     {
-                        packetsSentThisTick += broadcastChunk(socket, recipients, session, "COOP", coop);
+                        // repeated (for lost packets) only if nothing newer went out on arrival lately
+                        Long forwarded = session.coopForwardedAt.get(coop.getKey());
+                        if (forwarded != null && System.nanoTime() - forwarded < COOP_REPEAT_NANOS)
+                        {
+                            continue;
+                        }
+                        packetsSentThisTick += broadcastChunk(socket, recipients, session, "COOP", coop.getValue());
                     }
                 }
 

@@ -4,6 +4,8 @@ import function WO_Send(payload : string) : bool;
 import function WO_Poll() : int;
 import function WO_Str(index : int) : string;
 import function WO_NameAt(index : int) : name;
+import function WO_ToName(text : string) : name;
+import function WO_ClockMs() : int;
 import function WO_Tick() : int;
 
 struct r_ChillDef 
