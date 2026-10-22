@@ -27,6 +27,9 @@ class r_CoopHostEnemy
     public var attackNamedAt : float;
     public var lastHitAt : float;      // when it was last hit, and whether that cut its current attack short
     public var taskRunning : bool;     // its attack task still runs (its hit windows belong to it, however late)
+    public var poseSnap : array<Vector>;  // its bones 0.12, 0.2, 0.3 s into an unnamed attack (PoseChecks)
+    public var poseSnapTime : float;
+    public var poseChecks : int;
     public var preAnim : name;         // the animation it played before its attack (OnEarlyAnimEvent), and when
     public var preAnimAt : float;
     public var earlyLogged : int;
@@ -428,6 +431,11 @@ class r_CoopEnemies
     public var slotCatchUps : int;        // member: slot attacks sped up to catch up
     public var leaderNamesAnims : bool;   // member: the leader names its monsters' attack animations (not 0.2.0)
     public var attackFalseStarts : int;   // leader: attack tasks refused right away (not sent)
+    public var poseNaming : bool;         // leader: unnamed swings named from the monster's pose (tests can turn it off)
+        default poseNaming = true;
+    public var poseNamed : int;           // leader: swings named so
+    private var poseTemplates : array<string>;  // leader: the swings each monster type made (parallel arrays, PoseLearn)
+    private var poseAnims : array<name>;
     private var slotMissedOnce : array<string>;  // monsters (templates) whose last slot attack missed
     private var slotless : array<string>;        // ...and those that missed twice in a row: no slot attacks
     public var syncLog : array<string>;   // tests: "kind netId seq what engineTime wall=ms" events (LogSync), drained by the test bot
@@ -566,6 +574,10 @@ class r_CoopEnemies
 
         if(role == 1)
         {
+            if(poseNaming)
+            {
+                PoseChecks(now);
+            }
             if(CommitDueAttacks(now) || now - lastHostSend >= 0.1)
             {
                 HostCollect(client, now);
@@ -1475,6 +1487,7 @@ class r_CoopEnemies
                 e.windowSeq = e.attackSeq;
                 LogSync("LA", e.netId, e.attackSeq, NameToString(GetAnimNameFromEventAnimInfo(animInfo)));
             }
+            PoseLearn(e, hitAnim);
             // the hit window's animation is the attack's (an early name can be another's), unless it is the previous
             // swing's, still blending out (some graphs start the swing before its task, so an unnamed attack takes it)
             if(e.attackAnim != hitAnim && (!IsNameValid(e.attackAnim) || e.attackTask == "" || AnimOfThisAttack(e, animInfo)))
@@ -1571,7 +1584,8 @@ class r_CoopEnemies
     }
 
     // An animation that started with the current (or pending) attack: its own time is at most the time since the
-    // attack's task started (one or two frames' leeway), and it isn't the one that played before (still blending out).
+    // attack's task started (0.35 s leeway: some graphs start a swing a little before its task, a katakan's by 0.2 s),
+    // and it isn't the one that played before (still blending out).
     private function AnimOfThisAttack(e : r_CoopHostEnemy, animInfo : SAnimationEventAnimInfo) : bool
     {
         var start, now : float;
@@ -1582,7 +1596,7 @@ class r_CoopEnemies
         {
             start = e.pendingAt;
         }
-        if(GetLocalAnimTimeFromEventAnimInfo(animInfo) > now - start + 0.15)
+        if(GetLocalAnimTimeFromEventAnimInfo(animInfo) > now - start + 0.35)
         {
             return false;
         }
@@ -1600,6 +1614,7 @@ class r_CoopEnemies
         e.pendingTask = "";
         LogSync("L", e.netId, e.attackSeq, e.attackTask, e.pendingWall);
         e.attackAnim = '';
+        e.poseChecks = 0;
         e.attackCut = false;
         e.hitAnimTime = 0;
         if(UserOf(e.npc.GetTarget()) != "")
@@ -1691,11 +1706,12 @@ class r_CoopEnemies
         NameAttack(e, eventName, animInfo);
     }
 
-    // the attack's animation, named by one of its early events (within 0.6 s: a strafe's later on isn't it): sent right
-    // now, not on the next frame's tick
+    // the attack's animation, named by one of its early events (within 0.6 s, and an attack animation: a task can start
+    // with a run or strafe): sent right now, not on the next frame's tick
     private function NameAttack(e : r_CoopHostEnemy, eventName : name, animInfo : SAnimationEventAnimInfo)
     {
-        if(IsNameValid(e.attackAnim) || theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 0.6)
+        if(IsNameValid(e.attackAnim) || theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 0.6
+            || StrFindFirst(StrLower(NameToString(GetAnimNameFromEventAnimInfo(animInfo))), "attack") < 0)
         {
             return;
         }
@@ -3027,6 +3043,161 @@ class r_CoopEnemies
         {
             slotMissedOnce.PushBack(key);
         }
+    }
+
+    // Some swings have no event before their hit window (a bear's bite hits at 0.6 s). An attack not yet named is
+    // looked at 0.12, 0.2 and 0.3 s after its task started: its bones (model space) against each swing its monster type
+    // made before (PoseScore).
+    private function PoseChecks(now : float)
+    {
+        var e : r_CoopHostEnemy;
+        var toModel : Matrix;
+        var i, b : int;
+        var due : float;
+
+        for(i = 0; i < hostEnemies.Size(); i += 1)
+        {
+            e = hostEnemies[i];
+            due = 0.12;
+            if(e.poseChecks == 1)
+            {
+                due = 0.2;
+            }
+            else if(e.poseChecks == 2)
+            {
+                due = 0.3;
+            }
+            if(e.poseChecks >= 3 || IsNameValid(e.attackAnim) || e.attackTask == "" || now - e.attackTaskAt < due
+                || now - e.attackTaskAt > 0.6)
+            {
+                continue;
+            }
+            e.poseChecks += 1;
+            e.poseSnapTime = now - e.attackTaskAt;
+            e.poseSnap.Clear();
+            toModel = MatrixGetInverted(e.npc.GetLocalToWorld());
+            for(b = 1; b < 31; b += 2)
+            {
+                e.poseSnap.PushBack(VecTransform(toModel, MatrixGetTranslation(e.npc.GetBoneWorldMatrixByIndex(b))));
+            }
+            PoseScore(e);
+        }
+    }
+
+    // the swings each monster type made (their hit windows name them)
+    private function PoseLearn(e : r_CoopHostEnemy, anim : name)
+    {
+        var template : string;
+        var i : int;
+
+        template = e.npc.GetReadableName();
+        for(i = 0; i < poseTemplates.Size(); i += 1)
+        {
+            if(poseTemplates[i] == template && poseAnims[i] == anim)
+            {
+                return;
+            }
+        }
+        poseTemplates.PushBack(template);
+        poseAnims.PushBack(anim);
+    }
+
+    // Each swing this monster type made before against the snapshot (bones about their centre; animation times from 0
+    // to 0.4 s past the attack's age: a swing can start well before its task, during refused starts). A clear match
+    // names the attack: error under 0.5 (summed over 15 bones, metres) with the next best 2.5 times that, or the next
+    // best 4.5 times the best (over 200 test snapshots, no rule-passing wrong one; a wrong one would be put right at
+    // the hit window). "LQ checkTime/best/bestError/secondError/candidates".
+    private function PoseScore(e : r_CoopHostEnemy)
+    {
+        var template : string;
+        var anims : array<name>;
+        var i, k : int;
+        var err, best, second, time, bestTime : float;
+        var bestAnim : name;
+
+        template = e.npc.GetReadableName();
+        for(i = 0; i < poseTemplates.Size(); i += 1)
+        {
+            if(poseTemplates[i] == template)
+            {
+                anims.PushBack(poseAnims[i]);
+            }
+        }
+        if(anims.Size() < 2)
+        {
+            return;
+        }
+        best = 999999;
+        second = 999999;
+        for(i = 0; i < anims.Size(); i += 1)
+        {
+            for(k = 0; 0.1 * k <= e.poseSnapTime + 0.4; k += 1)
+            {
+                time = 0.1 * k;
+                err = PoseError(e, anims[i], time);
+                if(err < best)
+                {
+                    if(anims[i] != bestAnim)
+                    {
+                        second = best;
+                    }
+                    best = err;
+                    bestAnim = anims[i];
+                    bestTime = time;
+                }
+                else if(err < second && anims[i] != bestAnim)
+                {
+                    second = err;
+                }
+            }
+        }
+        LogSync("LQ", e.netId, e.attackSeq, FloatToStringPrec(e.poseSnapTime, 2) + "/" + NameToString(bestAnim) + "/"
+            + FloatToStringPrec(best, 2) + "/" + FloatToStringPrec(second, 2) + "/" + anims.Size());
+        if(!((best < 0.5 && second >= 2.5 * best) || second >= 4.5 * best) || IsNameValid(e.attackAnim))
+        {
+            return;
+        }
+        e.attackAnim = bestAnim;
+        e.attackAnimAt = bestTime;
+        e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
+        poseNamed += 1;
+        LogSync("LE", e.netId, e.attackSeq, NameToString(bestAnim) + "/pose");
+        HostSend();
+        lastHostSend = theGame.GetEngineTimeAsSeconds();
+    }
+
+    // how far the snapshot is from `anim` at `time` (bones about their centre, summed, in metres)
+    private function PoseError(e : r_CoopHostEnemy, anim : name, time : float) : float
+    {
+        var comp : CAnimatedComponent;
+        var at, withDelta : Matrix;
+        var pose : array<Vector>;
+        var centreA, centreB : Vector;
+        var i, b : int;
+        var err : float;
+
+        comp = e.npc.GetRootAnimatedComponent();
+        if(!comp || e.poseSnap.Size() == 0)
+        {
+            return 999999;
+        }
+        for(b = 1; b < 31; b += 2)
+        {
+            comp.GetBoneMatrixMovementModelSpaceInAnimation(b, anim, time, 0, at, withDelta);
+            pose.PushBack(MatrixGetTranslation(at));
+        }
+        for(i = 0; i < pose.Size(); i += 1)
+        {
+            centreA += pose[i];
+            centreB += e.poseSnap[i];
+        }
+        centreA = centreA / (float)pose.Size();
+        centreB = centreB / (float)pose.Size();
+        for(i = 0; i < pose.Size(); i += 1)
+        {
+            err += VecDistance(pose[i] - centreA, e.poseSnap[i] - centreB);
+        }
+        return err;
     }
 
     // tests: one attack-sync event; at most 400 kept until the test bot drains them
