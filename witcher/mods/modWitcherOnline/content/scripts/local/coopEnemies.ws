@@ -17,7 +17,7 @@ class r_CoopHostEnemy
     public var attackAnim : name;
     public var attackTarget : string;  // the player it attacks, for members' copies to attack the same
     public var attackTask : string;    // which attack task (CoopAttackId), for copies to make the same attack
-    public var attackTaskAt : float;   // when that task started (its hit windows belong to it for 2.5 s)
+    public var attackTaskAt : float;   // when that task started (its animation's hit windows belong to it for 2.5 s)
     public var windowSeq : int;        // the attack whose first hit window was seen (tests: LogSync)
     public var pendingTask : string;   // an attack task that started but may yet be refused (see CommitAttack)
     public var pendingAt : float;
@@ -26,6 +26,10 @@ class r_CoopHostEnemy
     public var attackAnimAt : float;   // the animation's own time when it was named, and when that was (engine time)
     public var attackNamedAt : float;
     public var lastHitAt : float;      // when it was last hit, and whether that cut its current attack short
+    public var taskRunning : bool;     // its attack task still runs (its hit windows belong to it, however late)
+    public var preAnim : name;         // the animation it played before its attack (OnEarlyAnimEvent), and when
+    public var preAnimAt : float;
+    public var earlyLogged : int;
     public var attackCut : bool;
     public var hitAnimTime : float;  // animation time of the current attack's hit
     public var hitSeq : int;         // hits it took, for members to replay the reaction
@@ -78,6 +82,7 @@ class r_CoopPuppet
     public var attackAnimGotAt : float;
     public var catchUpId : int;       // a faster animation speed while a late slot attack catches up (until catchUpUntil)
     public var catchUpUntil : float;
+    public var slotRefusedAt : float;  // the slot refused the leader's animation (its own swing stands in)
     public var taskPending : string;  // its own attack task that started but may yet be refused (ConfirmPuppetTask)
     public var taskPendingAt : float;
     public var taskPendingFrames : int;
@@ -421,6 +426,7 @@ class r_CoopEnemies
     public var lastSlotState : string;    // diagnostics: the puppet's graph when its last slot attack started
     public var slotAttacksMissed : int;   // member: slot attacks whose hit window never came
     public var slotCatchUps : int;        // member: slot attacks sped up to catch up
+    public var leaderNamesAnims : bool;   // member: the leader names its monsters' attack animations (not 0.2.0)
     public var attackFalseStarts : int;   // leader: attack tasks refused right away (not sent)
     private var slotMissedOnce : array<string>;  // monsters (templates) whose last slot attack missed
     private var slotless : array<string>;        // ...and those that missed twice in a row: no slot attacks
@@ -1413,6 +1419,7 @@ class r_CoopEnemies
     {
         var e : r_CoopHostEnemy;
         var p : r_CoopPuppet;
+        var hitAnim : name;
 
         if(!wasHost)
         {
@@ -1448,11 +1455,15 @@ class r_CoopEnemies
 
         if(eventType == AET_DurationStart)
         {
-            if(e.pendingTask != "")
+            if(e.pendingTask != "" && AnimOfThisAttack(e, animInfo))
             {
                 CommitAttack(e);
             }
-            if(theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 2.5)
+            // a new attack (one without a task: a counter from its parry task), unless its task runs, or ended but this is
+            // still its animation (a bear's task can end before its hit window)
+            hitAnim = GetAnimNameFromEventAnimInfo(animInfo);
+            if(!e.taskRunning && (theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 2.5
+                || (IsNameValid(e.attackAnim) && e.attackAnim != hitAnim) || !AnimOfThisAttack(e, animInfo)))
             {
                 e.attackSeq += 1;
                 e.attackTask = "";
@@ -1464,8 +1475,9 @@ class r_CoopEnemies
                 e.windowSeq = e.attackSeq;
                 LogSync("LA", e.netId, e.attackSeq, NameToString(GetAnimNameFromEventAnimInfo(animInfo)));
             }
-            // the hit window's animation is the attack's (an early name can be another's)
-            if(e.attackAnim != GetAnimNameFromEventAnimInfo(animInfo))
+            // the hit window's animation is the attack's (an early name can be another's), unless it is the previous
+            // swing's, still blending out (some graphs start the swing before its task, so an unnamed attack takes it)
+            if(e.attackAnim != hitAnim && (!IsNameValid(e.attackAnim) || e.attackTask == "" || AnimOfThisAttack(e, animInfo)))
             {
                 e.attackAnimAt = GetLocalAnimTimeFromEventAnimInfo(animInfo);
                 e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
@@ -1538,7 +1550,7 @@ class r_CoopEnemies
         }
         else if(!active)
         {
-            e.attackTaskAt = -999;
+            e.taskRunning = false;
             // a hit ended it (an attack can also go on through a hit): members' copies stop it too
             if(theGame.GetEngineTimeAsSeconds() - e.lastHitAt < 0.5 && !e.attackCut)
             {
@@ -1554,7 +1566,27 @@ class r_CoopEnemies
             e.pendingAt = theGame.GetEngineTimeAsSeconds();
             e.pendingWall = WO_ClockMs();
             e.pendingFrames = 0;
+            e.earlyLogged = 0;
         }
+    }
+
+    // An animation that started with the current (or pending) attack: its own time is at most the time since the
+    // attack's task started (one or two frames' leeway), and it isn't the one that played before (still blending out).
+    private function AnimOfThisAttack(e : r_CoopHostEnemy, animInfo : SAnimationEventAnimInfo) : bool
+    {
+        var start, now : float;
+
+        now = theGame.GetEngineTimeAsSeconds();
+        start = e.attackTaskAt;
+        if(e.pendingTask != "")
+        {
+            start = e.pendingAt;
+        }
+        if(GetLocalAnimTimeFromEventAnimInfo(animInfo) > now - start + 0.15)
+        {
+            return false;
+        }
+        return GetAnimNameFromEventAnimInfo(animInfo) != e.preAnim || now - e.preAnimAt >= 1.5;
     }
 
     // A shared monster's attack task really started: its first animation event, its hit window, or still running two
@@ -1564,6 +1596,7 @@ class r_CoopEnemies
         e.attackSeq += 1;
         e.attackTask = e.pendingTask;
         e.attackTaskAt = e.pendingAt;
+        e.taskRunning = true;
         e.pendingTask = "";
         LogSync("L", e.netId, e.attackSeq, e.attackTask, e.pendingWall);
         e.attackAnim = '';
@@ -1647,7 +1680,7 @@ class r_CoopEnemies
             return;
         }
         e = FindHostEnemyByNpc(task.GetNPC());
-        if(!e)
+        if(!e || !AnimOfThisAttack(e, animInfo))
         {
             return;
         }
@@ -1655,7 +1688,14 @@ class r_CoopEnemies
         {
             CommitAttack(e);
         }
-        if(IsNameValid(e.attackAnim) || theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 2.5)
+        NameAttack(e, eventName, animInfo);
+    }
+
+    // the attack's animation, named by one of its early events (within 0.6 s: a strafe's later on isn't it): sent right
+    // now, not on the next frame's tick
+    private function NameAttack(e : r_CoopHostEnemy, eventName : name, animInfo : SAnimationEventAnimInfo)
+    {
+        if(IsNameValid(e.attackAnim) || theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 0.6)
         {
             return;
         }
@@ -1663,10 +1703,55 @@ class r_CoopEnemies
         e.attackAnimAt = GetLocalAnimTimeFromEventAnimInfo(animInfo);
         e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
         LogSync("LE", e.netId, e.attackSeq, NameToString(e.attackAnim) + "/" + NameToString(eventName));
-        // right now, not on the next frame's tick
         HostSend();
         lastHostSend = theGame.GetEngineTimeAsSeconds();
     }
+
+    // Enum animation events of the monster itself (OnEnumAnimEvent): many swings have no event for the attack task
+    // before their hit window, but turn to the target early ('RotateEvent': at once in a human's swings, 0.2 s into an
+    // arachas' that hits at 0.3 s). An animation that started with the attack (not the one playing before it, still
+    // blending out) names it. Sound and footstep events, often earlier still, never reach scripts.
+    public function OnEarlyAnimEvent(npc : CNewNPC, eventName : name, animInfo : SAnimationEventAnimInfo)
+    {
+        var e : r_CoopHostEnemy;
+        var anim : name;
+        var now, animTime : float;
+
+        if(!wasHost || !npc)
+        {
+            return;
+        }
+        e = FindHostEnemyByNpc(npc);
+        if(!e)
+        {
+            return;
+        }
+        now = theGame.GetEngineTimeAsSeconds();
+        anim = GetAnimNameFromEventAnimInfo(animInfo);
+        animTime = GetLocalAnimTimeFromEventAnimInfo(animInfo);
+        if(e.pendingTask == "" && !e.taskRunning && now - e.attackTaskAt > 2.5)
+        {
+            e.preAnim = anim;
+            e.preAnimAt = now;
+            return;
+        }
+        if(e.earlyLogged < 2)
+        {
+            e.earlyLogged += 1;
+            LogSync("LV", e.netId, e.attackSeq, NameToString(anim) + "/" + NameToString(eventName) + "/"
+                + FloatToStringPrec(animTime, 2));
+        }
+        if(!AnimOfThisAttack(e, animInfo))
+        {
+            return;
+        }
+        if(e.pendingTask != "")
+        {
+            CommitAttack(e);
+        }
+        NameAttack(e, eventName, animInfo);
+    }
+
 
     // One of its other animated moves (a behavior-tree task that plays an animation: dodge, jump back, taunt,
     // shot, ...); every animation event of it arrives here, a new one is a new name or a restart.
@@ -2039,6 +2124,10 @@ class r_CoopEnemies
             }
             attackAnimAt = 0;
             attackCut = false;
+            if(StrFindFirst(attackAnimText, "|") >= 0 && StrAfterFirst(attackAnimText, "|") != "")
+            {
+                leaderNamesAnims = true;
+            }
             if(StrFindFirst(attackAnimText, "|") >= 0)
             {
                 animTime = StrAfterFirst(attackAnimText, "|");
@@ -2519,7 +2608,7 @@ class r_CoopEnemies
         p.animsCompared = false;
         // a spell or special attack is its own AI's: a swing still on its slot would hide it (and its animation's
         // events, which spawn the spell)
-        if(task != "" && StrBeforeFirst(task, ":") != "CBTTaskAttack")
+        if(task != "" && !CoopSlotSwing(task))
         {
             StopSlotAttack(p);
         }
@@ -2553,13 +2642,14 @@ class r_CoopEnemies
             return;
         }
         // (an older leader names it only at its hit window: by then the puppet may have started its own swing)
-        if(!nextPart && (!slotAttacks || p.attackAnimText == "" || p.slotAttackAt >= p.attackPlayedAt || now - p.attackPlayedAt > 0.7
-            || p.attackFrom > now || p.attackTaskTaken || (p.attackTask != "" && StrBeforeFirst(p.attackTask, ":") != "CBTTaskAttack")))
+        if(!nextPart && (!slotAttacks || p.attackAnimText == "" || p.slotAttackAt >= p.attackPlayedAt || now - p.attackPlayedAt > 3.0
+            || p.attackFrom > now || p.attackTaskTaken || (p.attackTask != "" && !CoopSlotSwing(p.attackTask))))
         {
             return;
         }
         comp = p.npc.GetRootAnimatedComponent();
-        if(!comp || slotless.Contains(p.npc.GetReadableName()))
+        // a swing more than 1.2 s along (named only at a giant's late hit window) is mostly over
+        if(!comp || slotless.Contains(p.npc.GetReadableName()) || p.attackAnimAt + now - p.attackAnimGotAt > 1.2)
         {
             return;
         }
@@ -2576,6 +2666,7 @@ class r_CoopEnemies
         }
         else
         {
+            p.slotRefusedAt = now;
             slotAttacksRefused += 1;
             LogSync("MX", p.netId, p.attackSeq, p.attackAnimText);
         }
@@ -2842,10 +2933,11 @@ class r_CoopEnemies
         {
             return false;
         }
-        // the leader's plain swing (or attack without a task) is named at its first animation event, for some at its
-        // hit window: up to 0.7 s its own swing waits for it to play on the slot
-        if(slotAttacks && p.attackAnimText == "" && now - p.attackPlayedAt < 0.7 && !slotless.Contains(p.npc.GetReadableName())
-            && (p.attackTask == "" || StrBeforeFirst(p.attackTask, ":") == "CBTTaskAttack"))
+        // the leader's plain swing (or attack without a task) plays on the slot once named (at its first animation event,
+        // for some only at its hit window): its own swing never stands in, unless the slot refused it or the leader is
+        // an older one that doesn't name them (then after 0.7 s)
+        if(slotAttacks && (leaderNamesAnims || now - p.attackPlayedAt < 0.7) && p.slotRefusedAt < p.attackPlayedAt
+            && !slotless.Contains(p.npc.GetReadableName()) && (p.attackTask == "" || CoopSlotSwing(p.attackTask)))
         {
             return false;
         }
@@ -2943,6 +3035,10 @@ class r_CoopEnemies
         if(syncLog.Size() >= 400)
         {
             syncLog.Erase(0);
+        }
+        if(what == "")
+        {
+            what = "-";
         }
         if(wall == 0)
         {
@@ -4112,10 +4208,35 @@ function COOP_FX_DAMAGE() : float
     return 0.01;
 }
 
+// an attack task (CoopAttackId) that is just a swing, played on a puppet's slot: no effect of its own comes from its
+// animation's events (a spell's does)
+function CoopSlotSwing(task : string) : bool
+{
+    var kind : string;
+
+    kind = StrBeforeFirst(task, ":");
+    return kind == "CBTTaskAttack" || kind == "CBTTaskTrollAttack";
+}
+
 // players farther apart than this run their own monsters (the leader's world doesn't simulate far away)
 function COOP_SHARE_RANGE() : float
 {
     return 60.0;
+}
+
+// enum events ('RotateEvent': an attacker turns to its target) also name a shared monster's attack animation
+@wrapMethod(CActor)
+function OnEnumAnimEvent(animEventName : name, variant : SEnumVariant, animEventType : EAnimationEventType, animEventDuration : float,
+    animInfo : SAnimationEventAnimInfo)
+{
+    var coop : r_CoopEnemies;
+
+    coop = CoopEnemiesHere();
+    if(coop && animEventType != AET_DurationEnd)
+    {
+        coop.OnEarlyAnimEvent((CNewNPC)this, animEventName, animInfo);
+    }
+    return wrappedMethod(animEventName, variant, animEventType, animEventDuration, animInfo);
 }
 
 @wrapMethod(CNewNPC)
