@@ -43,6 +43,8 @@ class r_CoopHostEnemy
     public var moveAnimTime : float;
     public var moveKind : string;    // "dodge", "taunt", "jumpback" (members' copies make the same move), or ""
     public var moveParam : int;      // its dodge direction or taunt type
+    public var moveStartTime : float;  // the move animation's own time when it was named, and when that was
+    public var moveNamedAt : float;
     public var projSeq : int;        // its last projectile, for members to fire a harmless copy
     public var projAt : float;
     public var projTemplate : string;
@@ -78,6 +80,9 @@ class r_CoopPuppet
     public var aimedAt : float;       // when it was last told whom to attack (AimPuppet)
     public var slotAnimAt : float;  // an attack or move started playing (it stands meanwhile)
     public var slotAttackAt : float;  // the leader's attack animation started on its slot (SlotAttack)
+    public var slotMoveAt : float;    // ...and its last move's (SlotMove)
+    public var slotAnim : string;     // the animation last started on its slot, and when
+    public var slotAnimStartAt : float;
     public var slotChecked : bool;    // whether that animation's hit window came (SlotAttackCheck)
     public var hitMirroredAt : float;
     public var attackCut : bool;      // the leader's monster's attack was cut short (StopSlotAttack)
@@ -428,7 +433,12 @@ class r_CoopEnemies
     public var slotAttacksRefused : int;
     public var lastSlotState : string;    // diagnostics: the puppet's graph when its last slot attack started
     public var slotAttacksMissed : int;   // member: slot attacks whose hit window never came
-    public var slotCatchUps : int;        // member: slot attacks sped up to catch up
+    public var slotCatchUps : int;        // member: slot attacks and moves sped up to catch up
+    public var slotMoves : bool;          // member: the leader's moves play on puppets' slots (tests can turn it off)
+        default slotMoves = true;
+    public var slotMovesPlayed : int;     // member: moves started on a slot
+    public var slotDodgesParries : int;   // ...of them dodges and parries
+    public var slotMovesRefused : int;
     public var leaderNamesAnims : bool;   // member: the leader names its monsters' attack animations (not 0.2.0)
     public var attackFalseStarts : int;   // leader: attack tasks refused right away (not sent)
     public var poseNaming : bool;         // leader: unnamed swings named from the monster's pose (tests can turn it off)
@@ -823,15 +833,13 @@ class r_CoopEnemies
             + FloatToStringPrec(e.attackAnimAt + theGame.GetEngineTimeAsSeconds() - e.attackNamedAt, 2) + cut;
     }
 
-    // "kind:param:anim" for a move members' copies make themselves, else the bare animation name (as 0.2.0 sent it;
-    // 0.2.0 members take the whole text as an animation name that doesn't exist, which plays nothing)
+    // "kind:param:anim:time": the move's kind ("" for other animated moves), its direction or type, its animation and
+    // how far into it the monster is now (0.2.0 members take the text as an animation name that doesn't exist, which
+    // plays nothing, as their slot actions did anyway)
     private function MoveText(e : r_CoopHostEnemy) : string
     {
-        if(e.moveKind == "")
-        {
-            return NameToString(e.moveAnim);
-        }
-        return e.moveKind + ":" + e.moveParam + ":" + NameToString(e.moveAnim);
+        return e.moveKind + ":" + e.moveParam + ":" + NameToString(e.moveAnim) + ":"
+            + FloatToStringPrec(e.moveStartTime + theGame.GetEngineTimeAsSeconds() - e.moveNamedAt, 2);
     }
 
     private function AcksText() : string
@@ -918,6 +926,9 @@ class r_CoopEnemies
         slotAttacksRefused = 0;
         slotAttacksMissed = 0;
         slotCatchUps = 0;
+        slotMovesPlayed = 0;
+        slotDodgesParries = 0;
+        slotMovesRefused = 0;
         attackFalseStarts = 0;
         puppetAttackQuickEnds = 0;
         projectilesMuted = 0;
@@ -1829,6 +1840,8 @@ class r_CoopEnemies
         e.moveSeq += 1;
         e.moveAnim = anim;
         e.moveAnimTime = t;
+        e.moveStartTime = t;
+        e.moveNamedAt = theGame.GetEngineTimeAsSeconds();
         e.moveKind = CoopMoveKind(task, anim);
         e.moveParam = CoopMoveParam(task);
         lastMoveTask = task.ToString();
@@ -1840,7 +1853,10 @@ class r_CoopEnemies
         movesSeen += 1;
         lastMoveAnim = anim;
         lastMoveKind = e.moveKind;
-        lastHostSend = -999;
+        LogSync("LMV", e.netId, e.moveSeq, e.moveKind + "/" + NameToString(anim));
+        // right now, not on the next frame's tick
+        HostSend();
+        lastHostSend = theGame.GetEngineTimeAsSeconds();
     }
 
     // member: a move animation started on a puppet (a new one or a restart): the mirrored move it was to make, or
@@ -1881,6 +1897,7 @@ class r_CoopEnemies
         {
             p.moveAnimAt = theGame.GetEngineTimeAsSeconds() - p.movePlayedAt;
             p.moveAnimName = anim;
+            LogSync("MM", p.netId, p.moveSeq, NameToString(anim));
         }
         if(!p.moveAnimated)
         {
@@ -2064,8 +2081,8 @@ class r_CoopEnemies
         var pos : Vector;
         var moveAnim : name;
         var hitBy, projTpl, attackTarget, attackTask, attackAnimText, moveText, moveKind : string;
-        var attackAnimAt : float;
-        var animTime : string;
+        var attackAnimAt, moveAt : float;
+        var animTime, moveAnimText : string;
         var attackCut : bool;
         var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, moveParam, projSeq, projIndex : int;
         var hp, yaw, projAngle, projSpeed, projRange : float;
@@ -2166,11 +2183,25 @@ class r_CoopEnemies
             moveAnim = '';
             moveKind = "";
             moveParam = -1;
+            moveAnimText = "";
+            moveAt = 0;
             moveText = WO_Str(idx + 15);
             if(StrFindFirst(moveText, ":") >= 0)
             {
+                // kind:param:anim (0.2.1 and older) or kind:param:anim:time
                 moveKind = StrBeforeFirst(moveText, ":");
-                moveParam = StringToInt(StrBeforeFirst(StrAfterFirst(moveText, ":"), ":"), -1);
+                moveText = StrAfterFirst(moveText, ":");
+                moveParam = StringToInt(StrBeforeFirst(moveText, ":"), -1);
+                moveAnimText = StrAfterFirst(moveText, ":");
+                if(StrFindFirst(moveAnimText, ":") >= 0)
+                {
+                    moveAt = StringToFloat(StrAfterFirst(moveAnimText, ":"), 0);
+                    moveAnimText = StrBeforeFirst(moveAnimText, ":");
+                }
+                if(moveAnimText == "None")
+                {
+                    moveAnimText = "";
+                }
             }
             else if(moveText != "-")
             {
@@ -2203,7 +2234,7 @@ class r_CoopEnemies
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
                 ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackTask, attackAnimText, attackAnimAt, attackCut, hitSeq, hitBy, hitReaction,
-                    moveSeq, moveAnim, moveKind, moveParam, attackTarget);
+                    moveSeq, moveAnim, moveKind, moveParam, moveAnimText, moveAt, attackTarget);
                 if(projSeq != 0 && projTpl != "")
                 {
                     ApplyProjectile(netId, projSeq, projTpl, projFrom, projTo, projAngle, projSpeed, projRange);
@@ -2355,11 +2386,11 @@ class r_CoopEnemies
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
         attackSeq : int, attackTask : string, attackAnimText : string, attackAnimAt : float, attackCut : bool, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name,
-        moveKind : string, moveParam : int, attackTarget : string)
+        moveKind : string, moveParam : int, moveAnimText : string, moveAt : float, attackTarget : string)
     {
         var p : r_CoopPuppet;
         var npc : CNewNPC;
-        var spawned : bool;
+        var spawned, played : bool;
         var now : float;
 
         now = theGame.GetEngineTimeAsSeconds();
@@ -2443,13 +2474,21 @@ class r_CoopEnemies
         if(moveSeq != p.moveSeq)
         {
             p.moveSeq = moveSeq;
-            if(p.alive && moveKind != "")
+            if(p.alive)
             {
-                PlayMove(p, moveKind, moveParam, attackTarget);
-            }
-            else if(p.alive && IsNameValid(moveAnim))
-            {
-                PlayMoveAnim(p, moveAnim);
+                played = false;
+                if(moveAnimText != "")
+                {
+                    played = SlotMove(p, moveAnimText, moveAt, moveKind);
+                }
+                if(!played && moveKind != "")
+                {
+                    PlayMove(p, moveKind, moveParam, attackTarget);
+                }
+                else if(!played && IsNameValid(moveAnim))
+                {
+                    PlayMoveAnim(p, moveAnim);
+                }
             }
         }
 
@@ -2583,6 +2622,12 @@ class r_CoopEnemies
         OpenReactionWindow(p);
         p.hitMirroredAt = theGame.GetEngineTimeAsSeconds();
         LogSync("MH", p.netId, p.attackSeq, IntToString(hitReaction));
+        // a hit that dealt damage got through a move (a dodged or parried one deals none): a move on its slot (a taunt,
+        // a strafe) stops for its hit reaction
+        if(p.slotMoveAt > p.slotAttackAt && p.hitMirroredAt - p.slotMoveAt < 3.0)
+        {
+            StopSlotAttack(p);
+        }
 
         action = new W3DamageAction in theGame.damageMgr;
         action.Initialize(GhostOf(hitBy), p.npc, theGame, "W3CoopHitFx", (EHitReactionType)hitReaction, CPS_Undefined, true, false, false, false);
@@ -2651,6 +2696,7 @@ class r_CoopEnemies
         var settings : SAnimatedComponentSlotAnimationSettings;
         var comp : CAnimatedComponent;
         var now : float;
+        var playing, started : bool;
 
         now = theGame.GetEngineTimeAsSeconds();
         if(nextPart && (p.slotAttackAt < p.attackPlayedAt || now - p.slotAttackAt > 4.0))
@@ -2672,11 +2718,23 @@ class r_CoopEnemies
         settings.blendIn = 0.1;
         settings.blendOut = 0.2;
         lastSlotState = p.npc.GetBehaviorGraphInstanceName();
-        if(comp.PlaySlotAnimationAsync(WO_ToName(p.attackAnimText), attackSlot, settings))
+        // already on the slot (a counter-attack came as a move first, then as an attack at its hit window): it goes on
+        playing = p.slotAnim == p.attackAnimText && now - p.slotAnimStartAt < 1.5;
+        if(!playing)
         {
+            started = comp.PlaySlotAnimationAsync(WO_ToName(p.attackAnimText), attackSlot, settings);
+        }
+        if(playing || started)
+        {
+            if(started)
+            {
+                p.slotAnim = p.attackAnimText;
+                p.slotAnimStartAt = now;
+                CatchUp(p, comp, p.attackAnimAt + 0.03 + now - p.attackAnimGotAt);
+            }
             p.slotAttackAt = now;
-            p.slotChecked = false;
-            CatchUp(p, comp, p.attackAnimAt + 0.03 + now - p.attackAnimGotAt);
+            // (one already going may have passed its hit window before it came as an attack: not checked)
+            p.slotChecked = !started;
             slotAttacksPlayed += 1;
             LogSync("MS", p.netId, p.attackSeq, p.attackAnimText);
         }
@@ -2975,7 +3033,8 @@ class r_CoopEnemies
     private function StopSlotAttack(p : r_CoopPuppet)
     {
         EndCatchUp(p);
-        if(p.slotAttackAt <= 0 || theGame.GetEngineTimeAsSeconds() - p.slotAttackAt > 4.0 || !p.npc.GetRootAnimatedComponent())
+        if(MaxF(p.slotAttackAt, p.slotMoveAt) <= 0 || theGame.GetEngineTimeAsSeconds() - MaxF(p.slotAttackAt, p.slotMoveAt) > 4.0
+            || !p.npc.GetRootAnimatedComponent())
         {
             return;
         }
@@ -3295,38 +3354,72 @@ class r_CoopEnemies
         return IsPuppet(npc);
     }
 
-    // from an older leader: just the animation. As an AI slot action it is accepted but doesn't play on a monster's
-    // graph out of combat (SlotAttack plays on the animated component instead).
+    // from an older leader: just the animation
     private function PlayMoveAnim(p : r_CoopPuppet, anim : name)
     {
-        if(PlaySlotAnim(p, anim))
-        {
-            movesAnimOnly += 1;
-        }
-        else
+        if(!SlotMove(p, NameToString(anim), 0, ""))
         {
             movePlayFailures += 1;
             lastError = "move animation '" + NameToString(anim) + "' did not play";
         }
     }
 
-    private function PlaySlotAnim(p : r_CoopPuppet, anim : name) : bool
+    // The leader's monster's move (a dodge, taunt, jump-back, parry, or another animated move of its tree) with its exact
+    // animation on the puppet's slot as soon as it arrives, caught up if it comes late (see SlotAttack); its own AI
+    // would make a dodge half a second later, or not at all. Nothing is left for its AI to make (no mirrored move
+    // pending), so an attack that follows plays at once. False if the slot refused it (then its AI makes the move).
+    private function SlotMove(p : r_CoopPuppet, anim : string, at : float, kind : string) : bool
     {
-        var action : CAIPlayAnimationSlotAction;
+        var settings : SAnimatedComponentSlotAnimationSettings;
+        var comp : CAnimatedComponent;
+        var now : float;
 
-        p.slotAnimAt = theGame.GetEngineTimeAsSeconds();
-        if(p.animAiId != 0)
+        comp = p.npc.GetRootAnimatedComponent();
+        if(!slotMoves || !comp || slotless.Contains(p.npc.GetReadableName()))
         {
-            p.npc.CancelAIBehavior(p.animAiId);
+            return false;
         }
-        action = new CAIPlayAnimationSlotAction in p.npc;
-        action.OnCreated();
-        action.animName = anim;
-        action.slotName = 'NPC_ANIM_SLOT';
-        action.blendInTime = 0.1;
-        action.blendOutTime = 0.2;
-        p.animAiId = p.npc.ForceAIBehavior(action, BTAP_Emergency);
-        return p.animAiId != 0;
+        settings.blendIn = 0.1;
+        settings.blendOut = 0.2;
+        if(!comp.PlaySlotAnimationAsync(WO_ToName(anim), attackSlot, settings))
+        {
+            slotMovesRefused += 1;
+            LogSync("MVX", p.netId, p.moveSeq, anim);
+            return false;
+        }
+        now = theGame.GetEngineTimeAsSeconds();
+        if(p.moveKind != "")
+        {
+            TraceMove(p, "replaced by a slot move");
+            p.moveKind = "";
+        }
+        p.slotAnimAt = now;
+        p.slotMoveAt = now;
+        p.slotAnim = anim;
+        p.slotAnimStartAt = now;
+        CatchUp(p, comp, at + 0.03);
+        slotMovesPlayed += 1;
+        movesPlayed += 1;
+        if(kind == "dodge")
+        {
+            dodgesMirrored += 1;
+            slotDodgesParries += 1;
+        }
+        else if(kind == "taunt")
+        {
+            tauntsMirrored += 1;
+        }
+        else if(kind == "parry")
+        {
+            parriesMirrored += 1;
+            slotDodgesParries += 1;
+        }
+        else if(kind == "")
+        {
+            movesAnimOnly += 1;
+        }
+        LogSync("MV", p.netId, p.moveSeq, anim);
+        return true;
     }
 
     // within sharing range of the leader, in the same area
