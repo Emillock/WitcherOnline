@@ -1706,6 +1706,14 @@ class r_CoopEnemies
             return;
         }
         e = FindHostEnemyByNpc(task.GetNPC());
+        // tests: what an attack still unnamed gets (task class, animation, event, its age)
+        if(e && !IsNameValid(e.attackAnim) && e.earlyLogged < 6)
+        {
+            e.earlyLogged += 1;
+            LogSync("LT", e.netId, e.attackSeq, task.CoopAttackId() + "/" + NameToString(GetAnimNameFromEventAnimInfo(animInfo)) + "/"
+                + NameToString(eventName) + "/" + FloatToStringPrec(GetLocalAnimTimeFromEventAnimInfo(animInfo), 2) + "/"
+                + FloatToStringPrec(theGame.GetEngineTimeAsSeconds() - e.attackTaskAt, 2));
+        }
         if(!e || !AnimOfThisAttack(e, animInfo))
         {
             return;
@@ -1717,12 +1725,13 @@ class r_CoopEnemies
         NameAttack(e, eventName, animInfo);
     }
 
-    // the attack's animation, named by one of its early events (within 0.6 s, and an attack animation: a task can start
-    // with a run or strafe): sent right now, not on the next frame's tick
+    // the attack's animation, named by one of its events (within 2 s: a troll's throw has none before 1.1 s, a giant's
+    // slam before 1 s; and not moving about: a task can start with a run or strafe): sent right now, not on the next
+    // frame's tick
     private function NameAttack(e : r_CoopHostEnemy, eventName : name, animInfo : SAnimationEventAnimInfo)
     {
-        if(IsNameValid(e.attackAnim) || theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 0.6
-            || StrFindFirst(StrLower(NameToString(GetAnimNameFromEventAnimInfo(animInfo))), "attack") < 0)
+        if(IsNameValid(e.attackAnim) || theGame.GetEngineTimeAsSeconds() - e.attackTaskAt > 2.0
+            || !CoopActionAnim(GetAnimNameFromEventAnimInfo(animInfo)))
         {
             return;
         }
@@ -1730,6 +1739,7 @@ class r_CoopEnemies
         e.attackAnimAt = GetLocalAnimTimeFromEventAnimInfo(animInfo);
         e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
         LogSync("LE", e.netId, e.attackSeq, NameToString(e.attackAnim) + "/" + NameToString(eventName));
+        PoseLearn(e, e.attackAnim);
         HostSend();
         lastHostSend = theGame.GetEngineTimeAsSeconds();
     }
@@ -2710,8 +2720,8 @@ class r_CoopEnemies
             return;
         }
         comp = p.npc.GetRootAnimatedComponent();
-        // a swing more than 1.2 s along (named only at a giant's late hit window) is mostly over
-        if(!comp || slotless.Contains(p.npc.GetReadableName()) || p.attackAnimAt + now - p.attackAnimGotAt > 1.2)
+        // a swing more than 1.6 s along (named only at a giant's late hit window) is mostly over
+        if(!comp || slotless.Contains(p.npc.GetReadableName()) || p.attackAnimAt + now - p.attackAnimGotAt > 1.6)
         {
             return;
         }
@@ -3082,6 +3092,12 @@ class r_CoopEnemies
             return;
         }
         p.slotChecked = true;
+        // only swings have a hit window for sure (a spit or a pull has none)
+        if(p.attackTask != "" && StrBeforeFirst(p.attackTask, ":") != "CBTTaskAttack"
+            && StrBeforeFirst(p.attackTask, ":") != "CBTTaskTrollAttack")
+        {
+            return;
+        }
         key = p.npc.GetReadableName();
         if(p.puppetAnimText == p.attackAnimText)
         {
@@ -3143,7 +3159,7 @@ class r_CoopEnemies
         }
     }
 
-    // the swings each monster type made (their hit windows name them)
+    // the swings each monster type made (their hit windows or events name them)
     private function PoseLearn(e : r_CoopHostEnemy, anim : name)
     {
         var template : string;
@@ -4472,14 +4488,31 @@ function COOP_FX_DAMAGE() : float
     return 0.01;
 }
 
-// an attack task (CoopAttackId) that is just a swing, played on a puppet's slot: no effect of its own comes from its
-// animation's events (a spell's does)
+// an attack task (CoopAttackId) whose animation plays on a puppet's slot: nothing of its own comes from its animation's
+// events (a spell's does): swings, the troll's swings, charges, the arachas' pull, and throws and spits (their
+// projectile comes as a copy anyway)
 function CoopSlotSwing(task : string) : bool
 {
     var kind : string;
 
     kind = StrBeforeFirst(task, ":");
-    return kind == "CBTTaskAttack" || kind == "CBTTaskTrollAttack";
+    return kind == "CBTTaskAttack" || kind == "CBTTaskTrollAttack" || kind == "CBTTaskCharge" || kind == "CBTTaskArachasPull"
+        || kind == "CBTTaskProjectileAttack" || kind == "CBTTaskProjectileAttackWithPrepare";
+}
+
+// an animation that can be an attack's: one named so, or anything but moving about (an attack task can start with a run
+// or a turn: a katakan's ran first)
+function CoopActionAnim(anim : name) : bool
+{
+    var text : string;
+
+    text = StrLower(NameToString(anim));
+    if(StrFindFirst(text, "attack") >= 0)
+    {
+        return true;
+    }
+    return StrFindFirst(text, "run") < 0 && StrFindFirst(text, "walk") < 0 && StrFindFirst(text, "strafe") < 0
+        && StrFindFirst(text, "turn") < 0 && StrFindFirst(text, "idle") < 0 && StrFindFirst(text, "move") < 0;
 }
 
 // players farther apart than this run their own monsters (the leader's world doesn't simulate far away)
