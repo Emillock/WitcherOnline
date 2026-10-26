@@ -27,6 +27,9 @@ class r_CoopHostEnemy
     public var attackNamedAt : float;
     public var lastHitAt : float;      // when it was last hit, and whether that cut its current attack short
     public var taskRunning : bool;     // its attack task still runs (its hit windows belong to it, however late)
+    public var phaseTime : float;      // a 3-state attack: the current phase's animation time last seen, its loop
+    public var attackLoop : int;       // restarts, and the phase before (NextPhase)
+    public var prevPhase : name;
     public var poseSnap : array<Vector>;  // its bones 0.12, 0.2, 0.3 s into an unnamed attack (PoseChecks)
     public var poseSnapTime : float;
     public var poseChecks : int;
@@ -815,7 +818,7 @@ class r_CoopEnemies
     // don't use, and attack.
     private function AttackText(e : r_CoopHostEnemy) : string
     {
-        var cut : string;
+        var cut, loop : string;
 
         if(e.attackCut)
         {
@@ -829,7 +832,12 @@ class r_CoopEnemies
             }
             return e.attackTask + "|";
         }
-        return e.attackTask + "|" + NameToString(e.attackAnim) + "|"
+        loop = "";
+        if(e.attackLoop > 0)
+        {
+            loop = "#" + e.attackLoop;
+        }
+        return e.attackTask + "|" + NameToString(e.attackAnim) + loop + "|"
             + FloatToStringPrec(e.attackAnimAt + theGame.GetEngineTimeAsSeconds() - e.attackNamedAt, 2) + cut;
     }
 
@@ -1499,6 +1507,7 @@ class r_CoopEnemies
                 LogSync("LA", e.netId, e.attackSeq, NameToString(GetAnimNameFromEventAnimInfo(animInfo)));
             }
             PoseLearn(e, hitAnim);
+            NextPhase(e, 'HitWindow', animInfo);
             // the hit window's animation is the attack's (an early name can be another's), unless it is the previous
             // swing's, still blending out (some graphs start the swing before its task, so an unnamed attack takes it)
             if(e.attackAnim != hitAnim && (!IsNameValid(e.attackAnim) || e.attackTask == "" || AnimOfThisAttack(e, animInfo)))
@@ -1594,6 +1603,49 @@ class r_CoopEnemies
         }
     }
 
+    // A 3-state attack (a troll's rage) runs through phases: start, a loop (as long as its task decides), end. An event
+    // of a phase that just began (its own time under 0.35 s) names it, and a loop's restart (its time back to the
+    // start) counts it, both sent at once for the puppet to play in turn.
+    private function NextPhase(e : r_CoopHostEnemy, eventName : name, animInfo : SAnimationEventAnimInfo)
+    {
+        var anim : name;
+        var animTime : float;
+
+        if(!e.taskRunning || !CoopPhasedAttack(e.attackTask) || !IsNameValid(e.attackAnim))
+        {
+            return;
+        }
+        anim = GetAnimNameFromEventAnimInfo(animInfo);
+        animTime = GetLocalAnimTimeFromEventAnimInfo(animInfo);
+        if(anim == e.attackAnim)
+        {
+            if(animTime + 0.2 < e.phaseTime)
+            {
+                e.attackLoop += 1;
+                e.attackAnimAt = animTime;
+                e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
+                LogSync("LE", e.netId, e.attackSeq, NameToString(anim) + "#" + e.attackLoop + "/" + NameToString(eventName));
+                HostSend();
+                lastHostSend = theGame.GetEngineTimeAsSeconds();
+            }
+            e.phaseTime = animTime;
+            return;
+        }
+        if(animTime > 0.35 || anim == e.prevPhase || !CoopActionAnim(anim))
+        {
+            return;
+        }
+        e.prevPhase = e.attackAnim;
+        e.attackAnim = anim;
+        e.attackLoop = 0;
+        e.attackAnimAt = animTime;
+        e.phaseTime = animTime;
+        e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
+        LogSync("LE", e.netId, e.attackSeq, NameToString(anim) + "/phase " + NameToString(eventName));
+        HostSend();
+        lastHostSend = theGame.GetEngineTimeAsSeconds();
+    }
+
     // An animation that started with the current (or pending) attack: its own time is at most the time since the
     // attack's task started (0.35 s leeway: some graphs start a swing a little before its task, a katakan's by 0.2 s),
     // and it isn't the one that played before (still blending out).
@@ -1625,6 +1677,9 @@ class r_CoopEnemies
         e.pendingTask = "";
         LogSync("L", e.netId, e.attackSeq, e.attackTask, e.pendingWall);
         e.attackAnim = '';
+        e.attackLoop = 0;
+        e.phaseTime = 0;
+        e.prevPhase = '';
         e.poseChecks = 0;
         e.attackCut = false;
         e.hitAnimTime = 0;
@@ -1706,6 +1761,10 @@ class r_CoopEnemies
             return;
         }
         e = FindHostEnemyByNpc(task.GetNPC());
+        if(e)
+        {
+            NextPhase(e, eventName, animInfo);
+        }
         // tests: what an attack still unnamed gets (task class, animation, event, its age)
         if(e && !IsNameValid(e.attackAnim) && e.earlyLogged < 6)
         {
@@ -1737,6 +1796,7 @@ class r_CoopEnemies
         }
         e.attackAnim = GetAnimNameFromEventAnimInfo(animInfo);
         e.attackAnimAt = GetLocalAnimTimeFromEventAnimInfo(animInfo);
+        e.phaseTime = e.attackAnimAt;
         e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
         LogSync("LE", e.netId, e.attackSeq, NameToString(e.attackAnim) + "/" + NameToString(eventName));
         PoseLearn(e, e.attackAnim);
@@ -1772,6 +1832,7 @@ class r_CoopEnemies
             e.preAnimAt = now;
             return;
         }
+        NextPhase(e, eventName, animInfo);
         if(e.earlyLogged < 2)
         {
             e.earlyLogged += 1;
@@ -2732,7 +2793,7 @@ class r_CoopEnemies
         playing = p.slotAnim == p.attackAnimText && now - p.slotAnimStartAt < 1.5;
         if(!playing)
         {
-            started = comp.PlaySlotAnimationAsync(WO_ToName(p.attackAnimText), attackSlot, settings);
+            started = comp.PlaySlotAnimationAsync(WO_ToName(CoopAnimOf(p.attackAnimText)), attackSlot, settings);
         }
         if(playing || started)
         {
@@ -4497,7 +4558,24 @@ function CoopSlotSwing(task : string) : bool
 
     kind = StrBeforeFirst(task, ":");
     return kind == "CBTTaskAttack" || kind == "CBTTaskTrollAttack" || kind == "CBTTaskCharge" || kind == "CBTTaskArachasPull"
-        || kind == "CBTTaskProjectileAttack" || kind == "CBTTaskProjectileAttackWithPrepare";
+        || kind == "CBTTaskProjectileAttack" || kind == "CBTTaskProjectileAttackWithPrepare" || CoopPhasedAttack(task);
+}
+
+// an attack task in phases (start, loop, end: a troll's rage, a charge's run until the behavior variable ends it): its
+// phases play in turn (NextPhase)
+function CoopPhasedAttack(task : string) : bool
+{
+    return StrFindFirst(task, "CBTTask3State") == 0 || StrBeforeFirst(task, ":") == "CBTTaskCharge";
+}
+
+// "anim#n" (a loop's n-th restart): the animation
+function CoopAnimOf(text : string) : string
+{
+    if(StrFindFirst(text, "#") >= 0)
+    {
+        return StrBeforeFirst(text, "#");
+    }
+    return text;
 }
 
 // an animation that can be an attack's: one named so, or anything but moving about (an attack task can start with a run
