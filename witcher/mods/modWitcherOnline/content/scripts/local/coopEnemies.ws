@@ -60,6 +60,12 @@ class r_CoopHostEnemy
     public var fxActive : string;      // ...those playing now ("a,b"), sent with its attack
     public var directKey : string;     // the last effect its tasks put straight on a ghost ("user:type"), and when
     public var directAt : float;
+    public var pendingGraph : string;  // a 3-state attack's graph event and attack type ("event:type", CoopGraphText)
+    public var attackGraph : string;
+    public var graphStarted : bool;    // ...its AttackEnd variable seen down, then up again (its end phase began)
+    public var graphEnded : bool;
+    public var graphEndType : int;     // the end phase's attack type (some pick it by the target's side or distance)
+    public var graphPoses : int;       // tests: its poses logged so far (LP)
     public var stride : r_CoopStride;
 }
 
@@ -129,6 +135,12 @@ class r_CoopPuppet
     public var moveRetargets : int;
     public var fxPlaying : array<name>;  // the leader's monster's script effects, played here too (ApplyFx)
     public var hidden : bool;            // ...and hidden while it is (a wraith between its vanish and reappearance)
+    public var graphAt : float;          // the leader's 3-state attack raised on its graph then (GraphAttack)
+    public var graphEnded : bool;
+    public var graphEndedAt : float;
+    public var graphPoses : int;
+    public var graphPending : string;   // ...to be raised then (after its slot swing blends out)
+    public var graphDueAt : float;
 }
 
 // Feet swinging along the actor's facing over 1.5 s windows while it moves: a walking stride swings a foot tens of
@@ -522,6 +534,10 @@ class r_CoopEnemies
     public var fxChanges : int;             // leader: changes of its monsters' script effects (fxActive)
     public var fxMirrored : int;            // member: of those, effects started on puppets
     public var lastFx : string;
+    public var graphAttacksSeen : int;      // leader: 3-state attacks sent with their graph event
+    public var graphAttacksPlayed : int;    // member: ...raised on puppets' graphs
+    public var graphAttacksRefused : int;
+    public var graphEndsPlayed : int;
     public var journalApplied : int;
     public var lastJournalApplied : name;
     public var journalMessages : int;   // journal lists accepted from the leader
@@ -614,6 +630,10 @@ class r_CoopEnemies
                 PoseChecks(now);
             }
             fxChanged = PollFx();
+            if(PollGraphs(now))
+            {
+                fxChanged = true;
+            }
             if(CommitDueAttacks(now) || fxChanged || now - lastHostSend >= 0.1)
             {
                 HostCollect(client, now);
@@ -849,13 +869,22 @@ class r_CoopEnemies
             cut = "|1";
         }
         fx = "";
-        if(e.fxActive != "")
+        if(e.fxActive != "" || e.attackGraph != "")
         {
             fx = "|" + e.fxActive;
             if(!e.attackCut)
             {
                 cut = "|0";
             }
+        }
+        // a 3-state attack: "|event:type:0", from its end phase on "|event:endType:1"
+        if(e.attackGraph != "" && e.graphEnded)
+        {
+            fx += "|" + StrBeforeFirst(e.attackGraph, ":") + ":" + e.graphEndType + ":1";
+        }
+        else if(e.attackGraph != "")
+        {
+            fx += "|" + e.attackGraph + ":0";
         }
         if(!IsNameValid(e.attackAnim))
         {
@@ -918,6 +947,62 @@ class r_CoopEnemies
             }
         }
         return changed;
+    }
+
+    // A 3-state attack's end phase (a fugas' vomit, after its loop): its task sets the AttackEnd variable, with the end's
+    // attack type; sent at once. Tests: its pose 0.5, 1, 1.5 and 2 s in (LP; members log their copy's, MP).
+    private function PollGraphs(now : float) : bool
+    {
+        var e : r_CoopHostEnemy;
+        var changed : bool;
+        var i : int;
+
+        for(i = 0; i < hostEnemies.Size(); i += 1)
+        {
+            e = hostEnemies[i];
+            if(!e.npc || e.attackGraph == "")
+            {
+                continue;
+            }
+            if(e.graphPoses < 4 && now - e.attackTaskAt >= 0.5 * (e.graphPoses + 1))
+            {
+                e.graphPoses += 1;
+                LogSync("LP", e.netId, e.attackSeq, IntToString(e.graphPoses) + "/" + PoseText(e.npc));
+            }
+            if(e.graphEnded)
+            {
+                continue;
+            }
+            if(e.npc.GetBehaviorVariable('AttackEnd') < 0.5)
+            {
+                e.graphStarted = true;
+            }
+            else if(e.graphStarted || !e.taskRunning)
+            {
+                e.graphEnded = true;
+                e.graphEndType = (int)e.npc.GetBehaviorVariable('AttackType');
+                LogSync("LG", e.netId, e.attackSeq, "end/" + e.graphEndType);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    // tests: its bones in model space, as PoseChecks takes them ("x,y,z;...")
+    private function PoseText(npc : CNewNPC) : string
+    {
+        var toModel : Matrix;
+        var v : Vector;
+        var text : string;
+        var b : int;
+
+        toModel = MatrixGetInverted(npc.GetLocalToWorld());
+        for(b = 1; b < 31; b += 2)
+        {
+            v = VecTransform(toModel, MatrixGetTranslation(npc.GetBoneWorldMatrixByIndex(b)));
+            text += FloatToStringPrec(v.X, 2) + "," + FloatToStringPrec(v.Y, 2) + "," + FloatToStringPrec(v.Z, 2) + ";";
+        }
+        return text;
     }
 
     private function WatchTaskFx(e : r_CoopHostEnemy, task : CBTTaskAttack)
@@ -1117,6 +1202,10 @@ class r_CoopEnemies
         fxChanges = 0;
         fxMirrored = 0;
         lastFx = "";
+        graphAttacksSeen = 0;
+        graphAttacksPlayed = 0;
+        graphAttacksRefused = 0;
+        graphEndsPlayed = 0;
     }
 
     public function SetPuppetLocomotion(on : bool)
@@ -1707,9 +1796,11 @@ class r_CoopEnemies
                 }
             }
             else if(eventType == AET_DurationStart && p
-                && NameToString(GetAnimNameFromEventAnimInfo(animInfo)) != CoopAnimOf(p.slotAnim))
+                && NameToString(GetAnimNameFromEventAnimInfo(animInfo)) != CoopAnimOf(p.slotAnim)
+                && !GraphOnGoing(p))
             {
-                // (not the leader's animation on its slot: a move can have hit windows, Shaelmaar's digging)
+                // (not the leader's animation on its slot: a move can have hit windows, Shaelmaar's digging; nor the
+                // leader's 3-state attack on its graph: a troll's rage hits all along its loop)
                 puppetOwnAttacks += 1;
             }
             return;
@@ -1734,6 +1825,7 @@ class r_CoopEnemies
             {
                 e.attackSeq += 1;
                 e.attackTask = "";
+                e.attackGraph = "";
                 attacksSeen += 1;
                 LogSync("L", e.netId, e.attackSeq, "-");
             }
@@ -1836,6 +1928,7 @@ class r_CoopEnemies
             e.pendingWall = WO_ClockMs();
             e.pendingFrames = 0;
             e.earlyLogged = 0;
+            e.pendingGraph = CoopGraphText(task);
             WatchTaskFx(e, task);
         }
     }
@@ -1920,6 +2013,15 @@ class r_CoopEnemies
         e.poseChecks = 0;
         e.attackCut = false;
         e.hitAnimTime = 0;
+        e.attackGraph = e.pendingGraph;
+        e.graphStarted = false;
+        e.graphEnded = false;
+        e.graphPoses = 0;
+        if(e.attackGraph != "")
+        {
+            graphAttacksSeen += 1;
+            LogSync("LG", e.netId, e.attackSeq, e.attackGraph);
+        }
         if(UserOf(e.npc.GetTarget()) != "")
         {
             e.attackTarget = UserOf(e.npc.GetTarget());
@@ -2390,7 +2492,7 @@ class r_CoopEnemies
         var moveAnim : name;
         var hitBy, projTpl, attackTarget, attackTask, attackAnimText, moveText, moveKind : string;
         var attackAnimAt, moveAt : float;
-        var animTime, moveAnimText, cutText, attackFx : string;
+        var animTime, moveAnimText, cutText, attackFx, attackGraph : string;
         var attackCut : bool;
         var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, moveParam, projSeq, projIndex : int;
         var hp, yaw, projAngle, projSpeed, projRange : float;
@@ -2466,6 +2568,7 @@ class r_CoopEnemies
             attackAnimAt = 0;
             attackCut = false;
             attackFx = "";
+            attackGraph = "";
             if(StrFindFirst(attackAnimText, "|") >= 0 && StrAfterFirst(attackAnimText, "|") != "")
             {
                 leaderNamesAnims = true;
@@ -2482,6 +2585,11 @@ class r_CoopEnemies
                     {
                         attackFx = StrAfterFirst(cutText, "|");
                         cutText = StrBeforeFirst(cutText, "|");
+                    }
+                    if(StrFindFirst(attackFx, "|") >= 0)
+                    {
+                        attackGraph = StrAfterFirst(attackFx, "|");
+                        attackFx = StrBeforeFirst(attackFx, "|");
                     }
                     attackCut = cutText == "1";
                 }
@@ -2549,7 +2657,7 @@ class r_CoopEnemies
             if(tplIndex >= 0 && tplIndex < templates.Size())
             {
                 ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackTask, attackAnimText, attackAnimAt, attackCut, hitSeq, hitBy, hitReaction,
-                    moveSeq, moveAnim, moveKind, moveParam, moveAnimText, moveAt, attackTarget);
+                    moveSeq, moveAnim, moveKind, moveParam, moveAnimText, moveAt, attackTarget, attackGraph);
                 ApplyFx(netId, attackFx);
                 if(projSeq != 0 && projTpl != "")
                 {
@@ -2775,7 +2883,7 @@ class r_CoopEnemies
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
         attackSeq : int, attackTask : string, attackAnimText : string, attackAnimAt : float, attackCut : bool, hitSeq : int, hitBy : string, hitReaction : int, moveSeq : int, moveAnim : name,
-        moveKind : string, moveParam : int, moveAnimText : string, moveAt : float, attackTarget : string)
+        moveKind : string, moveParam : int, moveAnimText : string, moveAt : float, attackTarget : string, attackGraph : string)
     {
         var p : r_CoopPuppet;
         var npc : CNewNPC;
@@ -2829,7 +2937,7 @@ class r_CoopEnemies
             {
                 p.attackAnimAt = attackAnimAt;
                 p.attackAnimGotAt = theGame.GetEngineTimeAsSeconds();
-                PlayAttack(p, attackTask, attackAnimText, attackTarget);
+                PlayAttack(p, attackTask, attackAnimText, attackTarget, attackGraph);
             }
         }
         else if(attackAnimText != "" && attackAnimText != p.attackAnimText && !p.attackCut)
@@ -2857,6 +2965,12 @@ class r_CoopEnemies
             {
                 StopSlotAttack(p);
             }
+        }
+        // its 3-state attack's end phase began on the leader (or a hit cut it short)
+        if(attackSeq == p.attackSeq && GraphPlays(p) && !p.graphEnded
+            && (StrAfterLast(attackGraph, ":") == "1" || p.attackCut))
+        {
+            EndGraphAttack(p, StringToInt(StrBeforeLast(StrAfterFirst(attackGraph, ":"), ":"), -1));
         }
 
         // the newest of its attacks and moves plays, as on the leader
@@ -3042,11 +3156,15 @@ class r_CoopEnemies
     // here): its idle tree is off for the attack and it notices that player. A plain swing's exact animation plays on its
     // slot at once (SlotAttack); a spell or special attack is its own AI's same task. A puppet's own hits do no damage
     // (OnBeforeDamage).
-    private function PlayAttack(p : r_CoopPuppet, task : string, anim : string, target : string)
+    private function PlayAttack(p : r_CoopPuppet, task : string, anim : string, target : string, graph : string)
     {
         var now : float;
 
         now = theGame.GetEngineTimeAsSeconds();
+        if(p.graphPending != "" || (p.graphAt > 0 && !p.graphEnded))
+        {
+            EndGraphAttack(p, -1);
+        }
         p.attackPlayedAt = now;
         p.attackFrom = now;
         LogSync("R", p.netId, p.attackSeq, task);
@@ -3072,8 +3190,91 @@ class r_CoopEnemies
         {
             p.slotAnimAt = p.attackFrom;  // it stands for the attack (a lunge read as a run would break it off)
             attacksPlayed += 1;
-            SlotAttack(p, false);
+            if(graph == "" || p.attackFrom > now || !GraphAttack(p, graph))
+            {
+                SlotAttack(p, false);
+            }
         }
+    }
+
+    // The leader's monster's 3-state attack (a fugas' vomit: start, loop, end) raised on the puppet's graph as its task
+    // does, so the same graph plays the same animations (none of the fugas' is named before its end); its end phase
+    // follows the leader's (EndGraphAttack). A swing still on its slot is stopped first, and the event waits 0.1 s
+    // (raised in the same frame, the puppet kept the swing's pose throughout). False if the graph refused it: then its
+    // slot plays what gets named.
+    private function GraphAttack(p : r_CoopPuppet, graph : string) : bool
+    {
+        p.graphPending = "";
+        if(StopSlotAttack(p))
+        {
+            p.graphPending = graph;
+            p.graphDueAt = theGame.GetEngineTimeAsSeconds() + 0.1;
+            return true;
+        }
+        return RaiseGraph(p, graph);
+    }
+
+    private function RaiseGraph(p : r_CoopPuppet, graph : string) : bool
+    {
+        var eventName : name;
+        var how : string;
+        var raised : bool;
+
+        eventName = WO_ToName(StrBeforeFirst(graph, ":"));
+        p.npc.SetBehaviorVariable('AttackEnd', 0);
+        p.npc.SetBehaviorVariable('AttackType', StringToInt(StrBeforeFirst(StrAfterFirst(graph, ":"), ":"), 0), true);
+        // a copy's graph check refuses it (also 0.3 s on), yet raised unchecked the graph plays it: the copy's pose
+        // follows the leader's monster's
+        how = "/checked";
+        raised = p.npc.RaiseForceEvent(eventName);
+        if(!raised)
+        {
+            how = "/unchecked";
+            raised = p.npc.RaiseForceEventWithoutTestCheck(eventName);
+        }
+        if(!raised)
+        {
+            graphAttacksRefused += 1;
+            LogSync("MGX", p.netId, p.attackSeq, graph + "/" + NameToString(p.npc.GetBehaviorGraphInstanceName()));
+            return false;
+        }
+        p.graphAt = theGame.GetEngineTimeAsSeconds();
+        p.graphEnded = false;
+        p.graphPoses = 0;
+        graphAttacksPlayed += 1;
+        LogSync("MG", p.netId, p.attackSeq, graph + how);
+        return true;
+    }
+
+    // its graph plays the current mirrored attack (or is about to)
+    private function GraphPlays(p : r_CoopPuppet) : bool
+    {
+        return p.graphPending != "" || (p.graphAt > 0 && p.graphAt >= p.attackPlayedAt);
+    }
+
+    // ...or its end phase still plays
+    private function GraphOnGoing(p : r_CoopPuppet) : bool
+    {
+        return GraphPlays(p) && (!p.graphEnded || theGame.GetEngineTimeAsSeconds() - p.graphEndedAt < 2.5);
+    }
+
+    // its end phase (with the leader's end attack type, unless -1), as the task's own end sets it
+    private function EndGraphAttack(p : r_CoopPuppet, type : int)
+    {
+        if(p.graphPending != "")
+        {
+            p.graphPending = "";  // not raised yet
+            return;
+        }
+        if(type >= 0)
+        {
+            p.npc.SetBehaviorVariable('AttackType', type, true);
+        }
+        p.npc.SetBehaviorVariable('AttackEnd', 1);
+        p.graphEnded = true;
+        p.graphEndedAt = theGame.GetEngineTimeAsSeconds();
+        graphEndsPlayed += 1;
+        LogSync("MGE", p.netId, p.attackSeq, IntToString(type));
     }
 
     // The leader's monster's exact attack animation, played straight on the puppet's graph slot as soon as it
@@ -3088,6 +3289,10 @@ class r_CoopEnemies
         var playing, started : bool;
 
         now = theGame.GetEngineTimeAsSeconds();
+        if(GraphPlays(p))
+        {
+            return;  // its graph plays this attack (GraphAttack)
+        }
         if(nextPart && (p.slotAttackAt < p.attackPlayedAt || now - p.slotAttackAt > 4.0))
         {
             return;
@@ -3464,7 +3669,7 @@ class r_CoopEnemies
         {
             return false;
         }
-        if(p.slotAttackAt >= p.attackPlayedAt || p.attackCut)
+        if(p.slotAttackAt >= p.attackPlayedAt || GraphPlays(p) || p.attackCut)
         {
             return false;
         }
@@ -3498,16 +3703,17 @@ class r_CoopEnemies
     // The leader's monster's attack was cut short (a hit ended it), the puppet died, or it is to make a move or spell
     // of its own AI: its slot animation stops (playing no animation on the slot ends the one there), so its own hit
     // reaction, death, move or spell shows.
-    private function StopSlotAttack(p : r_CoopPuppet)
+    private function StopSlotAttack(p : r_CoopPuppet) : bool
     {
         EndCatchUp(p);
         if(MaxF(p.slotAttackAt, p.slotMoveAt) <= 0 || theGame.GetEngineTimeAsSeconds() - MaxF(p.slotAttackAt, p.slotMoveAt) > 4.0
             || !p.npc.GetRootAnimatedComponent())
         {
-            return;
+            return false;
         }
         p.npc.GetRootAnimatedComponent().PlaySlotAnimationAsync('', attackSlot);
         LogSync("MK", p.netId, p.attackSeq, "-");
+        return true;
     }
 
     // A slot attack named late (at its hit window: some animations have no event before it) starts that far behind
@@ -3937,6 +4143,7 @@ class r_CoopEnemies
     private function UpdatePuppets(now : float)
     {
         var p : r_CoopPuppet;
+        var graph : string;
         var current : float;
         var i : int;
 
@@ -3969,6 +4176,29 @@ class r_CoopEnemies
             }
             p.wasInHitAnim = p.npc.IsInHitAnim();
             SlotAttackCheck(p, now);
+            if(p.graphPending != "" && now >= p.graphDueAt)
+            {
+                graph = p.graphPending;
+                p.graphPending = "";
+                if(!RaiseGraph(p, graph))
+                {
+                    SlotAttack(p, false);
+                }
+            }
+            else if(GraphPlays(p) && p.graphPending == "")
+            {
+                // tests: its pose, against the leader's monster's (LP)
+                if(p.graphPoses < 4 && now - p.graphAt >= 0.5 * (p.graphPoses + 1))
+                {
+                    p.graphPoses += 1;
+                    LogSync("MP", p.netId, p.attackSeq, IntToString(p.graphPoses) + "/" + PoseText(p.npc));
+                }
+                // (an end lost on the way: a 3-state attack's loop lasts a few seconds)
+                if(!p.graphEnded && now - p.graphAt > 12.0)
+                {
+                    EndGraphAttack(p, -1);
+                }
+            }
             if(p.catchUpUntil > 0 && now >= p.catchUpUntil)
             {
                 EndCatchUp(p);
@@ -4163,6 +4393,10 @@ class r_CoopEnemies
             return;
         }
         StopSlotAttack(p);
+        if(p.graphPending != "" || (p.graphAt > 0 && !p.graphEnded))
+        {
+            EndGraphAttack(p, -1);  // (a twin's graph would stay in the leader's attack's loop)
+        }
         if(p.animAiId != 0)
         {
             p.npc.CancelAIBehavior(p.animAiId);
@@ -4972,6 +5206,21 @@ function CoopSlotSwing(task : string) : bool
     kind = StrBeforeFirst(task, ":");
     return kind == "CBTTaskAttack" || kind == "CBTTaskTrollAttack" || kind == "CBTTaskCharge" || kind == "CBTTaskArachasPull"
         || kind == "CBTTaskProjectileAttack" || kind == "CBTTaskProjectileAttackWithPrepare" || CoopPhasedAttack(task);
+}
+
+// A 3-state attack that runs on its graph alone (its task raises the event, loops, then sets AttackEnd): "event:type"
+// for copies to raise the same, or "". Charges, pulls and projectiles stay on the slot (their own Main moves or shoots).
+function CoopGraphText(task : CBTTaskAttack) : string
+{
+    var threeState : CBTTask3StateAttack;
+
+    threeState = (CBTTask3StateAttack)task;
+    if(!threeState || !IsNameValid(threeState.raiseEventName) || (CBTTask3StateCharge)task || (CBTTask3StateLightCharge)task
+        || (CBTTask3StateProjectileAttack)task || (CBTTaskBiesCharge)task || (CBTTaskBiesHypnotize)task)
+    {
+        return "";
+    }
+    return NameToString(threeState.raiseEventName) + ":" + (int)task.attackType;
 }
 
 // an attack task in phases (start, loop, end: a troll's rage, a charge's run until the behavior variable ends it): its
