@@ -56,6 +56,10 @@ class r_CoopHostEnemy
     public var projAngle : float;
     public var projSpeed : float;
     public var projRange : float;
+    public var fxWatch : array<name>;  // effects its attack tasks play from script (no animation event plays them on copies)
+    public var fxActive : string;      // ...those playing now ("a,b"), sent with its attack
+    public var directKey : string;     // the last effect its tasks put straight on a ghost ("user:type"), and when
+    public var directAt : float;
     public var stride : r_CoopStride;
 }
 
@@ -123,6 +127,8 @@ class r_CoopPuppet
     public var moveAnimAt : float;
     public var moveAnimName : name;
     public var moveRetargets : int;
+    public var fxPlaying : array<name>;  // the leader's monster's script effects, played here too (ApplyFx)
+    public var hidden : bool;            // ...and hidden while it is (a wraith between its vanish and reappearance)
 }
 
 // Feet swinging along the actor's facing over 1.5 s windows while it moves: a walking stride swings a foot tens of
@@ -317,6 +323,11 @@ class r_CoopHurt
     public var types : array<name>;
     public var values : array<float>;
     public var effects : array<int>; // EEffectType of the hit's buffs (bleeding, knockdown, ...)
+    public var direct : bool;        // no hit: one effect its task put straight on the ghost, with its own duration and value
+    public var duration : float;
+    public var valueAdd : float;
+    public var valueMul : float;
+    public var victimFx : name;      // the effect its task played on the ghost as the hit landed
 }
 
 class r_CoopAck
@@ -501,6 +512,16 @@ class r_CoopEnemies
     public var strideBone : string;
     public var puppetLocomotion : bool;  // off: puppets only slide (the glide baseline for the stride tests)
     public var hurtEffectsApplied : int;
+    public var directEffectsSent : int;     // leader: effects its monsters' tasks put straight on members' ghosts
+    public var directEffectsApplied : int;  // member: ...applied to this player
+    public var directEffectsHeld : int;     // member: ...of them taking hold
+    public var puppetEffectsDropped : int;  // member: puppets' own effects on others (DropsPuppetEffect)
+    private var applyingHurt : bool;
+    public var victimFxSent : int;          // leader: hit effects its monsters' tasks played on members' ghosts
+    public var victimFxPlayed : int;        // member: ...played on this player
+    public var fxChanges : int;             // leader: changes of its monsters' script effects (fxActive)
+    public var fxMirrored : int;            // member: of those, effects started on puppets
+    public var lastFx : string;
     public var journalApplied : int;
     public var lastJournalApplied : name;
     public var journalMessages : int;   // journal lists accepted from the leader
@@ -573,6 +594,7 @@ class r_CoopEnemies
         var client : r_MultiplayerClient;
         var role : int;
         var now : float;
+        var fxChanged : bool;
 
         client = theGame.r_getMultiplayerClient();
         if(!client || !thePlayer)
@@ -591,7 +613,8 @@ class r_CoopEnemies
             {
                 PoseChecks(now);
             }
-            if(CommitDueAttacks(now) || now - lastHostSend >= 0.1)
+            fxChanged = PollFx();
+            if(CommitDueAttacks(now) || fxChanged || now - lastHostSend >= 0.1)
             {
                 HostCollect(client, now);
                 HostSend();
@@ -813,22 +836,32 @@ class r_CoopEnemies
             + " " + hostEnemies.Size() + body);
     }
 
-    // "task|anim|time|cut" (CoopAttackId, "" without a task; the animation as soon as it is known, how far into it the
-    // monster is now, and "1" once a hit cut it short). 0.2.0 members take the text as an animation name, which they
-    // don't use, and attack.
+    // "task|anim|time|cut|fx" (CoopAttackId, "" without a task; the animation as soon as it is known, how far into it
+    // the monster is now, "1" once a hit cut it short, and its script effects playing now, see PollFx; the tail is left
+    // out while empty). 0.2.0 members take the text as an animation name, which they don't use, and attack.
     private function AttackText(e : r_CoopHostEnemy) : string
     {
-        var cut, loop : string;
+        var cut, loop, fx : string;
 
+        cut = "";
         if(e.attackCut)
         {
             cut = "|1";
         }
+        fx = "";
+        if(e.fxActive != "")
+        {
+            fx = "|" + e.fxActive;
+            if(!e.attackCut)
+            {
+                cut = "|0";
+            }
+        }
         if(!IsNameValid(e.attackAnim))
         {
-            if(e.attackCut)
+            if(cut != "")
             {
-                return e.attackTask + "||0" + cut;
+                return e.attackTask + "||0" + cut + fx;
             }
             return e.attackTask + "|";
         }
@@ -838,7 +871,97 @@ class r_CoopEnemies
             loop = "#" + e.attackLoop;
         }
         return e.attackTask + "|" + NameToString(e.attackAnim) + loop + "|"
-            + FloatToStringPrec(e.attackAnimAt + theGame.GetEngineTimeAsSeconds() - e.attackNamedAt, 2) + cut;
+            + FloatToStringPrec(e.attackAnimAt + theGame.GetEngineTimeAsSeconds() - e.attackNamedAt, 2) + cut + fx;
+    }
+
+    // Effects a shared monster's tasks play from script (a fugas' vomit through its loop, a bite's blood as it lands, a
+    // wraith's vanishing): animation events play theirs on copies too, these only here. The ones playing now go with its
+    // attack, and "!hidden" while it is invisible (a wraith between vanishing and reappearing); true when that changed
+    // (sent at once).
+    private function PollFx() : bool
+    {
+        var e : r_CoopHostEnemy;
+        var text : string;
+        var changed : bool;
+        var i, j : int;
+
+        for(i = 0; i < hostEnemies.Size(); i += 1)
+        {
+            e = hostEnemies[i];
+            if(!e.npc)
+            {
+                continue;
+            }
+            text = "";
+            if(e.deadAt < 0 && !e.npc.GetVisibility())
+            {
+                text = "!hidden";
+            }
+            for(j = 0; j < e.fxWatch.Size(); j += 1)
+            {
+                if(e.deadAt < 0 && e.npc.IsEffectActive(e.fxWatch[j]))
+                {
+                    if(text != "")
+                    {
+                        text += ",";
+                    }
+                    text += NameToString(e.fxWatch[j]);
+                }
+            }
+            if(text != e.fxActive)
+            {
+                e.fxActive = text;
+                fxChanges += 1;
+                lastFx = text;
+                LogSync("LF", e.netId, e.attackSeq, text);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private function WatchTaskFx(e : r_CoopHostEnemy, task : CBTTaskAttack)
+    {
+        var threeState : CBTTask3StateAttack;
+
+        threeState = (CBTTask3StateAttack)task;
+        if(threeState)
+        {
+            WatchFx(e, threeState.playFXOnLoopStart);
+        }
+        WatchFx(e, task.fxOnDamageInstigated);
+    }
+
+    // a shared monster's teleport task may start: its vanishing and reappearing effects
+    public function WatchTeleportFx(task : CBTTaskTeleport)
+    {
+        WatchNpcFx(task.GetNPC(), task.disappearfxName);
+        WatchNpcFx(task.GetNPC(), task.appearFXName);
+        WatchNpcFx(task.GetNPC(), task.additionalAppearFXName);
+    }
+
+    // an effect a tree task played on a shared monster (CBTTaskPlayEffect: Shaelmaar's digging, a bruxa's scream)
+    public function WatchNpcFx(npc : CNewNPC, fx : name)
+    {
+        var e : r_CoopHostEnemy;
+
+        if(!wasHost || !IsNameValid(fx))
+        {
+            return;
+        }
+        e = FindHostEnemyByNpc(npc);
+        if(e)
+        {
+            WatchFx(e, fx);
+        }
+    }
+
+    private function WatchFx(e : r_CoopHostEnemy, fx : name)
+    {
+        if(IsNameValid(fx) && !e.fxWatch.Contains(fx) && e.fxWatch.Size() < 8)
+        {
+            e.fxWatch.PushBack(fx);
+        }
     }
 
     // "kind:param:anim:time": the move's kind ("" for other animated moves), its direction or type, its animation and
@@ -985,6 +1108,15 @@ class r_CoopEnemies
         strideBone = "";
         puppetLocomotion = true;
         hurtEffectsApplied = 0;
+        directEffectsSent = 0;
+        directEffectsApplied = 0;
+        directEffectsHeld = 0;
+        puppetEffectsDropped = 0;
+        victimFxSent = 0;
+        victimFxPlayed = 0;
+        fxChanges = 0;
+        fxMirrored = 0;
+        lastFx = "";
     }
 
     public function SetPuppetLocomotion(on : bool)
@@ -1320,6 +1452,7 @@ class r_CoopEnemies
         var attacker, victim : CActor;
         var e : r_CoopHostEnemy;
         var user : string;
+        var effectTick : bool;
 
         attacker = (CActor)act.attacker;
         victim = (CActor)act.victim;
@@ -1340,7 +1473,12 @@ class r_CoopEnemies
             return true;
         }
 
-        if(victim && victim.HasTag('MPEntity') && !act.IsDoTDamage())
+        // (an effect's ticks, burning, tick in the member's own world; a task's, Shaelmaar's tornado, come from here)
+        if(act.IsDoTDamage() && (CBaseGameplayEffect)act.causer)
+        {
+            effectTick = true;
+        }
+        if(victim && victim.HasTag('MPEntity') && !effectTick)
         {
             ghostHitsSeen += 1;
             e = FindHostEnemyByNpc((CNewNPC)attacker);
@@ -1380,10 +1518,20 @@ class r_CoopEnemies
             return;
         }
 
+        h.hitReaction = (int)act.GetHitReactionType();
+        AddHurt(h, user, e);
+        hurtsCaptured += 1;
+        if(act.IsDoTDamage())
+        {
+            LogSync("LU", e.netId, e.attackSeq, user + "/tick");
+        }
+    }
+
+    private function AddHurt(h : r_CoopHurt, user : string, e : r_CoopHostEnemy)
+    {
         h.user = user;
         h.seq = nextHurtSeq;
         h.netId = e.netId;
-        h.hitReaction = (int)act.GetHitReactionType();
         h.attackSeq = e.attackSeq;
         h.hitAnimTime = e.hitAnimTime;
         nextHurtSeq += 1;
@@ -1392,8 +1540,79 @@ class r_CoopEnemies
         {
             hurts.Erase(0);
         }
-        hurtsCaptured += 1;
         lastHurtSend = -999;
+    }
+
+    // A shared monster's task put an effect straight on a member's ghost, not through a hit (a fugas' burning vomit, a
+    // charge's stagger): it goes as a hurt of its own. The same again within a second (a task re-applies it while the
+    // ghost doesn't keep it) goes once.
+    public function OnGhostEffect(ghost : CActor, params : SCustomEffectParams)
+    {
+        var e : r_CoopHostEnemy;
+        var h : r_CoopHurt;
+        var user, key : string;
+        var now : float;
+
+        if(!wasHost || params.effectType == EET_Undefined)
+        {
+            return;
+        }
+        e = FindHostEnemyByNpc((CNewNPC)params.creator);
+        user = GhostOwner(ghost);
+        if(!e || user == "")
+        {
+            return;
+        }
+        now = theGame.GetEngineTimeAsSeconds();
+        key = user + ":" + IntToString((int)params.effectType);
+        if(key == e.directKey && now - e.directAt < 1.0)
+        {
+            return;
+        }
+        e.directKey = key;
+        e.directAt = now;
+
+        h = new r_CoopHurt in this;
+        h.direct = true;
+        h.effects.PushBack((int)params.effectType);
+        h.duration = params.duration;
+        h.valueAdd = params.effectValue.valueAdditive;
+        h.valueMul = params.effectValue.valueMultiplicative;
+        AddHurt(h, user, e);
+        directEffectsSent += 1;
+        LogSync("LD", e.netId, e.attackSeq, user + "/" + IntToString((int)params.effectType));
+    }
+
+    // A shared monster's hit played its task's effect on a member's ghost (a fugas' fire, a lightning's sparks): the
+    // hit was queued as it was processed, just before, and carries it.
+    public function OnVictimFx(npc : CNewNPC, victim : CActor, fx : name)
+    {
+        var e : r_CoopHostEnemy;
+        var user : string;
+        var i : int;
+
+        if(!wasHost || !victim || !victim.HasTag('MPEntity'))
+        {
+            return;
+        }
+        e = FindHostEnemyByNpc(npc);
+        user = GhostOwner(victim);
+        if(!e || user == "")
+        {
+            return;
+        }
+        for(i = hurts.Size() - 1; i >= 0; i -= 1)
+        {
+            if(hurts[i].user == user && hurts[i].netId == e.netId && !hurts[i].direct)
+            {
+                if(hurts[i].attackSeq == e.attackSeq && !IsNameValid(hurts[i].victimFx))
+                {
+                    hurts[i].victimFx = fx;
+                    victimFxSent += 1;
+                }
+                return;
+            }
+        }
     }
 
     private function PruneHurts(user : string, lastSeq : int)
@@ -1409,13 +1628,14 @@ class r_CoopEnemies
         }
     }
 
-    // "hurt epoch count {user seq netId hitReaction attackSeq hitAnimTime types {type value} effects {type}}": every
-    // hurt not yet acknowledged
+    // "hurt epoch count {user seq netId hitReaction attackSeq hitAnimTime types {type value} effects {effect}}": every
+    // hurt not yet acknowledged. An effect is its EEffectType, "type:duration:add:mul" for one put straight on the ghost
+    // (no damage types then), or "fx:name" for the effect played on the ghost as the hit landed.
     private function SendHurts(now : float)
     {
         var text : string;
         var h : r_CoopHurt;
-        var i, j : int;
+        var i, j, n : int;
 
         if((hurts.Size() == 0 && lastHurtSentCount == 0) || now - lastHurtSend < 0.1)
         {
@@ -1432,10 +1652,24 @@ class r_CoopEnemies
             {
                 text += " " + NameToString(h.types[j]) + " " + FloatToStringPrec(h.values[j], 2);
             }
-            text += " " + h.effects.Size();
+            n = h.effects.Size();
+            if(IsNameValid(h.victimFx))
+            {
+                n += 1;
+            }
+            text += " " + n;
             for(j = 0; j < h.effects.Size(); j += 1)
             {
                 text += " " + h.effects[j];
+                if(h.direct)
+                {
+                    text += ":" + FloatToStringPrec(h.duration, 2) + ":" + FloatToStringPrec(h.valueAdd, 3) + ":"
+                        + FloatToStringPrec(h.valueMul, 3);
+                }
+            }
+            if(IsNameValid(h.victimFx))
+            {
+                text += " fx:" + NameToString(h.victimFx);
             }
         }
         WO_Send(text);
@@ -1472,8 +1706,10 @@ class r_CoopEnemies
                     CompareAttackAnims(p);
                 }
             }
-            else if(eventType == AET_DurationStart && p)
+            else if(eventType == AET_DurationStart && p
+                && NameToString(GetAnimNameFromEventAnimInfo(animInfo)) != CoopAnimOf(p.slotAnim))
             {
+                // (not the leader's animation on its slot: a move can have hit windows, Shaelmaar's digging)
                 puppetOwnAttacks += 1;
             }
             return;
@@ -1600,6 +1836,7 @@ class r_CoopEnemies
             e.pendingWall = WO_ClockMs();
             e.pendingFrames = 0;
             e.earlyLogged = 0;
+            WatchTaskFx(e, task);
         }
     }
 
@@ -2153,7 +2390,7 @@ class r_CoopEnemies
         var moveAnim : name;
         var hitBy, projTpl, attackTarget, attackTask, attackAnimText, moveText, moveKind : string;
         var attackAnimAt, moveAt : float;
-        var animTime, moveAnimText : string;
+        var animTime, moveAnimText, cutText, attackFx : string;
         var attackCut : bool;
         var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, moveParam, projSeq, projIndex : int;
         var hp, yaw, projAngle, projSpeed, projRange : float;
@@ -2228,6 +2465,7 @@ class r_CoopEnemies
             }
             attackAnimAt = 0;
             attackCut = false;
+            attackFx = "";
             if(StrFindFirst(attackAnimText, "|") >= 0 && StrAfterFirst(attackAnimText, "|") != "")
             {
                 leaderNamesAnims = true;
@@ -2238,8 +2476,14 @@ class r_CoopEnemies
                 attackAnimText = StrBeforeFirst(attackAnimText, "|");
                 if(StrFindFirst(animTime, "|") >= 0)
                 {
-                    attackCut = StrAfterFirst(animTime, "|") == "1";
+                    cutText = StrAfterFirst(animTime, "|");
                     animTime = StrBeforeFirst(animTime, "|");
+                    if(StrFindFirst(cutText, "|") >= 0)
+                    {
+                        attackFx = StrAfterFirst(cutText, "|");
+                        cutText = StrBeforeFirst(cutText, "|");
+                    }
+                    attackCut = cutText == "1";
                 }
                 attackAnimAt = StringToFloat(animTime, 0);
             }
@@ -2306,6 +2550,7 @@ class r_CoopEnemies
             {
                 ApplyEnemy(netId, templates[tplIndex], app, pos, yaw, hp, alive, attackSeq, attackTask, attackAnimText, attackAnimAt, attackCut, hitSeq, hitBy, hitReaction,
                     moveSeq, moveAnim, moveKind, moveParam, moveAnimText, moveAt, attackTarget);
+                ApplyFx(netId, attackFx);
                 if(projSeq != 0 && projTpl != "")
                 {
                     ApplyProjectile(netId, projSeq, projTpl, projFrom, projTo, projAngle, projSpeed, projRange);
@@ -2328,7 +2573,7 @@ class r_CoopEnemies
 
     private function OnHurts(sender : string, count : int)
     {
-        var me, user : string;
+        var me, user, token : string;
         var listed : bool;
         var h : r_CoopHurt;
         var p : r_CoopPuppet;
@@ -2377,7 +2622,26 @@ class r_CoopEnemies
                     }
                     for(j = 0; j < effectCount; j += 1)
                     {
-                        h.effects.PushBack(StringToInt(WO_Str(effectsAt + 1 + j), 0));
+                        token = WO_Str(effectsAt + 1 + j);
+                        if(StrBeginsWith(token, "fx:"))
+                        {
+                            h.victimFx = WO_ToName(StrAfterFirst(token, ":"));
+                        }
+                        else if(StrFindFirst(token, ":") >= 0)
+                        {
+                            // type:duration:add:mul
+                            h.direct = true;
+                            h.effects.PushBack(StringToInt(StrBeforeFirst(token, ":"), 0));
+                            token = StrAfterFirst(token, ":");
+                            h.duration = StringToFloat(StrBeforeFirst(token, ":"), 0);
+                            token = StrAfterFirst(token, ":");
+                            h.valueAdd = StringToFloat(StrBeforeFirst(token, ":"), 0);
+                            h.valueMul = StringToFloat(StrAfterFirst(token, ":"), 0);
+                        }
+                        else
+                        {
+                            h.effects.PushBack(StringToInt(token, 0));
+                        }
                     }
 
                     // land it when this world's copy of the swing reaches the hit (immediately if this world
@@ -2436,6 +2700,12 @@ class r_CoopEnemies
             attacker = p.npc;
         }
 
+        if(h.direct)
+        {
+            ApplyDirectEffect(h, attacker);
+            return;
+        }
+
         action = new W3DamageAction in theGame.damageMgr;
         action.Initialize(attacker, thePlayer, theGame, "W3CoopHurt", (EHitReactionType)h.hitReaction, CPS_AttackPower, true, false, false, false);
         for(i = 0; i < h.types.Size(); i += 1)
@@ -2453,6 +2723,54 @@ class r_CoopEnemies
         delete action;
         hurtDamageTaken += MaxF(0, before - thePlayer.GetStat(BCS_Vitality));
         hurtsApplied += 1;
+        if(IsNameValid(h.victimFx))
+        {
+            thePlayer.PlayEffect(h.victimFx);
+            victimFxPlayed += 1;
+            LogSync("MW", h.netId, h.attackSeq, NameToString(h.victimFx));
+        }
+    }
+
+    // A puppet's own effect on someone else here (its aura, a task of its own): the leader's world decides, and its
+    // effects come forwarded (OnGhostEffect), so this one is dropped. Its effects on itself stay.
+    public function DropsPuppetEffect(victim : CActor, creator : CGameplayEntity) : bool
+    {
+        var npc : CNewNPC;
+
+        npc = (CNewNPC)creator;
+        if(wasHost || applyingHurt || !npc || npc == victim || !IsPuppet(npc))
+        {
+            return false;
+        }
+        puppetEffectsDropped += 1;
+        return true;
+    }
+
+    // an effect the leader's monster's task put straight on this player's ghost (OnGhostEffect), with its duration and
+    // value; this game's immunities decide whether it takes hold
+    private function ApplyDirectEffect(h : r_CoopHurt, attacker : CActor)
+    {
+        var params : SCustomEffectParams;
+        var result : EEffectInteract;
+
+        params.effectType = (EEffectType)h.effects[0];
+        params.creator = attacker;
+        if(attacker)
+        {
+            params.sourceName = attacker.GetName();
+        }
+        params.duration = h.duration;
+        params.effectValue.valueAdditive = h.valueAdd;
+        params.effectValue.valueMultiplicative = h.valueMul;
+        applyingHurt = true;
+        result = thePlayer.AddEffectCustom(params);
+        applyingHurt = false;
+        directEffectsApplied += 1;
+        if(result == EI_Pass || result == EI_Override || result == EI_Cumulate)
+        {
+            directEffectsHeld += 1;
+        }
+        LogSync("MD", h.netId, h.attackSeq, IntToString(h.effects[0]) + "/" + result);
     }
 
     private function ApplyEnemy(netId : int, tpl : string, app : string, pos : Vector, yaw : float, hp : float, alive : bool,
@@ -2914,6 +3232,78 @@ class r_CoopEnemies
         projectilesFired += 1;
     }
 
+    // The leader's monster's script effects playing now ("a,b", see PollFx): the puppet plays them too, again when one
+    // ended here first (a fugas replays its vomit every 0.25 s), and stops those the leader's stopped. "!hidden": it
+    // is invisible meanwhile.
+    private function ApplyFx(netId : int, text : string)
+    {
+        var p : r_CoopPuppet;
+        var listed : array<name>;
+        var piece : string;
+        var fx : name;
+        var hide : bool;
+        var i : int;
+
+        p = FindPuppet(netId);
+        if(!p || (text == "" && p.fxPlaying.Size() == 0 && !p.hidden))
+        {
+            return;
+        }
+        while(text != "" && p.alive)
+        {
+            piece = text;
+            text = "";
+            if(StrFindFirst(piece, ",") >= 0)
+            {
+                text = StrAfterFirst(piece, ",");
+                piece = StrBeforeFirst(piece, ",");
+            }
+            if(piece == "!hidden")
+            {
+                hide = true;
+            }
+            else
+            {
+                listed.PushBack(WO_ToName(piece));
+            }
+        }
+        if(hide != p.hidden)
+        {
+            p.hidden = hide;
+            p.npc.SetVisibility(!hide);
+            if(hide)
+            {
+                LogSync("MF", p.netId, p.attackSeq, "!hidden");
+            }
+            else
+            {
+                LogSync("MF", p.netId, p.attackSeq, "!shown");
+            }
+        }
+        for(i = p.fxPlaying.Size() - 1; i >= 0; i -= 1)
+        {
+            if(!listed.Contains(p.fxPlaying[i]))
+            {
+                p.npc.StopEffect(p.fxPlaying[i]);
+                p.fxPlaying.Erase(i);
+            }
+        }
+        for(i = 0; i < listed.Size(); i += 1)
+        {
+            fx = listed[i];
+            if(!p.fxPlaying.Contains(fx))
+            {
+                p.fxPlaying.PushBack(fx);
+                fxMirrored += 1;
+                LogSync("MF", p.netId, p.attackSeq, NameToString(fx));
+            }
+            if(!p.npc.IsEffectActive(fx))
+            {
+                p.npc.PlayEffect(fx);
+            }
+        }
+    }
+
     // A dodge, taunt or jump-back of the leader's monster: as for attacks, the puppet's own AI makes it, facing the same
     // player. The dodge warning repeats from 0.45 s on (once the combat tree runs) until a dodge animation starts
     // (OnPuppetMoveAnim). Where the move is a scripted task (CBTTaskDodge and the like), that task is the only one of
@@ -3088,6 +3478,13 @@ class r_CoopEnemies
         }
         offered = task.CoopAttackId();
         plain = StrBeforeFirst(offered, ":") == "CBTTaskAttack";
+        // no plain swing standing in once the leader's animation for it came to the slot as moves (Shaelmaar's digging
+        // around its tornado)
+        if(plain && offered != p.attackTask && p.slotMoveAt >= p.attackPlayedAt)
+        {
+            gateHeldByMove += 1;
+            return false;
+        }
         if(p.attackTask == "" || offered == p.attackTask || (plain && (now - p.attackFrom >= 0.6
             || StrBeforeFirst(p.attackTask, ":") == "CBTTaskAttack")))
         {
@@ -3712,8 +4109,9 @@ class r_CoopEnemies
         var rot : EulerAngles;
         var dist : float;
 
+        // (an invisible one goes straight there: it reappears where the leader's did)
         dist = VecDistance(p.npc.GetWorldPosition(), p.target);
-        if(dist > 12)
+        if(dist > 12 || (p.hidden && dist > 1))
         {
             rot = p.npc.GetWorldRotation();
             rot.Yaw = p.yaw;
@@ -3781,6 +4179,10 @@ class r_CoopEnemies
         }
         else
         {
+            if(p.hidden)
+            {
+                p.npc.SetVisibility(true);
+            }
             // a local twin picks its own targets again
             p.npc.SignalGameplayEvent('UnforceTarget');
             for(i = 0; i < p.addedNoFinishers.Size(); i += 1)
@@ -5093,6 +5495,94 @@ function OnDeactivate()
         coop.OnAttackTask(this, false);
     }
     wrappedMethod();
+}
+
+// its hit landed: the effect it plays on the victim then (vanilla plays it whenever one is set)
+@wrapMethod(CBTTaskAttack)
+function EventDamageInstigated()
+{
+    var coop : r_CoopEnemies;
+
+    wrappedMethod();
+    coop = CoopEnemiesHere();
+    if(coop && IsNameValid(fxOnDamageVictim))
+    {
+        coop.OnVictimFx(GetNPC(), GetCombatTarget(), fxOnDamageVictim);
+    }
+}
+
+// (every teleport task asks this first, also the decorator and swarm kinds)
+@wrapMethod(CBTTaskTeleport)
+function IsAvailable() : bool
+{
+    var coop : r_CoopEnemies;
+
+    coop = CoopEnemiesHere();
+    if(coop)
+    {
+        coop.WatchTeleportFx(this);
+    }
+    return wrappedMethod();
+}
+
+// a tree task playing an effect on its own monster (not on its target, weapon or a component)
+@wrapMethod(CBTTaskPlayEffect)
+function ProcessEffect()
+{
+    var coop : r_CoopEnemies;
+
+    wrappedMethod();
+    coop = CoopEnemiesHere();
+    if(coop && !onTarget && !onActionTarget && !onWeaponItem && !sfxInsteadOfVfx && !playEffectOnComponent)
+    {
+        coop.WatchNpcFx(GetNPC(), effectName);
+    }
+}
+
+// effects a task or aura puts straight on an actor, not through a hit (see r_CoopEnemies.OnGhostEffect and
+// DropsPuppetEffect)
+@wrapMethod(CActor)
+function AddEffectCustom(params : SCustomEffectParams) : EEffectInteract
+{
+    var coop : r_CoopEnemies;
+
+    coop = CoopEnemiesHere();
+    if(coop)
+    {
+        if(coop.DropsPuppetEffect(this, params.creator))
+        {
+            return EI_Deny;
+        }
+        if(HasTag('MPEntity'))
+        {
+            coop.OnGhostEffect(this, params);
+        }
+    }
+    return wrappedMethod(params);
+}
+
+@wrapMethod(CActor)
+function AddEffectDefault(effectType : EEffectType, creat : CGameplayEntity, optional srcName : string, optional signEffect : bool) : EEffectInteract
+{
+    var coop : r_CoopEnemies;
+    var params : SCustomEffectParams;
+
+    coop = CoopEnemiesHere();
+    if(coop)
+    {
+        if(coop.DropsPuppetEffect(this, creat))
+        {
+            return EI_Deny;
+        }
+        if(HasTag('MPEntity'))
+        {
+            params.effectType = effectType;
+            params.creator = creat;
+            params.sourceName = srcName;
+            coop.OnGhostEffect(this, params);
+        }
+    }
+    return wrappedMethod(effectType, creat, srcName, signEffect);
 }
 
 // these attack tasks decide their availability without CBTTaskAttack.IsAvailable
