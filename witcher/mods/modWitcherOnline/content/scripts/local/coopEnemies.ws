@@ -3248,8 +3248,9 @@ class r_CoopEnemies
         var template : string;
         var anims : array<name>;
         var i, k : int;
-        var err, best, second, time, bestTime : float;
+        var err, best, second, time, bestTime, size : float;
         var bestAnim : name;
+        var centre : Vector;
 
         template = e.npc.GetReadableName();
         for(i = 0; i < poseTemplates.Size(); i += 1)
@@ -3287,8 +3288,18 @@ class r_CoopEnemies
                 }
             }
         }
+        // the monster's size: its bones' distances from their centre, summed (the errors grow with it)
+        for(i = 0; i < e.poseSnap.Size(); i += 1)
+        {
+            centre += e.poseSnap[i];
+        }
+        centre = centre / (float)e.poseSnap.Size();
+        for(i = 0; i < e.poseSnap.Size(); i += 1)
+        {
+            size += VecDistance(e.poseSnap[i], centre);
+        }
         LogSync("LQ", e.netId, e.attackSeq, FloatToStringPrec(e.poseSnapTime, 2) + "/" + NameToString(bestAnim) + "/"
-            + FloatToStringPrec(best, 2) + "/" + FloatToStringPrec(second, 2) + "/" + anims.Size());
+            + FloatToStringPrec(best, 2) + "/" + FloatToStringPrec(second, 2) + "/" + anims.Size() + "/" + FloatToStringPrec(size, 2));
         if(!((best < 0.5 && second >= 2.5 * best) || second >= 4.5 * best) || IsNameValid(e.attackAnim))
         {
             return;
