@@ -791,7 +791,8 @@ class r_CoopEnemies
             e = FindHostEnemyByNpc(npc);
             if(!e)
             {
-                if(hostEnemies.Size() >= 24)
+                // (a member hides its own monsters the leader doesn't share; 24 drowners took 2.7 KB a snapshot)
+                if(hostEnemies.Size() >= 48)
                 {
                     continue;
                 }
