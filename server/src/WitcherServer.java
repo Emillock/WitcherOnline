@@ -444,7 +444,8 @@ public class WitcherServer
 
     private static void receiveLoop(DatagramSocket socket)
     {
-        byte[] buffer = new byte[8192];
+        // a whole UDP datagram: a busy fight's co-op snapshot passes 8 KB
+        byte[] buffer = new byte[65536];
 
         while (running.get())
         {

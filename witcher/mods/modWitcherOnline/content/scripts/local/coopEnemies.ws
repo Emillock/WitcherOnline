@@ -421,6 +421,7 @@ class r_CoopEnemies
     public var ownShownText : string;       // this player's effects that show, as last sent with the horse
     public var ghostEffectsShown : int;     // other players' effects put on their characters here
     public var ghostEffectsEnded : int;
+    public var hostSendBytesMax : int;      // leader: its largest snapshot so far
 
     // this player's bombs and shots of the last 1.5 s (SendThrows), and the last of each other player's played here
     private var throwSeq : int;
@@ -890,8 +891,10 @@ class r_CoopEnemies
             }
         }
 
-        WO_Send("coop en " + epoch + " " + hostSeq + " " + WO_CurrentAreaCode() + " " + AcksText() + " " + TemplatesText(templates)
-            + " " + hostEnemies.Size() + body);
+        body = "coop en " + epoch + " " + hostSeq + " " + WO_CurrentAreaCode() + " " + AcksText() + " " + TemplatesText(templates)
+            + " " + hostEnemies.Size() + body;
+        hostSendBytesMax = Max(hostSendBytesMax, StrLen(body));
+        WO_Send(body);
     }
 
     // "task|anim|time|cut|fx" (CoopAttackId, "" without a task; the animation as soon as it is known, how far into it

@@ -981,7 +981,8 @@ static void SenderThread()
 
 static void ReceiverThread()
 {
-	std::vector<char> data(8192);
+	// a whole UDP datagram: a busy fight's co-op snapshot passes 8 KB
+	std::vector<char> data(65536);
 
 	while (g_run.load())
 	{
