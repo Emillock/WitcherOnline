@@ -70,6 +70,8 @@ statemachine class r_RemotePlayer
     public var parkedYaw : float;
     public var parkedAt : float;
     public var dismountedAt : float;
+    public var shownEffects : array<int>;  // this player's effects that show, put on their character here (coopEnemies)
+    public var shownOn : CActor;           // ...that character (Witcher Online makes a new one when it comes near again)
     public var aimingCrossbow : bool;
     public var lastAimingCrossbow : bool;
     public var lastMovement : bool;

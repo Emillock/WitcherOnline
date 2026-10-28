@@ -418,6 +418,9 @@ class r_CoopEnemies
     private var parkedSentAt : float;
     public var parkedSent : int;
     public var parkedHeard : int;
+    public var ownShownText : string;       // this player's effects that show, as last sent with the horse
+    public var ghostEffectsShown : int;     // other players' effects put on their characters here
+    public var ghostEffectsEnded : int;
 
     // this player's bombs and shots of the last 1.5 s (SendThrows), and the last of each other player's played here
     private var throwSeq : int;
@@ -1244,6 +1247,8 @@ class r_CoopEnemies
         projectilesSeen = 0;
         hitEffectsSent = 0;
         ownEffectsSent = 0;
+        ghostEffectsShown = 0;
+        ghostEffectsEnded = 0;
         hurtsDroppedDead = 0;
         hitEffectsApplied = 0;
         hitEffectsHeld = 0;
@@ -2649,29 +2654,132 @@ class r_CoopEnemies
     }
 
     // This player's horse standing where it was left (not ridden, within 100 m): other players' games keep Witcher
-    // Online's horse for this player there (by itself it showed that horse only while ridden). "hz seq 1 x y z yaw", or
-    // "hz seq 0"; at once when it changed, else every 2 s (any player, in a party or not). The count makes each one new:
-    // the client passes a channel's message on only when it changed.
+    // Online's horse for this player there (by itself it showed that horse only while ridden). With it, this player's
+    // own effects that show (OwnShownEffects), for their character in the others' games. "hz seq 1 x y z yaw effects",
+    // or "hz seq 0 0 0 0 0 effects"; effects at once when they changed, the horse within 0.3 s, else every 2 s (any
+    // player, in a party or not). The count makes each one new: the client passes a channel's message on only when it
+    // changed.
     private function SendParkedHorse(now : float)
     {
         var horse : CNewNPC;
         var pos : Vector;
-        var text : string;
+        var text, effects : string;
 
         horse = thePlayer.GetHorseWithInventory();
-        text = "0";
+        text = "0 0 0 0 0";
         if(horse && !thePlayer.IsUsingHorse() && VecDistance(horse.GetWorldPosition(), thePlayer.GetWorldPosition()) < 100)
         {
             pos = horse.GetWorldPosition();
             text = "1 " + FloatToStringPrec(pos.X, 2) + " " + FloatToStringPrec(pos.Y, 2) + " " + FloatToStringPrec(pos.Z, 2)
                 + " " + FloatToStringPrec(horse.GetHeading(), 1);
         }
-        if((text != parkedText && now - parkedSentAt >= 0.3) || now - parkedSentAt >= 2.0)
+        effects = OwnShownEffects();
+        if((effects != ownShownText && now - parkedSentAt >= 0.1) || (text != parkedText && now - parkedSentAt >= 0.3)
+            || now - parkedSentAt >= 2.0)
         {
             parkedText = text;
+            ownShownText = effects;
             parkedSentAt = now;
             parkedSent += 1;
-            WO_Send("coop hz " + parkedSent + " " + text);
+            WO_Send("coop hz " + parkedSent + " " + text + " " + effects);
+        }
+    }
+
+    // this player's effects that show (CoopShowsEffect), "type:seconds,..." or "-"
+    private function OwnShownEffects() : string
+    {
+        var buffs : array<CBaseGameplayEffect>;
+        var text, piece : string;
+        var i : int;
+
+        text = "";
+        buffs = thePlayer.GetBuffs();
+        for(i = 0; i < buffs.Size(); i += 1)
+        {
+            if(!buffs[i] || !CoopShowsEffect(buffs[i].GetEffectType()))
+            {
+                continue;
+            }
+            piece = IntToString((int)buffs[i].GetEffectType()) + ":";
+            if(StrFindFirst("," + text, "," + piece) >= 0)
+            {
+                continue;
+            }
+            if(text != "")
+            {
+                text += ",";
+            }
+            text += piece + RoundF(buffs[i].GetInitialDurationAfterResists());
+        }
+        if(text == "")
+        {
+            return "-";
+        }
+        return text;
+    }
+
+    // Another player's effects that show (OwnShownEffects) on their character here, as long as they last there; taken
+    // off (not forced: a knockdown ends as it would) when they ended there.
+    private function ApplyGhostEffects(p : r_RemotePlayer, text : string)
+    {
+        var params : SCustomEffectParams;
+        var effects : array<int>;
+        var lengths : array<float>;
+        var piece : string;
+        var i : int;
+
+        if(!p.ghost)
+        {
+            p.shownEffects.Clear();
+            return;
+        }
+        if(p.shownOn != p.ghost)
+        {
+            p.shownEffects.Clear();
+            p.shownOn = p.ghost;
+        }
+        while(text != "" && text != "-")
+        {
+            piece = text;
+            text = "";
+            if(StrFindFirst(piece, ",") >= 0)
+            {
+                text = StrAfterFirst(piece, ",");
+                piece = StrBeforeFirst(piece, ",");
+            }
+            effects.PushBack(StringToInt(StrBeforeFirst(piece, ":"), 0));
+            lengths.PushBack(StringToFloat(StrAfterFirst(piece, ":"), 0));
+        }
+        for(i = p.shownEffects.Size() - 1; i >= 0; i -= 1)
+        {
+            if(!effects.Contains(p.shownEffects[i]))
+            {
+                p.ghost.RemoveBuff((EEffectType)p.shownEffects[i], false, "W3CoopShown");
+                p.shownEffects.Erase(i);
+                ghostEffectsEnded += 1;
+            }
+        }
+        for(i = 0; i < effects.Size(); i += 1)
+        {
+            if(effects[i] <= 0 || p.shownEffects.Contains(effects[i]))
+            {
+                continue;
+            }
+            p.shownEffects.PushBack(effects[i]);
+            ghostEffectsShown += 1;
+            if(p.ghost.HasBuff((EEffectType)effects[i]))
+            {
+                continue;
+            }
+            params.effectType = (EEffectType)effects[i];
+            params.creator = p.ghost;
+            params.sourceName = "W3CoopShown";
+            params.duration = lengths[i] + 1;
+            if(lengths[i] < 0)
+            {
+                params.duration = 30;
+            }
+            p.ghost.AddEffectCustom(params);
         }
     }
 
@@ -2693,6 +2801,10 @@ class r_CoopEnemies
             p.parkedYaw = StringToFloat(WO_Str(6), 0);
         }
         p.parkedAt = theGame.GetEngineTimeAsSeconds();
+        if(WO_Str(7) != "")
+        {
+            ApplyGhostEffects(p, WO_Str(7));
+        }
     }
 
     // This player threw a bomb ("b", the item) or shot a projectile ("p", its template: a crossbow bolt): the other
