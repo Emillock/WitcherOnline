@@ -39,6 +39,7 @@ class r_CoopHostEnemy
     public var attackCut : bool;
     public var hitAnimTime : float;  // animation time of the current attack's hit
     public var hitSeq : int;         // hits it took, for members to replay the reaction
+    public var wasInHitAnim : bool;  // ...and whether it was in a hit animation last frame (tests: LR)
     public var hitBy : string;
     public var hitReaction : int;
     public var moveSeq : int;        // its other animated moves (dodges, taunts, ...), for members to replay
@@ -969,6 +970,12 @@ class r_CoopEnemies
             {
                 continue;
             }
+            // (tests: when it enters a hit animation, LR, to compare with its copies' MR)
+            if(e.npc.IsInHitAnim() && !e.wasInHitAnim)
+            {
+                LogSync("LR", e.netId, e.hitSeq, "");
+            }
+            e.wasInHitAnim = e.npc.IsInHitAnim();
             text = "";
             if(e.deadAt < 0 && !e.npc.GetVisibility())
             {
@@ -4760,6 +4767,7 @@ class r_CoopEnemies
             if(p.npc.IsInHitAnim() && !p.wasInHitAnim)
             {
                 hitAnimsSeen += 1;
+                LogSync("MR", p.netId, p.hitSeq, "");
             }
             p.wasInHitAnim = p.npc.IsInHitAnim();
             SlotAttackCheck(p, now);
