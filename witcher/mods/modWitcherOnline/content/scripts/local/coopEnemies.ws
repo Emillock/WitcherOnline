@@ -1485,7 +1485,7 @@ class r_CoopEnemies
         }
 
         // its reaction as the member's hit had it (a heavy blow staggers, a burning tick none); light from an older member
-        if(reaction < 0)
+        if(reaction < 0 || reaction > (int)EHRT_LightClose)
         {
             reaction = (int)EHRT_Light;
         }
@@ -3981,7 +3981,8 @@ class r_CoopEnemies
         var i : int;
 
         p = FindPuppet(netId);
-        if(!p || (text == "" && p.fxPlaying.Size() == 0 && !p.hidden && p.effectsShown.Size() == 0))
+        // (with a leader that lists its effects, an empty list still counts: this world's own effects on the puppet go)
+        if(!p || (text == "" && p.fxPlaying.Size() == 0 && !p.hidden && p.effectsShown.Size() == 0 && !leaderListsEffects))
         {
             return;
         }
