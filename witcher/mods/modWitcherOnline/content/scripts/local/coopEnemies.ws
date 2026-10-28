@@ -527,6 +527,7 @@ class r_CoopEnemies
     public var projectilesSeen : int;
     public var hitEffectsSent : int;     // member: effects its hits carried
     public var ownEffectsSent : int;     // member: effects it put straight on puppets (Axii, Yrden), sent alone
+    public var hurtsDroppedDead : int;   // leader: hurts not sent, their member dead; member: hurts dropped while dead
     private var ownEffectKeys : array<string>;
     private var ownEffectAts : array<float>;
     public var processingDamage : int;   // inside a damage action (its effects go with its hit)
@@ -1243,6 +1244,7 @@ class r_CoopEnemies
         projectilesSeen = 0;
         hitEffectsSent = 0;
         ownEffectsSent = 0;
+        hurtsDroppedDead = 0;
         hitEffectsApplied = 0;
         hitEffectsHeld = 0;
         signVisualsPlayed = 0;
@@ -1554,7 +1556,16 @@ class r_CoopEnemies
         {
             if(players[i] && players[i].ghost && IsMyPartyMember(players[i].username))
             {
-                wanted.PushBack(players[i].ghost);
+                // a dead member's character is left alone until it is back (its game shows the death screen, then
+                // loads a save)
+                if(players[i].isAlive)
+                {
+                    wanted.PushBack(players[i].ghost);
+                }
+                else
+                {
+                    DropHurtsOf(players[i].username);
+                }
             }
         }
 
@@ -1726,6 +1737,11 @@ class r_CoopEnemies
 
     private function AddHurt(h : r_CoopHurt, user : string, e : r_CoopHostEnemy)
     {
+        if(!UserAlive(user))
+        {
+            hurtsDroppedDead += 1;
+            return;
+        }
         h.user = user;
         h.seq = nextHurtSeq;
         h.netId = e.netId;
@@ -1808,6 +1824,38 @@ class r_CoopEnemies
                     victimFxSent += 1;
                 }
                 return;
+            }
+        }
+    }
+
+    // a player's last word on being alive (true for one this game doesn't know)
+    private function UserAlive(user : string) : bool
+    {
+        var players : array<r_RemotePlayer>;
+        var i : int;
+
+        players = theGame.r_getMultiplayerClient().getPlayers();
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(players[i] && players[i].username == user)
+            {
+                return players[i].isAlive;
+            }
+        }
+        return true;
+    }
+
+    // hurts still waiting for a member who died: they would land after its respawn
+    private function DropHurtsOf(user : string)
+    {
+        var i : int;
+
+        for(i = hurts.Size() - 1; i >= 0; i -= 1)
+        {
+            if(hurts[i].user == user)
+            {
+                hurts.Erase(i);
+                hurtsDroppedDead += 1;
             }
         }
     }
@@ -3072,7 +3120,14 @@ class r_CoopEnemies
                     {
                         h.due = MaxF(now, p.attackPlayedAt + MinF(h.hitAnimTime, 1.5));
                     }
-                    delayedHurts.PushBack(h);
+                    if(thePlayer.IsAlive())
+                    {
+                        delayedHurts.PushBack(h);
+                    }
+                    else
+                    {
+                        hurtsDroppedDead += 1;
+                    }
                     hurtAck = seq;
                 }
             }
@@ -3084,6 +3139,12 @@ class r_CoopEnemies
     private function ApplyDueHurts(now : float)
     {
         var i : int;
+
+        if(!thePlayer.IsAlive() && delayedHurts.Size() > 0)
+        {
+            hurtsDroppedDead += delayedHurts.Size();
+            delayedHurts.Clear();
+        }
 
         for(i = 0; i < delayedHurts.Size(); i += 1)
         {
