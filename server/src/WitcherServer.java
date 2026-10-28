@@ -50,7 +50,7 @@ public class WitcherServer
     private static final long PLAYER_TIMEOUT_NANOS = 5_000_000_000L;
     private static final long USERNAME_HOLD_NANOS = 60_000_000_000L;
     private static final long BROADCAST_HEARTBEAT_NANOS = 60_000_000_000L;
-    private static final int MAX_COOP_CHANNELS = 8;  // en, hit, hurt, jr, fx, hz (a horse where it was left) and room
+    private static final int MAX_COOP_CHANNELS = 8;  // en, hit, hurt, jr, fx, hz (a horse where it was left), pt (bombs and shots) and room
     private static final long COOP_REPEAT_NANOS = 100_000_000L;
 
     private static final int DEFAULT_PORT = 40000;

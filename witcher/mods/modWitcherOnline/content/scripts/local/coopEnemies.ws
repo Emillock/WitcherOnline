@@ -134,6 +134,7 @@ class r_CoopPuppet
     public var moveAnimName : name;
     public var moveRetargets : int;
     public var fxPlaying : array<name>;  // the leader's monster's script effects, played here too (ApplyFx)
+    public var effectsShown : array<int>;  // ...and its status effects that show, listed (ApplyShownEffects)
     public var hidden : bool;            // ...and hidden while it is (a wraith between its vanish and reappearance)
     public var graphAt : float;          // the leader's 3-state attack raised on its graph then (GraphAttack)
     public var graphEnded : bool;
@@ -319,6 +320,7 @@ class r_CoopHit
     public var netId : int;
     public var frac : float;
     public var effects : array<int>;  // what the hit applies (burning, knockdown, ...), applied by the leader
+    public var lengths : array<float>;  // ...how long, for one put on without a hit (0: the game's own length)
 }
 
 // a leader monster's hit on a member's ghost: raw damage before the ghost's own stats
@@ -417,6 +419,21 @@ class r_CoopEnemies
     public var parkedSent : int;
     public var parkedHeard : int;
 
+    // this player's bombs and shots of the last 1.5 s (SendThrows), and the last of each other player's played here
+    private var throwSeq : int;
+    private var throwAts : array<float>;
+    private var throwTexts : array<string>;
+    private var throwUsers : array<string>;
+    private var throwEpochs : array<int>;
+    private var throwLastSeqs : array<int>;
+    public var throwsSent : int;            // this player's bombs and shots sent
+    public var lastThrow : string;
+    public var throwCopies : int;           // other players' thrown or shot here from their character
+    public var throwCopyFailures : int;
+    public var throwDamageDropped : int;    // ...their hits here, dropped
+    public var bombHitsSent : int;          // member: hits of its bombs on puppets, of hitsSent
+    public var boltHitsSent : int;          // member: ...of its crossbow bolts
+
     // set while this game changes a puppet itself, so the damage hook lets it through
     public var applyingHostState : bool;
 
@@ -509,6 +526,10 @@ class r_CoopEnemies
     public var puppetOwnMoves : int;      // member: dodges, taunts, jump-backs a puppet started by itself (should not happen)
     public var projectilesSeen : int;
     public var hitEffectsSent : int;     // member: effects its hits carried
+    public var ownEffectsSent : int;     // member: effects it put straight on puppets (Axii, Yrden), sent alone
+    private var ownEffectKeys : array<string>;
+    private var ownEffectAts : array<float>;
+    public var processingDamage : int;   // inside a damage action (its effects go with its hit)
     public var hitEffectsApplied : int;  // leader: effects of members' hits applied to its monsters
     public var hitEffectsHeld : int;     // leader: of those, ones the monster had right after
     public var signVisualsPlayed : int;  // other players' sign visuals shown at their copies (remotePlayer.ws)
@@ -541,6 +562,10 @@ class r_CoopEnemies
     public var fxChanges : int;             // leader: changes of its monsters' script effects (fxActive)
     public var fxMirrored : int;            // member: of those, effects started on puppets
     public var lastFx : string;
+    public var effectsListed : int;         // leader: status effects of its monsters that show (ShownEffects)
+    public var effectsMirrored : int;       // member: ...listed for puppets
+    public var effectsMirrorHeld : int;     // member: ...of them on the puppet then
+    public var effectsMirrorEnded : int;    // member: ...taken off again when they ended on the leader's monster
     public var graphAttacksSeen : int;      // leader: 3-state attacks sent with their graph event
     public var graphAttacksPlayed : int;    // member: ...raised on puppets' graphs
     public var graphAttacksRefused : int;
@@ -629,6 +654,7 @@ class r_CoopEnemies
         now = theGame.GetEngineTimeAsSeconds();
         RetryFactsBaseline(now);
         SendParkedHorse(now);
+        ClearThrows(now);
         role = GetRole();
 
         if(role == 1)
@@ -945,6 +971,10 @@ class r_CoopEnemies
                     text += NameToString(e.fxWatch[j]);
                 }
             }
+            if(e.deadAt < 0)
+            {
+                text = ShownEffects(e, text);
+            }
             if(text != e.fxActive)
             {
                 e.fxActive = text;
@@ -955,6 +985,39 @@ class r_CoopEnemies
             }
         }
         return changed;
+    }
+
+    // A shared monster's status effects that show on it (CoopShowsEffect: burning, frozen, knocked down, ...) for its
+    // copies, after its script effects: "!e<type>:<seconds>" each (EEffectType; its length as applied, -1 without an end)
+    private function ShownEffects(e : r_CoopHostEnemy, text : string) : string
+    {
+        var buffs : array<CBaseGameplayEffect>;
+        var piece : string;
+        var i : int;
+
+        buffs = e.npc.GetBuffs();
+        for(i = 0; i < buffs.Size(); i += 1)
+        {
+            if(!buffs[i] || !CoopShowsEffect(buffs[i].GetEffectType()))
+            {
+                continue;
+            }
+            piece = "!e" + (int)buffs[i].GetEffectType() + ":";
+            if(StrFindFirst(text, piece) >= 0)
+            {
+                continue;
+            }
+            if(StrFindFirst(e.fxActive, piece) < 0)
+            {
+                effectsListed += 1;
+            }
+            if(text != "")
+            {
+                text += ",";
+            }
+            text += piece + RoundF(buffs[i].GetInitialDurationAfterResists());
+        }
+        return text;
     }
 
     // A 3-state attack's end phase (a fugas' vomit, after its loop): its task sets the AttackEnd variable, with the end's
@@ -1179,6 +1242,7 @@ class r_CoopEnemies
         puppetOwnMoves = 0;
         projectilesSeen = 0;
         hitEffectsSent = 0;
+        ownEffectsSent = 0;
         hitEffectsApplied = 0;
         hitEffectsHeld = 0;
         signVisualsPlayed = 0;
@@ -1210,6 +1274,16 @@ class r_CoopEnemies
         fxChanges = 0;
         fxMirrored = 0;
         lastFx = "";
+        throwsSent = 0;
+        throwCopies = 0;
+        throwCopyFailures = 0;
+        throwDamageDropped = 0;
+        bombHitsSent = 0;
+        boltHitsSent = 0;
+        effectsListed = 0;
+        effectsMirrored = 0;
+        effectsMirrorHeld = 0;
+        effectsMirrorEnded = 0;
         graphAttacksSeen = 0;
         graphAttacksPlayed = 0;
         graphAttacksRefused = 0;
@@ -1303,6 +1377,8 @@ class r_CoopEnemies
         var client : r_MultiplayerClient;
         var ack : r_CoopAck;
         var effects : array<int>;
+        var lengths : array<float>;
+        var piece : string;
         var n, i, j, idx, seq, effectCount : int;
 
         client = theGame.r_getMultiplayerClient();
@@ -1315,26 +1391,37 @@ class r_CoopEnemies
         ack = FindAck(sender, StringToInt(WO_Str(3), 0));
         n = StringToInt(WO_Str(5), 0);
         idx = 6;
-        // "seq netId frac effectCount {effect}" per hit
+        // "seq netId frac effectCount {effect}" per hit; an effect put on without a hit is "effect:seconds"
         for(i = 0; i < n && idx + 3 < count; i += 1)
         {
             seq = StringToInt(WO_Str(idx), 0);
             effectCount = StringToInt(WO_Str(idx + 3), 0);
             effects.Clear();
+            lengths.Clear();
             for(j = 0; j < effectCount && idx + 4 + j < count; j += 1)
             {
-                effects.PushBack(StringToInt(WO_Str(idx + 4 + j), 0));
+                piece = WO_Str(idx + 4 + j);
+                if(StrFindFirst(piece, ":") >= 0)
+                {
+                    effects.PushBack(StringToInt(StrBeforeFirst(piece, ":"), 0));
+                    lengths.PushBack(StringToFloat(StrAfterFirst(piece, ":"), 0));
+                }
+                else
+                {
+                    effects.PushBack(StringToInt(piece, 0));
+                    lengths.PushBack(0);
+                }
             }
             if(seq > ack.lastSeq)
             {
-                ApplyHit(sender, StringToInt(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0), effects);
+                ApplyHit(sender, StringToInt(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0), effects, lengths);
                 ack.lastSeq = seq;
             }
             idx += 4 + effectCount;
         }
     }
 
-    private function ApplyHit(sender : string, netId : int, frac : float, effects : array<int>)
+    private function ApplyHit(sender : string, netId : int, frac : float, effects : array<int>, lengths : array<float>)
     {
         var e : r_CoopHostEnemy;
         var action : W3DamageAction;
@@ -1371,7 +1458,14 @@ class r_CoopEnemies
         // its own resistances decide whether they take hold; processed also without damage, as Aard's are
         for(i = 0; i < effects.Size(); i += 1)
         {
-            action.AddEffectInfo((EEffectType)effects[i]);
+            if(i < lengths.Size() && lengths[i] != 0)
+            {
+                action.AddEffectInfo((EEffectType)effects[i], lengths[i]);
+            }
+            else
+            {
+                action.AddEffectInfo((EEffectType)effects[i]);
+            }
         }
         if(effects.Size() > 0)
         {
@@ -1557,6 +1651,12 @@ class r_CoopEnemies
         // a member's puppets only hurt it through the leader's hits
         if((CNewNPC)attacker && IsPuppet((CNewNPC)attacker) && act.GetBuffSourceName() != "W3CoopHurt")
         {
+            return true;
+        }
+        // other players' bombs and shots only show here (ReplayThrow): their hits come as their claims
+        if(attacker && attacker.HasTag('MPEntity') && ((CThrowable)act.causer || (W3AdvancedProjectile)act.causer))
+        {
+            throwDamageDropped += 1;
             return true;
         }
 
@@ -2494,6 +2594,10 @@ class r_CoopEnemies
         {
             OnParkedHorse(sender);
         }
+        else if(WO_Str(0) == "pt")
+        {
+            OnThrows(sender, count);
+        }
     }
 
     // This player's horse standing where it was left (not ridden, within 100 m): other players' games keep Witcher
@@ -2541,6 +2645,154 @@ class r_CoopEnemies
             p.parkedYaw = StringToFloat(WO_Str(6), 0);
         }
         p.parkedAt = theGame.GetEngineTimeAsSeconds();
+    }
+
+    // This player threw a bomb ("b", the item) or shot a projectile ("p", its template: a crossbow bolt): the other
+    // players' games throw or shoot a harmless copy from this player's character there (ReplayThrow); its hits on
+    // shared monsters reach the leader as this player's claims. "pt epoch n {seq kind what fromX fromY fromZ toX toY toZ
+    // angle speed range}": those of the last 1.5 s, sent at once (two in one frame would leave only the last).
+    public function OnOwnThrow(kind : string, what : string, from : Vector, to : Vector, angle : float, speed : float, range : float)
+    {
+        if(what == "")
+        {
+            return;
+        }
+        EnsureIds();
+        throwSeq += 1;
+        throwAts.PushBack(theGame.GetEngineTimeAsSeconds());
+        throwTexts.PushBack(throwSeq + " " + kind + " " + CoopEncode(what)
+            + " " + FloatToStringPrec(from.X, 2) + " " + FloatToStringPrec(from.Y, 2) + " " + FloatToStringPrec(from.Z, 2)
+            + " " + FloatToStringPrec(to.X, 2) + " " + FloatToStringPrec(to.Y, 2) + " " + FloatToStringPrec(to.Z, 2)
+            + " " + FloatToStringPrec(angle, 1) + " " + FloatToStringPrec(speed, 1) + " " + FloatToStringPrec(range, 1));
+        throwsSent += 1;
+        lastThrow = throwTexts[throwTexts.Size() - 1];
+        ClearThrows(throwAts[throwAts.Size() - 1]);
+        SendThrows();
+    }
+
+    private function SendThrows()
+    {
+        var text : string;
+        var i : int;
+
+        text = "";
+        for(i = 0; i < throwTexts.Size(); i += 1)
+        {
+            text += " " + throwTexts[i];
+        }
+        WO_Send("coop pt " + epoch + " " + throwTexts.Size() + text);
+    }
+
+    // throws older than 1.5 s leave the message; once none is left it goes out empty, so that a stale one is never
+    // played for a player who comes near later
+    private function ClearThrows(now : float)
+    {
+        var dropped : bool;
+
+        while(throwAts.Size() > 0 && now - throwAts[0] > 1.5)
+        {
+            throwAts.Erase(0);
+            throwTexts.Erase(0);
+            dropped = true;
+        }
+        if(dropped && throwTexts.Size() == 0)
+        {
+            SendThrows();
+        }
+    }
+
+    private function OnThrows(sender : string, count : int)
+    {
+        var who, n, i, idx, seq, last, senderEpoch : int;
+        var from, to : Vector;
+        var ghost : CActor;
+
+        senderEpoch = StringToInt(WO_Str(1), 0);
+        n = StringToInt(WO_Str(2), 0);
+        who = throwUsers.FindFirst(sender);
+        if(who < 0)
+        {
+            throwUsers.PushBack(sender);
+            throwEpochs.PushBack(senderEpoch);
+            throwLastSeqs.PushBack(0);
+            who = throwUsers.Size() - 1;
+        }
+        if(throwEpochs[who] != senderEpoch)
+        {
+            throwEpochs[who] = senderEpoch;
+            throwLastSeqs[who] = 0;
+        }
+        last = throwLastSeqs[who];
+        ghost = GhostOf(sender);
+        idx = 3;
+        for(i = 0; i < n && idx + 11 < count; i += 1)
+        {
+            seq = StringToInt(WO_Str(idx), 0);
+            if(seq > last)
+            {
+                throwLastSeqs[who] = Max(throwLastSeqs[who], seq);
+                from = Vector(StringToFloat(WO_Str(idx + 3), 0), StringToFloat(WO_Str(idx + 4), 0), StringToFloat(WO_Str(idx + 5), 0));
+                to = Vector(StringToFloat(WO_Str(idx + 6), 0), StringToFloat(WO_Str(idx + 7), 0), StringToFloat(WO_Str(idx + 8), 0));
+                if(ghost && VecDistance(ghost.GetWorldPosition(), thePlayer.GetWorldPosition()) < 80)
+                {
+                    ReplayThrow(ghost, WO_Str(idx + 1), CoopDecode(WO_Str(idx + 2)), from, to, StringToFloat(WO_Str(idx + 9), 0),
+                        StringToFloat(WO_Str(idx + 10), 0), StringToFloat(WO_Str(idx + 11), 0));
+                }
+            }
+            idx += 12;
+        }
+    }
+
+    // a copy of another player's bomb or shot, thrown by their character here; its damage is dropped (OnBeforeDamage)
+    private function ReplayThrow(ghost : CActor, kind : string, what : string, from : Vector, to : Vector, angle : float, speed : float,
+        range : float)
+    {
+        var template : CEntityTemplate;
+        var proj : W3AdvancedProjectile;
+        var bomb : W3Petard;
+        var ids : array<SItemUniqueId>;
+        var inv : CInventoryComponent;
+
+        if(kind == "b")
+        {
+            inv = ghost.GetInventory();
+            if(inv)
+            {
+                ids = inv.AddAnItem(WO_ToName(what), 1, true, true);
+            }
+            if(ids.Size() > 0)
+            {
+                bomb = (W3Petard)inv.GetDeploymentItemEntity(ids[0], from, VecToRotation(to - from));
+            }
+            if(!bomb)
+            {
+                throwCopyFailures += 1;
+                lastError = "bomb '" + what + "' could not be thrown";
+                return;
+            }
+            bomb.Initialize(ghost, ids[0]);
+            bomb.ThrowProjectile(to);
+        }
+        else
+        {
+            template = (CEntityTemplate)LoadResource(what, true);
+            if(template)
+            {
+                proj = (W3AdvancedProjectile)theGame.CreateEntity(template, from, VecToRotation(to - from));
+            }
+            if(!proj)
+            {
+                throwCopyFailures += 1;
+                lastError = "shot '" + what + "' could not be fired";
+                return;
+            }
+            proj.Init(ghost);
+            proj.projDMG = 0;
+            proj.projSilverDMG = 0;
+            proj.projEfect = EET_Undefined;
+            proj.ShootProjectileAtPosition(angle, speed, to, range);
+        }
+        throwCopies += 1;
     }
 
     private function OnSnapshot(sender : string, count : int)
@@ -3503,13 +3755,15 @@ class r_CoopEnemies
     {
         var p : r_CoopPuppet;
         var listed : array<name>;
+        var effects : array<int>;
+        var lengths : array<float>;
         var piece : string;
         var fx : name;
         var hide : bool;
         var i : int;
 
         p = FindPuppet(netId);
-        if(!p || (text == "" && p.fxPlaying.Size() == 0 && !p.hidden))
+        if(!p || (text == "" && p.fxPlaying.Size() == 0 && !p.hidden && p.effectsShown.Size() == 0))
         {
             return;
         }
@@ -3526,11 +3780,18 @@ class r_CoopEnemies
             {
                 hide = true;
             }
+            else if(StrBeginsWith(piece, "!e"))
+            {
+                piece = StrAfterFirst(piece, "!e");
+                effects.PushBack(StringToInt(StrBeforeFirst(piece, ":"), 0));
+                lengths.PushBack(StringToFloat(StrAfterFirst(piece, ":"), 0));
+            }
             else
             {
                 listed.PushBack(WO_ToName(piece));
             }
         }
+        ApplyShownEffects(p, effects, lengths);
         if(hide != p.hidden)
         {
             p.hidden = hide;
@@ -3565,6 +3826,61 @@ class r_CoopEnemies
             if(!p.npc.IsEffectActive(fx))
             {
                 p.npc.PlayEffect(fx);
+            }
+        }
+    }
+
+    // The leader's monster's status effects that show (ShownEffects): the puppet gets each while it lasts there, as long
+    // as there (a knockdown ends as it would), and loses it when it ended there (as when it runs out: a knockdown's
+    // animation finishes). One this player's own hit put on it stays as it is. Their damage over time is dropped here
+    // like any not this player's (OnTakeDamage).
+    private function ApplyShownEffects(p : r_CoopPuppet, effects : array<int>, lengths : array<float>)
+    {
+        var params : SCustomEffectParams;
+        var i : int;
+
+        for(i = p.effectsShown.Size() - 1; i >= 0; i -= 1)
+        {
+            if(!effects.Contains(p.effectsShown[i]))
+            {
+                p.npc.RemoveBuff((EEffectType)p.effectsShown[i], false, "W3CoopShown");
+                LogSync("ME", p.netId, p.attackSeq, "-" + p.effectsShown[i]);
+                p.effectsShown.Erase(i);
+                effectsMirrorEnded += 1;
+            }
+        }
+        for(i = 0; i < effects.Size(); i += 1)
+        {
+            if(p.effectsShown.Contains(effects[i]))
+            {
+                continue;
+            }
+            p.effectsShown.PushBack(effects[i]);
+            effectsMirrored += 1;
+            if(!p.npc.HasBuff((EEffectType)effects[i]))
+            {
+                if(IsCriticalEffectType((EEffectType)effects[i]))
+                {
+                    StopSlotAttack(p);  // a swing on its slot would hide its animation
+                }
+                params.effectType = (EEffectType)effects[i];
+                params.creator = p.npc;
+                params.sourceName = "W3CoopShown";
+                params.duration = lengths[i] + 1;
+                if(lengths[i] < 0)
+                {
+                    params.duration = 30;
+                }
+                p.npc.AddEffectCustom(params);
+            }
+            if(p.npc.HasBuff((EEffectType)effects[i]))
+            {
+                effectsMirrorHeld += 1;
+                LogSync("ME", p.netId, p.attackSeq, IntToString(effects[i]));
+            }
+            else
+            {
+                LogSync("ME", p.netId, p.attackSeq, "!" + effects[i]);
             }
         }
     }
@@ -4457,6 +4773,11 @@ class r_CoopEnemies
         {
             EndGraphAttack(p, -1);  // (a twin's graph would stay in the leader's attack's loop)
         }
+        if(p.effectsShown.Size() > 0)
+        {
+            p.npc.RemoveAllBuffsWithSource("W3CoopShown");
+            p.effectsShown.Clear();
+        }
         if(p.animAiId != 0)
         {
             p.npc.CancelAIBehavior(p.animAiId);
@@ -4654,6 +4975,14 @@ class r_CoopEnemies
         {
             signHitsSent += 1;
         }
+        if((W3Petard)action.causer)
+        {
+            bombHitsSent += 1;
+        }
+        else if((W3BoltProjectile)action.causer)
+        {
+            boltHitsSent += 1;
+        }
         // its effects are added after the damage; OnAfterDamage puts them on this hit
         lastPuppetAction = action;
         lastPuppetHit = hit;
@@ -4704,6 +5033,54 @@ class r_CoopEnemies
             hit.effects.PushBack((int)effects[i]);
         }
         hitEffectsSent += effects.Size();
+    }
+
+    // An effect this player put straight on a puppet, not through a hit (Axii's confusion and stagger, Yrden's
+    // slowdown): sent alone with its length, as an effect-only hit, so the leader's monster gets it too (its
+    // resistances decide). The same one on the same puppet at most every 0.5 s; one put on again and again in short
+    // pieces (Yrden's 0.1 s slowdown while the monster stands in it) lasts until the next. Axii's puppet skill
+    // (EET_AxiiGuardMe) stays here.
+    public function OnOwnDirectEffect(victim : CActor, type : EEffectType, length : float, creator : CGameplayEntity)
+    {
+        var p : r_CoopPuppet;
+        var hit : r_CoopHit;
+        var key : string;
+        var now : float;
+        var i : int;
+
+        if(wasHost || processingDamage > 0 || creator != thePlayer || type == EET_AxiiGuardMe)
+        {
+            return;
+        }
+        p = FindPuppetByNpc((CNewNPC)victim);
+        if(!p || !p.alive)
+        {
+            return;
+        }
+        now = theGame.GetEngineTimeAsSeconds();
+        key = p.netId + ":" + (int)type;
+        i = ownEffectKeys.FindFirst(key);
+        if(i >= 0 && now - ownEffectAts[i] < 0.5)
+        {
+            return;
+        }
+        if(i < 0)
+        {
+            ownEffectKeys.PushBack(key);
+            ownEffectAts.PushBack(now);
+        }
+        else
+        {
+            ownEffectAts[i] = now;
+        }
+        if(length > 0 && length < 0.6)
+        {
+            length = 0.6;
+        }
+        hit = NewHit(p);
+        hit.effects.PushBack((int)type);
+        hit.lengths.PushBack(length);
+        ownEffectsSent += 1;
     }
 
     private function NewHit(p : r_CoopPuppet) : r_CoopHit
@@ -4760,6 +5137,10 @@ class r_CoopEnemies
             for(j = 0; j < pendingHits[i].effects.Size(); j += 1)
             {
                 text += " " + pendingHits[i].effects[j];
+                if(j < pendingHits[i].lengths.Size() && pendingHits[i].lengths[j] != 0)
+                {
+                    text += ":" + FloatToStringPrec(pendingHits[i].lengths[j], 1);
+                }
             }
         }
         WO_Send(text);
@@ -5349,6 +5730,37 @@ function OnPreAttackEvent(animEventName : name, animEventType : EAnimationEventT
     return wrappedMethod(animEventName, animEventType, data, animInfo);
 }
 
+// status effects a monster shows (an animation or its look), which its copies show too (r_CoopEnemies.ShownEffects)
+function CoopShowsEffect(type : EEffectType) : bool
+{
+    switch(type)
+    {
+        case EET_Burning :
+        case EET_Frozen :
+        case EET_Knockdown :
+        case EET_HeavyKnockdown :
+        case EET_Stagger :
+        case EET_LongStagger :
+        case EET_Ragdoll :
+        case EET_Blindness :
+        case EET_Confusion :
+        case EET_Hypnotized :
+        case EET_Immobilized :
+        case EET_Paralyzed :
+        case EET_Tangled :
+        case EET_PoisonCritical :
+        case EET_Poison :
+        case EET_Bleeding :
+        case EET_Slowdown :
+        case EET_SlowdownFrost :
+        case EET_SlowdownAxii :
+        case EET_SilverDust :
+            return true;
+        default :
+            return false;
+    }
+}
+
 // a puppet's own projectile on a member: it doesn't fly and goes (see MutesShot)
 function CoopMutesShot(proj : W3AdvancedProjectile) : bool
 {
@@ -5372,7 +5784,38 @@ function CoopProjectileShot(proj : W3AdvancedProjectile, angle : float, speed : 
     if(client)
     {
         client.getCoopEnemies().OnEnemyProjectile(proj, angle, speed, target, range);
+        if(proj.caster == thePlayer)
+        {
+            client.getCoopEnemies().OnOwnThrow("p", proj.GetReadableName(), proj.GetWorldPosition(), target, angle, speed, range);
+        }
     }
+}
+
+// where a shot at a bone goes (a crossbow bolt at the targeted monster's torso)
+function CoopBoneSpot(target : CEntity, bone : name) : Vector
+{
+    var index : int;
+
+    index = target.GetBoneIndex(bone);
+    if(index < 0)
+    {
+        return target.GetWorldPosition();
+    }
+    return MatrixGetTranslation(target.GetBoneWorldMatrixByIndex(index));
+}
+
+// this player's bombs fly for the others too (r_CoopEnemies.OnOwnThrow)
+@wrapMethod(W3Petard)
+function ThrowProjectile(targetPosIn : Vector)
+{
+    var coop : r_CoopEnemies;
+
+    coop = CoopEnemiesHere();
+    if(coop && GetOwner() == thePlayer)
+    {
+        coop.OnOwnThrow("b", NameToString(GetOwner().GetInventory().GetItemName(itemId)), GetWorldPosition(), targetPosIn, 0, 0, 0);
+    }
+    wrappedMethod(targetPosIn);
 }
 
 @wrapMethod(W3AdvancedProjectile)
@@ -5405,7 +5848,7 @@ function ShootProjectileAtBone(angle : float, velocity : float, target : CEntity
         return;
     }
     wrappedMethod(angle, velocity, target, targetBone, range, collisionGroups);
-    CoopProjectileShot(this, angle, velocity, target.GetWorldPosition(), range);
+    CoopProjectileShot(this, angle, velocity, CoopBoneSpot(target, targetBone), range);
 }
 
 @wrapMethod(W3AdvancedProjectile)
@@ -5689,9 +6132,14 @@ function ProcessAction(act : W3DamageAction)
         return;
     }
 
+    if(coop)
+    {
+        coop.processingDamage += 1;
+    }
     wrappedMethod(act);
     if(coop)
     {
+        coop.processingDamage -= 1;
         coop.OnAfterDamage(act);
     }
 }
@@ -5854,6 +6302,7 @@ function ProcessEffect()
 function AddEffectCustom(params : SCustomEffectParams) : EEffectInteract
 {
     var coop : r_CoopEnemies;
+    var result : EEffectInteract;
 
     coop = CoopEnemiesHere();
     if(coop)
@@ -5867,7 +6316,12 @@ function AddEffectCustom(params : SCustomEffectParams) : EEffectInteract
             coop.OnGhostEffect(this, params);
         }
     }
-    return wrappedMethod(params);
+    result = wrappedMethod(params);
+    if(coop && (result == EI_Pass || result == EI_Override || result == EI_Cumulate))
+    {
+        coop.OnOwnDirectEffect(this, params.effectType, params.duration, params.creator);
+    }
+    return result;
 }
 
 @wrapMethod(CActor)
@@ -5875,6 +6329,7 @@ function AddEffectDefault(effectType : EEffectType, creat : CGameplayEntity, opt
 {
     var coop : r_CoopEnemies;
     var params : SCustomEffectParams;
+    var result : EEffectInteract;
 
     coop = CoopEnemiesHere();
     if(coop)
@@ -5891,7 +6346,12 @@ function AddEffectDefault(effectType : EEffectType, creat : CGameplayEntity, opt
             coop.OnGhostEffect(this, params);
         }
     }
-    return wrappedMethod(effectType, creat, srcName, signEffect);
+    result = wrappedMethod(effectType, creat, srcName, signEffect);
+    if(coop && (result == EI_Pass || result == EI_Override || result == EI_Cumulate))
+    {
+        coop.OnOwnDirectEffect(this, effectType, 0, creat);
+    }
+    return result;
 }
 
 // these attack tasks decide their availability without CBTTaskAttack.IsAvailable
