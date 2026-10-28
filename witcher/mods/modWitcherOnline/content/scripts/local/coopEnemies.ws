@@ -323,6 +323,7 @@ class r_CoopHit
     public var frac : float;
     public var effects : array<int>;  // what the hit applies (burning, knockdown, ...), applied by the leader
     public var lengths : array<float>;  // ...how long, for one put on without a hit (0: the game's own length)
+    public var reaction : int;            // its hit reaction (EHitReactionType: a damage tick has none)
 }
 
 // a leader monster's hit on a member's ghost: raw damage before the ghost's own stats
@@ -538,6 +539,7 @@ class r_CoopEnemies
     public var killsCredited : int;      // member: puppets that died as this player's kill (it had hit them)
     public var effectTypesHeld : array<int>;  // leader: kinds of members' effects that took hold on its monsters
     public var localEffectsDropped : int;      // member: this world's own effects on puppets the leader's monsters didn't have
+    public var heavyClaims : int;              // leader: members' hits applied as heavy ones
     private var ownEffectKeys : array<string>;
     private var ownEffectAts : array<float>;
     public var processingDamage : int;   // inside a damage action (its effects go with its hit)
@@ -1270,6 +1272,7 @@ class r_CoopEnemies
         killsCredited = 0;
         effectTypesHeld.Clear();
         localEffectsDropped = 0;
+        heavyClaims = 0;
         hitEffectsApplied = 0;
         hitEffectsHeld = 0;
         signVisualsPlayed = 0;
@@ -1406,7 +1409,7 @@ class r_CoopEnemies
         var effects : array<int>;
         var lengths : array<float>;
         var piece : string;
-        var n, i, j, idx, seq, effectCount : int;
+        var n, i, j, idx, seq, effectCount, reaction : int;
 
         client = theGame.r_getMultiplayerClient();
         if(count < 6 || WO_Str(1) != client.getUsername() || StringToInt(WO_Str(2), 0) != epoch || !IsMyPartyMember(sender))
@@ -1425,10 +1428,15 @@ class r_CoopEnemies
             effectCount = StringToInt(WO_Str(idx + 3), 0);
             effects.Clear();
             lengths.Clear();
+            reaction = -1;
             for(j = 0; j < effectCount && idx + 4 + j < count; j += 1)
             {
                 piece = WO_Str(idx + 4 + j);
-                if(StrFindFirst(piece, ":") >= 0)
+                if(StrBeginsWith(piece, "r:"))
+                {
+                    reaction = StringToInt(StrAfterFirst(piece, ":"), 0);
+                }
+                else if(StrFindFirst(piece, ":") >= 0)
                 {
                     effects.PushBack(StringToInt(StrBeforeFirst(piece, ":"), 0));
                     lengths.PushBack(StringToFloat(StrAfterFirst(piece, ":"), 0));
@@ -1441,14 +1449,14 @@ class r_CoopEnemies
             }
             if(seq > ack.lastSeq)
             {
-                ApplyHit(sender, StringToInt(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0), effects, lengths);
+                ApplyHit(sender, StringToInt(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0), effects, lengths, reaction);
                 ack.lastSeq = seq;
             }
             idx += 4 + effectCount;
         }
     }
 
-    private function ApplyHit(sender : string, netId : int, frac : float, effects : array<int>, lengths : array<float>)
+    private function ApplyHit(sender : string, netId : int, frac : float, effects : array<int>, lengths : array<float>, reaction : int)
     {
         var e : r_CoopHostEnemy;
         var action : W3DamageAction;
@@ -1476,8 +1484,17 @@ class r_CoopEnemies
             }
         }
 
+        // its reaction as the member's hit had it (a heavy blow staggers, a burning tick none); light from an older member
+        if(reaction < 0)
+        {
+            reaction = (int)EHRT_Light;
+        }
+        if(reaction == (int)EHRT_Heavy)
+        {
+            heavyClaims += 1;
+        }
         action = new W3DamageAction in theGame.damageMgr;
-        action.Initialize(attacker, e.npc, theGame, "W3Coop", EHRT_Light, CPS_Undefined, false, false, false, false);
+        action.Initialize(attacker, e.npc, theGame, "W3Coop", (EHitReactionType)reaction, CPS_Undefined, false, false, false, false);
         if(frac > 0)
         {
             action.AddDamage(theGame.params.DAMAGE_NAME_DIRECT, MinF(frac, 1) * e.npc.GetMaxHealth() / difficultyMult);
@@ -5194,6 +5211,7 @@ class r_CoopEnemies
 
         hit = NewHit(p);
         hit.frac = MinF(1, dmg / maxHp);
+        hit.reaction = (int)action.GetHitReactionType();
         lastHitFrac = hit.frac;
         if(action.IsActionMelee())
         {
@@ -5361,8 +5379,8 @@ class r_CoopEnemies
         text = "coop hit " + leaderName + " " + leaderEpoch + " " + session + " " + hurtAck + " " + pendingHits.Size();
         for(i = 0; i < pendingHits.Size(); i += 1)
         {
-            text += " " + pendingHits[i].seq + " " + pendingHits[i].netId + " " + FloatToStringPrec(pendingHits[i].frac, 4)
-                + " " + pendingHits[i].effects.Size();
+            text += " " + pendingHits[i].seq + " " + pendingHits[i].netId + " " + FloatToStringPrec(pendingHits[i].frac, 4);
+            text += " " + (pendingHits[i].effects.Size() + 1) + " r:" + pendingHits[i].reaction;
             for(j = 0; j < pendingHits[i].effects.Size(); j += 1)
             {
                 text += " " + pendingHits[i].effects[j];
