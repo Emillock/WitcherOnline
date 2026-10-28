@@ -3482,7 +3482,8 @@ class r_CoopEnemies
             }
             else
             {
-                LogSync("MF", p.netId, p.attackSeq, "!shown");
+                // (how far from the leader's monster it reappears)
+                LogSync("MF", p.netId, p.attackSeq, "!shown/" + FloatToStringPrec(VecDistance(p.npc.GetWorldPosition(), p.target), 2));
             }
         }
         for(i = p.fxPlaying.Size() - 1; i >= 0; i -= 1)
