@@ -345,6 +345,8 @@ class r_CoopHurt
     public var valueAdd : float;
     public var valueMul : float;
     public var victimFx : name;      // the effect its task played on the ghost as the hit landed
+    public var queuedAt : float;     // leader: when it was captured (one swing striking a rider and its horse counts once)
+    public var viaHorse : bool;      // leader: ...a hit on the member's horse
 }
 
 class r_CoopAck
@@ -540,6 +542,8 @@ class r_CoopEnemies
     public var effectTypesHeld : array<int>;  // leader: kinds of members' effects that took hold on its monsters
     public var localEffectsDropped : int;      // member: this world's own effects on puppets the leader's monsters didn't have
     public var heavyClaims : int;              // leader: members' hits applied as heavy ones
+    public var horseHitsSeen : int;            // leader: shared monsters' hits on a riding member's horse (sent as hurts)
+    public var hurtsMerged : int;              // leader: the same swing's second hit on a member (its horse and itself)
     private var ownEffectKeys : array<string>;
     private var ownEffectAts : array<float>;
     public var processingDamage : int;   // inside a damage action (its effects go with its hit)
@@ -1273,6 +1277,8 @@ class r_CoopEnemies
         effectTypesHeld.Clear();
         localEffectsDropped = 0;
         heavyClaims = 0;
+        horseHitsSeen = 0;
+        hurtsMerged = 0;
         hitEffectsApplied = 0;
         hitEffectsHeld = 0;
         signVisualsPlayed = 0;
@@ -1607,6 +1613,11 @@ class r_CoopEnemies
                 if(players[i].isAlive)
                 {
                     wanted.PushBack(players[i].ghost);
+                    // monsters go for a rider's horse (its own is hidden from gameplay by Witcher Online)
+                    if(players[i].horse && players[i].isMounted)
+                    {
+                        players[i].horse.SetGameplayVisibility(true);
+                    }
                 }
                 else
                 {
@@ -1742,10 +1753,39 @@ class r_CoopEnemies
                 QueueHurt(user, e, act);
             }
         }
+        // a hit on a riding member's horse is a hit on the member; the horse here takes none
+        else if(victim && victim.HasTag('wo_horse'))
+        {
+            e = FindHostEnemyByNpc((CNewNPC)attacker);
+            user = HorseOwner(victim);
+            if(e && user != "" && !effectTick)
+            {
+                horseHitsSeen += 1;
+                QueueHurt(user, e, act, true);
+            }
+            return true;
+        }
         return false;
     }
 
-    private function QueueHurt(user : string, e : r_CoopHostEnemy, act : W3DamageAction)
+    // the party member riding this Witcher Online horse here, "" if none
+    private function HorseOwner(horse : CActor) : string
+    {
+        var players : array<r_RemotePlayer>;
+        var i : int;
+
+        players = theGame.r_getMultiplayerClient().getPlayers();
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(players[i] && players[i].horse == horse && IsMyPartyMember(players[i].username))
+            {
+                return players[i].username;
+            }
+        }
+        return "";
+    }
+
+    private function QueueHurt(user : string, e : r_CoopHostEnemy, act : W3DamageAction, optional viaHorse : bool)
     {
         var dts : array<SRawDamage>;
         var effects : array<EEffectType>;
@@ -1753,6 +1793,7 @@ class r_CoopEnemies
         var i : int;
 
         h = new r_CoopHurt in this;
+        h.viaHorse = viaHorse;
         act.GetEffectTypes(effects);
         for(i = 0; i < effects.Size(); i += 1)
         {
@@ -1783,11 +1824,30 @@ class r_CoopEnemies
 
     private function AddHurt(h : r_CoopHurt, user : string, e : r_CoopHostEnemy)
     {
+        var now : float;
+        var i : int;
+
         if(!UserAlive(user))
         {
             hurtsDroppedDead += 1;
             return;
         }
+        // one swing that struck a riding member and its horse in the same moment lands once (a damage hit; the
+        // effects a task puts straight on the ghost come on their own; two rocks of a volley both land)
+        now = theGame.GetEngineTimeAsSeconds();
+        if(!h.direct)
+        {
+            for(i = 0; i < hurts.Size(); i += 1)
+            {
+                if(hurts[i].user == user && hurts[i].netId == e.netId && hurts[i].attackSeq == e.attackSeq && !hurts[i].direct
+                    && hurts[i].viaHorse != h.viaHorse && now - hurts[i].queuedAt < 0.1)
+                {
+                    hurtsMerged += 1;
+                    return;
+                }
+            }
+        }
+        h.queuedAt = now;
         h.user = user;
         h.seq = nextHurtSeq;
         h.netId = e.netId;
