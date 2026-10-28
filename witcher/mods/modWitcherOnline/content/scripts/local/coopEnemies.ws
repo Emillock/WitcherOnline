@@ -135,6 +135,7 @@ class r_CoopPuppet
     public var moveRetargets : int;
     public var fxPlaying : array<name>;  // the leader's monster's script effects, played here too (ApplyFx)
     public var effectsShown : array<int>;  // ...and its status effects that show, listed (ApplyShownEffects)
+    public var myHits : int;               // this player's hits on it sent to the leader
     public var hidden : bool;            // ...and hidden while it is (a wraith between its vanish and reappearance)
     public var graphAt : float;          // the leader's 3-state attack raised on its graph then (GraphAttack)
     public var graphEnded : bool;
@@ -372,6 +373,7 @@ class r_CoopEnemies
     private var puppets : array<r_CoopPuppet>;
     private var suppressed : array<r_CoopSuppressed>;
     private var leaderName : string;
+    private var leaderListsEffects : bool;  // its game lists its monsters' effects (a newer version: it sends its own with "hz")
     private var leaderEpoch : int;
     private var lastSnapshotAt : float;
     private var pendingHits : array<r_CoopHit>;
@@ -532,6 +534,9 @@ class r_CoopEnemies
     public var hitEffectsSent : int;     // member: effects its hits carried
     public var ownEffectsSent : int;     // member: effects it put straight on puppets (Axii, Yrden), sent alone
     public var hurtsDroppedDead : int;   // leader: hurts not sent, their member dead; member: hurts dropped while dead
+    public var killsCredited : int;      // member: puppets that died as this player's kill (it had hit them)
+    public var effectTypesHeld : array<int>;  // leader: kinds of members' effects that took hold on its monsters
+    public var localEffectsDropped : int;      // member: this world's own effects on puppets the leader's monsters didn't have
     private var ownEffectKeys : array<string>;
     private var ownEffectAts : array<float>;
     public var processingDamage : int;   // inside a damage action (its effects go with its hit)
@@ -706,6 +711,7 @@ class r_CoopEnemies
                 ReleaseAll();
                 pendingHits.Clear();
                 leaderName = client.getJoinedParty();
+                leaderListsEffects = false;
                 leaderEpoch = 0;
                 hurtAck = 0;
                 delayedHurts.Clear();
@@ -1254,6 +1260,9 @@ class r_CoopEnemies
         ghostEffectsShown = 0;
         ghostEffectsEnded = 0;
         hurtsDroppedDead = 0;
+        killsCredited = 0;
+        effectTypesHeld.Clear();
+        localEffectsDropped = 0;
         hitEffectsApplied = 0;
         hitEffectsHeld = 0;
         signVisualsPlayed = 0;
@@ -1491,6 +1500,10 @@ class r_CoopEnemies
             if(e.npc.HasBuff((EEffectType)effects[i]))
             {
                 hitEffectsHeld += 1;
+                if(!effectTypesHeld.Contains(effects[i]))
+                {
+                    effectTypesHeld.PushBack(effects[i]);
+                }
             }
         }
         hitsApplied += 1;
@@ -2808,6 +2821,10 @@ class r_CoopEnemies
         if(WO_Str(7) != "")
         {
             ApplyGhostEffects(p, WO_Str(7));
+            if(sender == leaderName)
+            {
+                leaderListsEffects = true;
+            }
         }
     }
 
@@ -4014,7 +4031,24 @@ class r_CoopEnemies
     private function ApplyShownEffects(p : r_CoopPuppet, effects : array<int>, lengths : array<float>)
     {
         var params : SCustomEffectParams;
+        var buffs : array<CBaseGameplayEffect>;
         var i : int;
+
+        // the leader's world decides: one of this world's own (this player's Axii) the leader's monster doesn't have,
+        // resisted or already ended there (a hit ends Axii's confusion), goes once the leader had time to list it
+        if(leaderListsEffects)
+        {
+            buffs = p.npc.GetBuffs();
+            for(i = 0; i < buffs.Size(); i += 1)
+            {
+                if(buffs[i] && CoopShowsEffect(buffs[i].GetEffectType()) && buffs[i].GetSourceName() != "W3CoopShown"
+                    && buffs[i].GetTimeActive() > 1.0 && !effects.Contains((int)buffs[i].GetEffectType()))
+                {
+                    p.npc.RemoveEffect(buffs[i], false);
+                    localEffectsDropped += 1;
+                }
+            }
+        }
 
         for(i = p.effectsShown.Size() - 1; i >= 0; i -= 1)
         {
@@ -4932,7 +4966,16 @@ class r_CoopEnemies
             p.aiId = 0;
         }
         applyingHostState = true;
-        p.npc.Kill('W3Coop', true);
+        // one this player hit dies as its kill (experience as for its own; otherwise only within 20 m, as for anyone's)
+        if(p.myHits > 0)
+        {
+            killsCredited += 1;
+            p.npc.Kill('W3Coop', true, thePlayer);
+        }
+        else
+        {
+            p.npc.Kill('W3Coop', true);
+        }
         applyingHostState = false;
     }
 
@@ -5267,6 +5310,7 @@ class r_CoopEnemies
         hit = new r_CoopHit in this;
         hit.seq = nextHitSeq;
         hit.netId = p.netId;
+        p.myHits += 1;
         nextHitSeq += 1;
         pendingHits.PushBack(hit);
         if(pendingHits.Size() > 32)
