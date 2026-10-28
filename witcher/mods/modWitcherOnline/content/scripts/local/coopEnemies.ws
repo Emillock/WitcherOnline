@@ -410,6 +410,13 @@ class r_CoopEnemies
     private var lastFactsSend : float;
     private var factsTick : int;
 
+    // this player's horse where it was left, as last sent (SendParkedHorse), and when; diagnostics: how many sent and
+    // heard from others
+    public var parkedText : string;
+    private var parkedSentAt : float;
+    public var parkedSent : int;
+    public var parkedHeard : int;
+
     // set while this game changes a puppet itself, so the damage hook lets it through
     public var applyingHostState : bool;
 
@@ -621,6 +628,7 @@ class r_CoopEnemies
         EnsureIds();
         now = theGame.GetEngineTimeAsSeconds();
         RetryFactsBaseline(now);
+        SendParkedHorse(now);
         role = GetRole();
 
         if(role == 1)
@@ -2482,6 +2490,57 @@ class r_CoopEnemies
         {
             OnFacts(sender, count);
         }
+        else if(WO_Str(0) == "hz")
+        {
+            OnParkedHorse(sender);
+        }
+    }
+
+    // This player's horse standing where it was left (not ridden, within 100 m): other players' games keep Witcher
+    // Online's horse for this player there (by itself it showed that horse only while ridden). "hz seq 1 x y z yaw", or
+    // "hz seq 0"; at once when it changed, else every 2 s (any player, in a party or not). The count makes each one new:
+    // the client passes a channel's message on only when it changed.
+    private function SendParkedHorse(now : float)
+    {
+        var horse : CNewNPC;
+        var pos : Vector;
+        var text : string;
+
+        horse = thePlayer.GetHorseWithInventory();
+        text = "0";
+        if(horse && !thePlayer.IsUsingHorse() && VecDistance(horse.GetWorldPosition(), thePlayer.GetWorldPosition()) < 100)
+        {
+            pos = horse.GetWorldPosition();
+            text = "1 " + FloatToStringPrec(pos.X, 2) + " " + FloatToStringPrec(pos.Y, 2) + " " + FloatToStringPrec(pos.Z, 2)
+                + " " + FloatToStringPrec(horse.GetHeading(), 1);
+        }
+        if((text != parkedText && now - parkedSentAt >= 0.3) || now - parkedSentAt >= 2.0)
+        {
+            parkedText = text;
+            parkedSentAt = now;
+            parkedSent += 1;
+            WO_Send("coop hz " + parkedSent + " " + text);
+        }
+    }
+
+    // another player's horse where they left it (SendParkedHorse), for their Witcher Online horse here (remotePlayer.ws)
+    private function OnParkedHorse(sender : string)
+    {
+        var p : r_RemotePlayer;
+
+        parkedHeard += 1;
+        p = mpghosts_getPlayer(sender);
+        if(!p)
+        {
+            return;
+        }
+        p.parkedHorse = WO_Str(2) == "1";
+        if(p.parkedHorse)
+        {
+            p.parkedPos = Vector(StringToFloat(WO_Str(3), 0), StringToFloat(WO_Str(4), 0), StringToFloat(WO_Str(5), 0));
+            p.parkedYaw = StringToFloat(WO_Str(6), 0);
+        }
+        p.parkedAt = theGame.GetEngineTimeAsSeconds();
     }
 
     private function OnSnapshot(sender : string, count : int)

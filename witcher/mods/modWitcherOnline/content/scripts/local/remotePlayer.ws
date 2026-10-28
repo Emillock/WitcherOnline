@@ -65,6 +65,11 @@ statemachine class r_RemotePlayer
     public var isSailing : bool;
     public var isMounted : bool;
     public var lastMounted : bool;
+    public var parkedHorse : bool;     // this player's horse stands where it was left (coopEnemies OnParkedHorse): there,
+    public var parkedPos : Vector;     // facing so, last heard then
+    public var parkedYaw : float;
+    public var parkedAt : float;
+    public var dismountedAt : float;
     public var aimingCrossbow : bool;
     public var lastAimingCrossbow : bool;
     public var lastMovement : bool;
@@ -6490,6 +6495,7 @@ state WO_UpdateCPC in r_RemotePlayer
     }
 
     private var lastHorseMountRequestAt : float;
+    private var horseWithoutRider : bool;  // made by spawnParkedHorse: the rider AI isn't loaded yet
 
     latent function spawnHorse()
     {
@@ -6551,6 +6557,21 @@ state WO_UpdateCPC in r_RemotePlayer
                 return;
             }
         }
+        // a horse made where it was left (spawnParkedHorse): its rider gets the rider AI now, as above
+        else if(horseWithoutRider)
+        {
+            horseWithoutRider = false;
+            adjustor = parent.ghost.GetMovingAgentComponent().GetMovementAdjustor();
+            adjustor.Cancel(adjustor.GetRequest('w3mp_ghost'));
+            l_aiTree = new CAIHorseDoNothingAction in parent.ghost;
+            l_aiTree.OnCreated();
+            parent.ghost.ForceAIBehavior(l_aiTree, BTAP_Emergency, 'AI_Rider_Load_Forced');
+            SleepOneFrame();
+            if(!parent.horse || !parent.ghost)
+            {
+                return;
+            }
+        }
 
         if(parent.ghost.IsUsingHorse(true))
         {
@@ -6573,6 +6594,61 @@ state WO_UpdateCPC in r_RemotePlayer
         lastHorseMountRequestAt = now;
 
         parent.ghost.SignalGameplayEventParamInt('RidingManagerMountHorse', MT_instant | MT_fromScript);
+    }
+
+    // its horse where it was left, without its rider (spawnHorse also seats the rider)
+    latent function spawnParkedHorse()
+    {
+        var temp_2 : CEntityTemplate;
+        var horseTag : array<name>;
+        var rot : EulerAngles;
+
+        temp_2 = (CEntityTemplate)LoadResourceAsync("dlc\dlc_mpmod\data\entities\horse_vehicle.w2ent", true);
+        if(!temp_2 || parent.horse)
+        {
+            return;
+        }
+        horseTag.PushBack('online_horse');
+        horseTag.PushBack('wo_horse');
+        rot.Yaw = parent.parkedYaw;
+        parent.horse = (CActor)theGame.CreateEntity(temp_2, parent.parkedPos, rot, true, false, false, PM_DontPersist, horseTag);
+        if(!parent.horse)
+        {
+            return;
+        }
+        horseWithoutRider = true;
+        parent.horse.EnableCollisions(false);
+        parent.horse.EnableCharacterCollisions(false);
+        parent.horse.SetGameplayVisibility(false);
+    }
+
+    // shown standing where it was left (no longer slid after its rider)
+    function parkHorse()
+    {
+        var adjustor : CMovementAdjustor;
+        var rot : EulerAngles;
+
+        if(!parent.horse)
+        {
+            return;
+        }
+        adjustor = parent.horse.GetMovingAgentComponent().GetMovementAdjustor();
+        adjustor.Cancel(adjustor.GetRequest('w3mp_horsesync'));
+        parent.horse.GetMovingAgentComponent().SetGameplayRelativeMoveSpeed(0);
+        if(!parent.horse.GetVisibility())
+        {
+            parent.horse.SetVisibility(true);
+        }
+        if(((CAnimatedComponent)parent.horse.GetComponentByClassName('CAnimatedComponent')).HasFrozenPose())
+        {
+            ((CAnimatedComponent)parent.horse.GetComponentByClassName('CAnimatedComponent')).UnfreezePose();
+        }
+        if(VecDistance(parent.horse.GetWorldPosition(), parent.parkedPos) > 1.0)
+        {
+            rot.Yaw = parent.parkedYaw;
+            parent.horse.TeleportWithRotation(parent.parkedPos, rot);
+        }
+        updateHorseAppearance();
     }
 
     latent function dismountHorse()
@@ -6898,6 +6974,8 @@ state WO_UpdateCPC in r_RemotePlayer
 
     entry function wo_updateCPCEntry()
 	{
+        var parked : bool;
+
         while(true)
         {
             if(theGame.IsPaused() || theGame.GetPhotomodeEnabled() || !parent.ghost)
@@ -6992,14 +7070,27 @@ state WO_UpdateCPC in r_RemotePlayer
             }
             else
             {
+                // its horse stays in sight where it was left, as in its owner's game (heard within 5 s)
+                parked = parent.parkedHorse && theGame.GetEngineTimeAsSeconds() - parent.parkedAt < 5.0;
                 if(parent.lastMounted && parent.horse)
-                {  
-                    // dismount
+                {
+                    // dismount (the horse stays a second for where it was left to arrive)
                     dismountHorse();
-                    parent.horse.SetVisibility(false);
                     parent.lastMounted = false;
                     parent.lastIdleAnim = theGame.GetEngineTimeAsSeconds();
-                    ((CAnimatedComponent)parent.horse.GetComponentByClassName('CAnimatedComponent')).FreezePose();
+                    parent.dismountedAt = theGame.GetEngineTimeAsSeconds();
+                }
+                else if(parked)
+                {
+                    if(!parent.horse)
+                    {
+                        spawnParkedHorse();
+                    }
+                    parkHorse();
+                }
+                else if(parent.horse && theGame.GetEngineTimeAsSeconds() - parent.dismountedAt < 1.0)
+                {
+                    // (just dismounted, where it was left not heard yet)
                 }
                 else
                 {
