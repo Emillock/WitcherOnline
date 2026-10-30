@@ -544,6 +544,7 @@ class r_CoopEnemies
     public var heavyClaims : int;              // leader: members' hits applied as heavy ones
     public var horseHitsSeen : int;            // leader: shared monsters' hits on a riding member's horse (sent as hurts)
     public var hurtsMerged : int;              // leader: the same swing's second hit on a member (its horse and itself)
+    public var horseHurtsApplied : int;        // member: hits on its horse while it rode (the horse took them)
     private var ownEffectKeys : array<string>;
     private var ownEffectAts : array<float>;
     public var processingDamage : int;   // inside a damage action (its effects go with its hit)
@@ -1279,6 +1280,7 @@ class r_CoopEnemies
         heavyClaims = 0;
         horseHitsSeen = 0;
         hurtsMerged = 0;
+        horseHurtsApplied = 0;
         hitEffectsApplied = 0;
         hitEffectsHeld = 0;
         signVisualsPlayed = 0;
@@ -1843,6 +1845,7 @@ class r_CoopEnemies
                     && hurts[i].viaHorse != h.viaHorse && now - hurts[i].queuedAt < 0.1)
                 {
                     hurtsMerged += 1;
+                    hurts[i].viaHorse = true;  // (the swing's target was the horse)
                     return;
                 }
             }
@@ -2008,6 +2011,10 @@ class r_CoopEnemies
             {
                 n += 1;
             }
+            if(h.viaHorse)
+            {
+                n += 1;
+            }
             text += " " + n;
             for(j = 0; j < h.effects.Size(); j += 1)
             {
@@ -2021,6 +2028,10 @@ class r_CoopEnemies
             if(IsNameValid(h.victimFx))
             {
                 text += " fx:" + NameToString(h.victimFx);
+            }
+            if(h.viaHorse)
+            {
+                text += " h";
             }
         }
         WO_Send(text);
@@ -3311,6 +3322,10 @@ class r_CoopEnemies
                         {
                             h.victimFx = WO_ToName(StrAfterFirst(token, ":"));
                         }
+                        else if(token == "h")
+                        {
+                            h.viaHorse = true;
+                        }
                         else if(StrFindFirst(token, ":") >= 0)
                         {
                             // type:duration:add:mul
@@ -3381,7 +3396,7 @@ class r_CoopEnemies
     {
         var action : W3DamageAction;
         var p : r_CoopPuppet;
-        var attacker : CActor;
+        var attacker, victim : CActor;
         var before : float;
         var i : int;
 
@@ -3403,8 +3418,14 @@ class r_CoopEnemies
             return;
         }
 
+        victim = thePlayer;
+        if(h.viaHorse && thePlayer.IsUsingHorse() && (CActor)thePlayer.GetUsedVehicle())
+        {
+            victim = (CActor)thePlayer.GetUsedVehicle();
+            horseHurtsApplied += 1;
+        }
         action = new W3DamageAction in theGame.damageMgr;
-        action.Initialize(attacker, thePlayer, theGame, "W3CoopHurt", (EHitReactionType)h.hitReaction, CPS_AttackPower, true, false, false, false);
+        action.Initialize(attacker, victim, theGame, "W3CoopHurt", (EHitReactionType)h.hitReaction, CPS_AttackPower, true, false, false, false);
         for(i = 0; i < h.types.Size(); i += 1)
         {
             action.AddDamage(h.types[i], h.values[i]);
