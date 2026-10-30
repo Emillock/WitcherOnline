@@ -436,6 +436,14 @@ class r_CoopEnemies
     private var silenceWarned : array<string>;
     public var silenceWarnings : int;
     private var lastSilenceCheck : float;
+    private var travelLeader : string;     // the leader whose place was sampled last (CheckLeaderTravel)
+    private var travelArea : int;
+    private var travelPos : Vector;
+    private var travelSampledAt : float;
+    private var travelJumpAt : float;      // the leader's last jump not asked about yet (0: none)
+    private var travelGoAt : float;        // accepted: travel then (0: not)
+    public var travelOffers : int;         // tests
+    public var travelGone : int;
     public var hostSendBytesMax : int;      // leader: its largest snapshot so far
 
     // this player's bombs and shots of the last 1.5 s (SendThrows), and the last of each other player's played here
@@ -684,6 +692,7 @@ class r_CoopEnemies
         CheckSilentPlayers(now);
         ClearThrows(now);
         role = GetRole();
+        CheckLeaderTravel(now, role);
 
         if(role == 1)
         {
@@ -2948,8 +2957,8 @@ class r_CoopEnemies
         CheckVersion(sender, WO_Str(8));
     }
 
-    // A player near for 15 s without a presence message (sent every 2 s since 0.3.1): it runs an older W3Coop, or the
-    // host's server is older than 0.3.1 (4 co-op channels: the newer messages are dropped). Said once on screen.
+    // A player near for 15 s without a presence message (sent every 2 s since 0.4.0): it runs an older W3Coop, or the
+    // host's server is older than 0.4.0 (4 co-op channels: the newer messages are dropped). Said once on screen.
     private function CheckSilentPlayers(now : float)
     {
         var players : array<r_RemotePlayer>;
@@ -2999,6 +3008,113 @@ class r_CoopEnemies
         }
     }
 
+    // A member left behind when its leader fast-travels (to another region, or 200 m or more at once) is asked whether
+    // to follow; yes travels to the leader as Witcher Online's teleport command does. Asked once the leader's new
+    // place held 3 s and the member is free (alive, no combat, scene, menu or dialog); dropped after a minute.
+    private function CheckLeaderTravel(now : float, role : int)
+    {
+        var client : r_MultiplayerClient;
+        var globals : array<r_RemotePlayer>;
+        var leader : r_RemotePlayer;
+        var guiManager : CR4GuiManager;
+        var text : string;
+        var i : int;
+
+        if(travelGoAt > 0 && now >= travelGoAt)
+        {
+            travelGoAt = 0;
+            travelGone += 1;
+            LogSync("TG", 0, 0, travelLeader);
+            mpghosts_teleport(travelLeader);
+            return;
+        }
+        if(now - travelSampledAt < 1)
+        {
+            return;
+        }
+        travelSampledAt = now;
+        client = theGame.r_getMultiplayerClient();
+        if(role == 2)
+        {
+            globals = client.getGlobalPlayers();
+            for(i = 0; i < globals.Size(); i += 1)
+            {
+                if(globals[i] && globals[i].username == client.getJoinedParty())
+                {
+                    leader = globals[i];
+                }
+            }
+        }
+        if(!leader || leader.area == 0)
+        {
+            travelLeader = "";
+            travelJumpAt = 0;
+            return;
+        }
+        if(leader.username != travelLeader)
+        {
+            travelLeader = leader.username;
+            travelJumpAt = 0;
+        }
+        else if(leader.area != travelArea || VecDistance(leader.pos, travelPos) >= 200)
+        {
+            travelJumpAt = now;
+        }
+        travelArea = leader.area;
+        travelPos = leader.pos;
+
+        if(travelJumpAt == 0 || now - travelJumpAt < 3)
+        {
+            return;
+        }
+        if(now - travelJumpAt > 60
+            || (leader.area == WO_CurrentAreaCode() && VecDistance(leader.pos, thePlayer.GetWorldPosition()) < 100))
+        {
+            travelJumpAt = 0;
+            return;
+        }
+        guiManager = theGame.GetGuiManager();
+        if(!thePlayer.IsAlive() || thePlayer.IsInCombat() || thePlayer.IsInNonGameplayCutscene() || theGame.IsDialogOrCutscenePlaying()
+            || guiManager.IsAnyMenu() || guiManager.GetPopup('MessagePopup') || client.WO_GetTeleporting())
+        {
+            return;
+        }
+        travelJumpAt = 0;
+        travelOffers += 1;
+        if(leader.area == WO_CurrentAreaCode())
+        {
+            text = leader.username + " traveled " + FloatToStringPrec(VecDistance2D(leader.pos, thePlayer.GetWorldPosition()), 0)
+                + " m away. Travel to them?";
+        }
+        else
+        {
+            text = leader.username + " traveled to another region. Travel to them?";
+        }
+        LogSync("TO", 0, 0, CoopEncode(text));
+        guiManager.ShowUserDialogAdv(W3CoopTravelMessageId(), "W3Coop", text, false, UDB_YesNo);
+    }
+
+    // the answer to CheckLeaderTravel's question (CR4GuiManager.UserDialogCallback)
+    public function OnTravelAnswer(yes : bool)
+    {
+        if(!yes)
+        {
+            LogSync("TA", 0, 0, travelLeader + " no");
+            return;
+        }
+        LogSync("TA", 0, 1, travelLeader + " yes");
+        if(travelLeader == "")
+        {
+            return;
+        }
+        // off the horse first: a teleport in the same frame as the dismount carries the horse along
+        if(thePlayer.IsUsingVehicle())
+        {
+            thePlayer.DismountVehicle(thePlayer.GetUsedVehicle(), DT_instant);
+        }
+        travelGoAt = theGame.GetEngineTimeAsSeconds() + 0.5;
+    }
+
     private function OwnVersion() : string
     {
         if(versionOverride != "")
@@ -3008,7 +3124,7 @@ class r_CoopEnemies
         return CoopVersion();
     }
 
-    // another player near runs another W3Coop version (none sent: older than 0.3.1): said once on screen, for each
+    // another player near runs another W3Coop version (none sent: older than 0.4.0): said once on screen, for each
     // version it runs
     private function CheckVersion(sender : string, theirs : string)
     {
@@ -3016,7 +3132,7 @@ class r_CoopEnemies
 
         if(theirs == "")
         {
-            theirs = "older than 0.3.1";
+            theirs = "older than 0.4.0";
         }
         if(theirs == OwnVersion())
         {
@@ -6097,7 +6213,7 @@ class r_CoopEnemies
 // this build's W3Coop version (package/build_package.py checks it against the version it packages)
 function CoopVersion() : string
 {
-    return "0.3.1";
+    return "0.4.0";
 }
 
 // what a puppet keeps of a hit, so the vanilla hit reaction runs (its health is the leader's anyway)
@@ -7126,4 +7242,20 @@ function CreateEntity(_SpawnPos : Vector, _Rotation : EulerAngles) : CEntity
         CoopSpellSpawn(GetNPC());
     }
     return entity;
+}
+
+// the dialog r_CoopEnemies.CheckLeaderTravel shows (any id the game's own dialogs don't use)
+function W3CoopTravelMessageId() : int
+{
+    return 731101;
+}
+
+@wrapMethod(CR4GuiManager)
+function UserDialogCallback(messageId : int, actionId : EUserMessageAction) : void
+{
+    if(messageId == W3CoopTravelMessageId())
+    {
+        theGame.r_getMultiplayerClient().getCoopEnemies().OnTravelAnswer(actionId == UMA_Yes);
+    }
+    wrappedMethod(messageId, actionId);
 }
