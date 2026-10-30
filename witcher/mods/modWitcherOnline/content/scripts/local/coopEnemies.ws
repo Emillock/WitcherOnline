@@ -1610,21 +1610,26 @@ class r_CoopEnemies
         {
             if(players[i] && players[i].ghost && IsMyPartyMember(players[i].username))
             {
+                // monsters go for a rider's horse (Witcher Online hides its own from gameplay): a target only while
+                // ridden, not where its rider left it
+                if(players[i].horse)
+                {
+                    players[i].horse.SetGameplayVisibility(players[i].isMounted && players[i].isAlive);
+                }
                 // a dead member's character is left alone until it is back (its game shows the death screen, then
                 // loads a save)
                 if(players[i].isAlive)
                 {
                     wanted.PushBack(players[i].ghost);
-                    // monsters go for a rider's horse (its own is hidden from gameplay by Witcher Online)
-                    if(players[i].horse && players[i].isMounted)
-                    {
-                        players[i].horse.SetGameplayVisibility(true);
-                    }
                 }
                 else
                 {
                     DropHurtsOf(players[i].username);
                 }
+            }
+            else if(players[i] && players[i].horse)
+            {
+                players[i].horse.SetGameplayVisibility(false);  // (no longer in the party)
             }
         }
 
@@ -1770,7 +1775,7 @@ class r_CoopEnemies
         return false;
     }
 
-    // the party member riding this Witcher Online horse here, "" if none
+    // the party member riding this Witcher Online horse here, "" if none (or it is not ridden)
     private function HorseOwner(horse : CActor) : string
     {
         var players : array<r_RemotePlayer>;
@@ -1779,7 +1784,7 @@ class r_CoopEnemies
         players = theGame.r_getMultiplayerClient().getPlayers();
         for(i = 0; i < players.Size(); i += 1)
         {
-            if(players[i] && players[i].horse == horse && IsMyPartyMember(players[i].username))
+            if(players[i] && players[i].horse == horse && players[i].isMounted && IsMyPartyMember(players[i].username))
             {
                 return players[i].username;
             }
