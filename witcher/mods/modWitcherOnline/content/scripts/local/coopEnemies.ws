@@ -1483,7 +1483,7 @@ class r_CoopEnemies
         var e : r_CoopHostEnemy;
         var action : W3DamageAction;
         var attacker : CActor;
-        var difficultyMult : float;
+        var difficultyMult, length : float;
         var i : int;
 
         e = FindHostEnemy(netId);
@@ -1524,9 +1524,14 @@ class r_CoopEnemies
         // its own resistances decide whether they take hold; processed also without damage, as Aard's are
         for(i = 0; i < effects.Size(); i += 1)
         {
-            if(i < lengths.Size() && lengths[i] != 0)
+            length = 0;
+            if(i < lengths.Size())
             {
-                action.AddEffectInfo((EEffectType)effects[i], lengths[i]);
+                length = lengths[i];
+            }
+            if(length != 0)
+            {
+                action.AddEffectInfo((EEffectType)effects[i], length);
             }
             else
             {
@@ -3214,8 +3219,12 @@ class r_CoopEnemies
     {
         var dropped : bool;
 
-        while(throwAts.Size() > 0 && now - throwAts[0] > 1.5)
+        while(throwAts.Size() > 0)
         {
+            if(now - throwAts[0] <= 1.5)
+            {
+                break;
+            }
             throwAts.Erase(0);
             throwTexts.Erase(0);
             dropped = true;
@@ -5635,11 +5644,26 @@ class r_CoopEnemies
             return;
         }
         now = theGame.GetEngineTimeAsSeconds();
+        // (one entry per monster and kind: those older than the limit go, or a long session piles them up)
+        if(ownEffectKeys.Size() > 64)
+        {
+            for(i = ownEffectKeys.Size() - 1; i >= 0; i -= 1)
+            {
+                if(now - ownEffectAts[i] >= 0.5)
+                {
+                    ownEffectKeys.Erase(i);
+                    ownEffectAts.Erase(i);
+                }
+            }
+        }
         key = p.netId + ":" + (int)type;
         i = ownEffectKeys.FindFirst(key);
-        if(i >= 0 && now - ownEffectAts[i] < 0.5)
+        if(i >= 0)
         {
-            return;
+            if(now - ownEffectAts[i] < 0.5)
+            {
+                return;
+            }
         }
         if(i < 0)
         {
@@ -5715,9 +5739,12 @@ class r_CoopEnemies
             for(j = 0; j < pendingHits[i].effects.Size(); j += 1)
             {
                 text += " " + pendingHits[i].effects[j];
-                if(j < pendingHits[i].lengths.Size() && pendingHits[i].lengths[j] != 0)
+                if(j < pendingHits[i].lengths.Size())
                 {
-                    text += ":" + FloatToStringPrec(pendingHits[i].lengths[j], 1);
+                    if(pendingHits[i].lengths[j] != 0)
+                    {
+                        text += ":" + FloatToStringPrec(pendingHits[i].lengths[j], 1);
+                    }
                 }
             }
         }
