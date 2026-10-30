@@ -2957,8 +2957,8 @@ class r_CoopEnemies
         CheckVersion(sender, WO_Str(8));
     }
 
-    // A player near for 15 s without a presence message (sent every 2 s since 0.4.0): it runs an older W3Coop, or the
-    // host's server is older than 0.4.0 (4 co-op channels: the newer messages are dropped). Said once on screen.
+    // A player near for 15 s without a presence message (sent every 2 s since 0.3.1): it runs an older W3Coop, or the
+    // host's server is older than 0.3.1 (4 co-op channels: the newer messages are dropped). Said once on screen.
     private function CheckSilentPlayers(now : float)
     {
         var players : array<r_RemotePlayer>;
@@ -3124,7 +3124,7 @@ class r_CoopEnemies
         return CoopVersion();
     }
 
-    // another player near runs another W3Coop version (none sent: older than 0.4.0): said once on screen, for each
+    // another player near runs another W3Coop version (none sent: older than 0.3.1): said once on screen, for each
     // version it runs
     private function CheckVersion(sender : string, theirs : string)
     {
@@ -3132,7 +3132,7 @@ class r_CoopEnemies
 
         if(theirs == "")
         {
-            theirs = "older than 0.4.0";
+            theirs = "older than 0.3.1";
         }
         if(theirs == OwnVersion())
         {
