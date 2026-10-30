@@ -430,6 +430,12 @@ class r_CoopEnemies
     public var versionOverride : string;    // tests: send this as this game's version
     private var versionWarned : array<string>;  // players told about (by name: version)
     public var versionWarnings : int;
+    public var muteHz : bool;               // tests: send no presence message (as an older W3Coop or server)
+    private var nearUsers : array<string>;  // players near, and since when (CheckSilentPlayers)
+    private var nearSince : array<float>;
+    private var silenceWarned : array<string>;
+    public var silenceWarnings : int;
+    private var lastSilenceCheck : float;
     public var hostSendBytesMax : int;      // leader: its largest snapshot so far
 
     // this player's bombs and shots of the last 1.5 s (SendThrows), and the last of each other player's played here
@@ -675,6 +681,7 @@ class r_CoopEnemies
         now = theGame.GetEngineTimeAsSeconds();
         RetryFactsBaseline(now);
         SendParkedHorse(now);
+        CheckSilentPlayers(now);
         ClearThrows(now);
         role = GetRole();
 
@@ -2794,6 +2801,10 @@ class r_CoopEnemies
                 + " " + FloatToStringPrec(horse.GetHeading(), 1);
         }
         effects = OwnShownEffects();
+        if(muteHz)
+        {
+            return;
+        }
         if((effects != ownShownText && now - parkedSentAt >= 0.1) || (text != parkedText && now - parkedSentAt >= 0.3)
             || now - parkedSentAt >= 2.0)
         {
@@ -2930,6 +2941,57 @@ class r_CoopEnemies
             }
         }
         CheckVersion(sender, WO_Str(8));
+    }
+
+    // A player near for 15 s without a presence message (sent every 2 s since 0.3.1): it runs an older W3Coop, or the
+    // host's server is older than 0.3.1 (4 co-op channels: the newer messages are dropped). Said once on screen.
+    private function CheckSilentPlayers(now : float)
+    {
+        var players : array<r_RemotePlayer>;
+        var i, k : int;
+        var text : string;
+
+        if(now - lastSilenceCheck < 1)
+        {
+            return;
+        }
+        lastSilenceCheck = now;
+        players = theGame.r_getMultiplayerClient().getPlayers();
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(!players[i])
+            {
+                continue;
+            }
+            k = nearUsers.FindFirst(players[i].username);
+            // (gone, dead or loading: its game sends nothing at all then; a new 15 s when it is back)
+            if(!players[i].ghost || !players[i].isAlive || now - players[i].lastUpdate > 3)
+            {
+                if(k >= 0)
+                {
+                    nearUsers.Erase(k);
+                    nearSince.Erase(k);
+                }
+                continue;
+            }
+            if(k < 0)
+            {
+                nearUsers.PushBack(players[i].username);
+                nearSince.PushBack(now);
+                continue;
+            }
+            if(now - MaxF(nearSince[k], players[i].parkedAt) < 15 || silenceWarned.Contains(players[i].username))
+            {
+                continue;
+            }
+            silenceWarned.PushBack(players[i].username);
+            silenceWarnings += 1;
+            text = players[i].username + " sends no W3Coop " + CoopVersion() + " updates: they run an older W3Coop, or the "
+                + "host's server is older (the host runs Host co-op.cmd of " + CoopVersion() + "). Horses, effects and versions "
+                + "aren't shown until then.";
+            theGame.GetGuiManager().ShowNotification(text);
+            LogSync("VS", 0, 0, CoopEncode(text));
+        }
     }
 
     private function OwnVersion() : string
