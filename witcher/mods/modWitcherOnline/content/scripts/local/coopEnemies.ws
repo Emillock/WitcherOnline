@@ -436,9 +436,6 @@ class r_CoopEnemies
     private var silenceWarned : array<string>;
     public var silenceWarnings : int;
     private var lastSilenceCheck : float;
-    private var hudUsers : array<string>;  // party members on the HUD's companion bars, in slot order (UpdatePartyHud)
-    private var lastHudUpdate : float;
-    public var partyHudText : string;      // tests: what the bars show ("name:health,...")
     public var hostSendBytesMax : int;      // leader: its largest snapshot so far
 
     // this player's bombs and shots of the last 1.5 s (SendThrows), and the last of each other player's played here
@@ -685,7 +682,6 @@ class r_CoopEnemies
         RetryFactsBaseline(now);
         SendParkedHorse(now);
         CheckSilentPlayers(now);
-        UpdatePartyHud(now);
         ClearThrows(now);
         role = GetRole();
 
@@ -3001,144 +2997,6 @@ class r_CoopEnemies
             theGame.GetGuiManager().ShowNotification(text);
             LogSync("VS", 0, 0, CoopEncode(text));
         }
-    }
-
-    // Party members' health on the HUD's companion bars (the ones quests use for Ciri and others; only those no quest uses
-    // now): up to two party members near, by their character here, its health set to what their game reports, with
-    // their name and their silver sword's icon. Every 0.5 s.
-    private function UpdatePartyHud(now : float)
-    {
-        var hud : CR4ScriptedHud;
-        var module : CR4HudModuleCompanion;
-        var witcher : W3PlayerWitcher;
-        var players, shown : array<r_RemotePlayer>;
-        var tags : array<name>;
-        var changed : bool;
-        var name2 : string;
-        var i : int;
-
-        if(now - lastHudUpdate < 0.5)
-        {
-            return;
-        }
-        lastHudUpdate = now;
-        hud = (CR4ScriptedHud)theGame.GetHud();
-        witcher = GetWitcherPlayer();
-        if(!hud || !witcher)
-        {
-            return;
-        }
-        module = (CR4HudModuleCompanion)hud.GetHudModule("CompanionModule");
-        if(!module)
-        {
-            return;
-        }
-        tags.PushBack('w3coop_party1');
-        tags.PushBack('w3coop_party2');
-
-        // who: party members near with a character here (none while a quest shows its companion)
-        if(witcher.GetCompanionNPCTag() == '' || witcher.GetCompanionNPCTag() == tags[0])
-        {
-            players = theGame.r_getMultiplayerClient().getPlayers();
-            for(i = 0; i < players.Size() && shown.Size() < 2; i += 1)
-            {
-                if(players[i] && players[i].ghost && InMyParty(players[i]))
-                {
-                    shown.PushBack(players[i]);
-                }
-            }
-        }
-
-        // the tags go with the characters shown now (and from any shown before)
-        for(i = 0; i < hudUsers.Size(); i += 1)
-        {
-            if(GhostOf(hudUsers[i]))
-            {
-                GhostOf(hudUsers[i]).RemoveTag(tags[0]);
-                GhostOf(hudUsers[i]).RemoveTag(tags[1]);
-            }
-        }
-        partyHudText = "";
-        for(i = 0; i < shown.Size(); i += 1)
-        {
-            shown[i].ghost.AddTag(tags[i]);
-            shown[i].ghost.SetHealthPerc(ClampF(shown[i].health, 0.01, 1));
-            if(partyHudText != "")
-            {
-                partyHudText += ",";
-            }
-            partyHudText += shown[i].username + ":" + FloatToStringPrec(shown[i].health, 2);
-        }
-
-        if(shown.Size() == 0)
-        {
-            if(hudUsers.Size() > 0 && witcher.GetCompanionNPCTag() == tags[0])
-            {
-                module.ShowCompanion(false, '');
-            }
-            hudUsers.Clear();
-            return;
-        }
-        // shown anew when who is shown changed (also drops a second bar no longer needed)
-        changed = hudUsers.Size() != shown.Size();
-        for(i = 0; i < shown.Size() && !changed; i += 1)
-        {
-            if(hudUsers[i] != shown[i].username)
-            {
-                changed = true;
-            }
-        }
-        if(changed)
-        {
-            hudUsers.Clear();
-            for(i = 0; i < shown.Size(); i += 1)
-            {
-                hudUsers.PushBack(shown[i].username);
-            }
-            witcher.SetCompanionNPCTag2('');
-            module.ShowCompanion(true, tags[0], SwordIcon(shown[0]));
-            if(shown.Size() > 1)
-            {
-                module.ShowCompanionSecond(tags[1], SwordIcon(shown[1]));
-            }
-        }
-        name2 = "";
-        if(shown.Size() > 1)
-        {
-            name2 = shown[1].username;
-        }
-        module.W3CoopSetNames(shown[0].username, name2);
-    }
-
-    private function InMyParty(p : r_RemotePlayer) : bool
-    {
-        var client : r_MultiplayerClient;
-
-        if(GetRole() == 1)
-        {
-            return IsMyPartyMember(p.username);
-        }
-        client = theGame.r_getMultiplayerClient();
-        if(!client.getInParty() || client.getJoinedParty() == "")
-        {
-            return false;
-        }
-        return p.username == client.getJoinedParty() || (p.inParty && p.joinedParty == client.getJoinedParty());
-    }
-
-    private function SwordIcon(p : r_RemotePlayer) : string
-    {
-        var icon : string;
-
-        if(IsNameValid(p.eq_silver))
-        {
-            icon = thePlayer.GetInventory().GetItemIconPathByName(p.eq_silver);
-        }
-        if(icon == "" && IsNameValid(p.eq_steel))
-        {
-            icon = thePlayer.GetInventory().GetItemIconPathByName(p.eq_steel);
-        }
-        return icon;
     }
 
     private function OwnVersion() : string
@@ -7268,15 +7126,4 @@ function CreateEntity(_SpawnPos : Vector, _Rotation : EulerAngles) : CEntity
         CoopSpellSpawn(GetNPC());
     }
     return entity;
-}
-
-// the companion bars' names (r_CoopEnemies.UpdatePartyHud): a party member's name, not its character's
-@addMethod(CR4HudModuleCompanion)
-function W3CoopSetNames(name1 : string, name2 : string)
-{
-    m_fxSetNameSFF.InvokeSelfOneArg(FlashArgString(name1));
-    if(name2 != "")
-    {
-        m_fxSetName2SFF.InvokeSelfOneArg(FlashArgString(name2));
-    }
 }
