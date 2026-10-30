@@ -427,6 +427,9 @@ class r_CoopEnemies
     public var ownShownText : string;       // this player's effects that show, as last sent with the horse
     public var ghostEffectsShown : int;     // other players' effects put on their characters here
     public var ghostEffectsEnded : int;
+    public var versionOverride : string;    // tests: send this as this game's version
+    private var versionWarned : array<string>;  // players told about (by name: version)
+    public var versionWarnings : int;
     public var hostSendBytesMax : int;      // leader: its largest snapshot so far
 
     // this player's bombs and shots of the last 1.5 s (SendThrows), and the last of each other player's played here
@@ -2798,7 +2801,7 @@ class r_CoopEnemies
             ownShownText = effects;
             parkedSentAt = now;
             parkedSent += 1;
-            WO_Send("coop hz " + parkedSent + " " + text + " " + effects);
+            WO_Send("coop hz " + parkedSent + " " + text + " " + effects + " " + OwnVersion());
         }
     }
 
@@ -2926,6 +2929,43 @@ class r_CoopEnemies
                 leaderListsEffects = true;
             }
         }
+        CheckVersion(sender, WO_Str(8));
+    }
+
+    private function OwnVersion() : string
+    {
+        if(versionOverride != "")
+        {
+            return versionOverride;
+        }
+        return CoopVersion();
+    }
+
+    // another player near runs another W3Coop version (none sent: older than 0.3.1): said once on screen, for each
+    // version it runs
+    private function CheckVersion(sender : string, theirs : string)
+    {
+        var key, text : string;
+
+        if(theirs == "")
+        {
+            theirs = "older than 0.3.1";
+        }
+        if(theirs == OwnVersion())
+        {
+            return;
+        }
+        key = sender + ":" + theirs;
+        if(versionWarned.Contains(key))
+        {
+            return;
+        }
+        versionWarned.PushBack(key);
+        versionWarnings += 1;
+        text = sender + " plays W3Coop " + theirs + ", you " + OwnVersion() + ". Play with the same version: other versions "
+            + "work only in part.";
+        theGame.GetGuiManager().ShowNotification(text);
+        LogSync("VW", 0, 0, CoopEncode(text));
     }
 
     // This player threw a bomb ("b", the item) or shot a projectile ("p", its template: a crossbow bolt): the other
@@ -5963,6 +6003,12 @@ class r_CoopEnemies
     {
         return pendingHits.Size();
     }
+}
+
+// this build's W3Coop version (package/build_package.py checks it against the version it packages)
+function CoopVersion() : string
+{
+    return "0.3.1";
 }
 
 // what a puppet keeps of a hit, so the vanilla hit reaction runs (its health is the leader's anyway)
