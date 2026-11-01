@@ -32,7 +32,9 @@ statemachine class MPDRPlayer extends CNewNPC
 
 		if( actionName == "Interact" )
 		{
-			theGame.r_getMultiplayerClient().createMenu(((CActor)this));
+			// the radial menu shows no entries on Remastered: ask about the party in the game's own dialog
+			// (coopmenu() in the console still opens the menu, trading and emotes with it)
+			theGame.r_getMultiplayerClient().getCoopEnemies().OfferParty(((CActor)this));
 		}
 	}
 	

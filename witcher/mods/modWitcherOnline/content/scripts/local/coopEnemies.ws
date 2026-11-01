@@ -74,6 +74,8 @@ class r_CoopPuppet
 {
     public var npc : CNewNPC;
     public var netId : int;
+    public var seenAt : float;  // the last snapshot that named it (UpdatePuppets drops ones the leader went quiet on)
+    public var killedAt : float;  // when it was killed here (it may yet be standing: see FreeStuckPuppet)
     public var spawned : bool;  // created here (destroyed on release) or a local twin (AI given back on release)
     public var aiId : int;
     public var target : Vector;
@@ -431,11 +433,13 @@ class r_CoopEnemies
     private var versionWarned : array<string>;  // players told about (by name: version)
     public var versionWarnings : int;
     public var muteHz : bool;               // tests: send no presence message (as an older W3Coop or server)
+    public var muteHost : bool;             // tests: send no monster snapshot (a leader that went quiet)
     private var nearUsers : array<string>;  // players near, and since when (CheckSilentPlayers)
     private var nearSince : array<float>;
     private var silenceWarned : array<string>;
     public var silenceWarnings : int;
     private var lastSilenceCheck : float;
+    private var partyAsked : string;       // the player the party question on screen is about (OfferParty)
     private var travelLeader : string;     // the leader whose place was sampled last (CheckLeaderTravel)
     private var travelArea : int;
     private var travelPos : Vector;
@@ -469,6 +473,8 @@ class r_CoopEnemies
     public var hitsApplied : int;
     public var puppetsSpawned : int;
     public var puppetsKilled : int;  // puppets that died with the leader's monster
+    public var puppetsTimedOut : int;  // puppets dropped because the leader stopped sending them
+    public var puppetsFreed : int;     // puppets killed here that stayed standing and were let go
     public var twinsBound : int;
     public var spawnFailures : int;
     public var lastError : string;
@@ -877,6 +883,10 @@ class r_CoopEnemies
         var i : int;
         var now : float;
 
+        if(muteHost)
+        {
+            return;
+        }
         now = theGame.GetEngineTimeAsSeconds();
         hostSeq += 1;
         body = "";
@@ -1294,6 +1304,8 @@ class r_CoopEnemies
         ghostEffectsEnded = 0;
         hurtsDroppedDead = 0;
         killsCredited = 0;
+        puppetsTimedOut = 0;
+        puppetsFreed = 0;
         effectTypesHeld.Clear();
         localEffectsDropped = 0;
         heavyClaims = 0;
@@ -3115,6 +3127,68 @@ class r_CoopEnemies
         travelGoAt = theGame.GetEngineTimeAsSeconds() + 0.5;
     }
 
+    // Interacting with another player (ghostPlayer.ws): asks to join their party, or to leave it, in the game's own
+    // dialog. Witcher Online's radial menu, which carries this, renders no entries on Remastered.
+    public function OfferParty(ghost : CActor)
+    {
+        var client : r_MultiplayerClient;
+        var players : array<r_RemotePlayer>;
+        var guiManager : CR4GuiManager;
+        var user : string;
+        var i : int;
+
+        client = theGame.r_getMultiplayerClient();
+        players = client.getPlayers();
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(players[i])
+            {
+                if(players[i].ghost == ghost)
+                {
+                    user = players[i].username;
+                }
+            }
+        }
+        if(user == "")
+        {
+            return;
+        }
+        guiManager = theGame.GetGuiManager();
+        if(guiManager.GetPopup('MessagePopup'))
+        {
+            return;
+        }
+        partyAsked = user;
+        if(client.getInParty() && client.getJoinedParty() == user)
+        {
+            guiManager.ShowUserDialogAdv(W3CoopPartyMessageId(), "W3Coop", "Leave " + user + "'s party?", false, UDB_YesNo);
+            return;
+        }
+        guiManager.ShowUserDialogAdv(W3CoopPartyMessageId(), "W3Coop", "Join " + user + "'s party? Then their world's "
+            + "monsters and quest progress count for you both.", false, UDB_YesNo);
+    }
+
+    // the answer to OfferParty's question (CR4GuiManager.UserDialogCallback)
+    public function OnPartyAnswer(yes : bool)
+    {
+        var client : r_MultiplayerClient;
+
+        if(!yes || partyAsked == "")
+        {
+            return;
+        }
+        client = theGame.r_getMultiplayerClient();
+        if(client.getInParty() && client.getJoinedParty() == partyAsked)
+        {
+            client.leaveParty();
+        }
+        else
+        {
+            client.joinParty(partyAsked);
+        }
+        partyAsked = "";
+    }
+
     private function OwnVersion() : string
     {
         if(versionOverride != "")
@@ -3760,6 +3834,7 @@ class r_CoopEnemies
             p.hitSeq = hitSeq;
             p.moveSeq = moveSeq;
         }
+        p.seenAt = now;
 
         // hits by others (this player's own hits already reacted here)
         if(hitSeq != p.hitSeq)
@@ -5080,8 +5155,33 @@ class r_CoopEnemies
                 puppets.Erase(i);
                 continue;
             }
+            if(now - p.seenAt > 5.0)
+            {
+                puppetsTimedOut += 1;
+                LogSync("PT", p.netId, 0, FloatToStringPrec(now - p.seenAt, 1));
+                ReleasePuppet(p);  // (a dead one keeps its body, as when the leader drops it)
+                puppets.Erase(i);
+                continue;
+            }
             if(!p.alive)
             {
+                // killed here, yet still standing: immortal in this world, or knocked out instead of killed. Its AI
+                // was taken away for the mirroring, so it would hold its last pose for good.
+                if(p.killedAt > 0)
+                {
+                    if(now - p.killedAt > 2.0)
+                    {
+                        if(p.npc.IsAlive())
+                        {
+                            puppetsFreed += 1;
+                            LogSync("PF", p.netId, 0, "");
+                            FreeStuckPuppet(p);
+                            puppets.Erase(i);
+                            continue;
+                        }
+                        p.killedAt = 0;
+                    }
+                }
                 continue;
             }
 
@@ -5292,6 +5392,7 @@ class r_CoopEnemies
     private function KillPuppet(p : r_CoopPuppet)
     {
         p.alive = false;
+        p.killedAt = theGame.GetEngineTimeAsSeconds();
         puppetsKilled += 1;
         StopSlotAttack(p);
         if(p.animAiId != 0)
@@ -5316,6 +5417,19 @@ class r_CoopEnemies
             p.npc.Kill('W3Coop', true);
         }
         applyingHostState = false;
+    }
+
+    // a copy that outlived its death here: a spawned one has nothing left to do in this world, a local twin is
+    // this world's own monster again
+    private function FreeStuckPuppet(p : r_CoopPuppet)
+    {
+        if(p.spawned)
+        {
+            p.npc.Destroy();
+            return;
+        }
+        p.alive = true;
+        ReleasePuppet(p);
     }
 
     // a puppet the leader no longer reports: spawned ones go away, local twins get their own AI back
@@ -7244,10 +7358,15 @@ function CreateEntity(_SpawnPos : Vector, _Rotation : EulerAngles) : CEntity
     return entity;
 }
 
-// the dialog r_CoopEnemies.CheckLeaderTravel shows (any id the game's own dialogs don't use)
+// the dialogs W3Coop shows (any ids the game's own dialogs don't use)
 function W3CoopTravelMessageId() : int
 {
     return 731101;
+}
+
+function W3CoopPartyMessageId() : int
+{
+    return 731102;
 }
 
 @wrapMethod(CR4GuiManager)
@@ -7256,6 +7375,10 @@ function UserDialogCallback(messageId : int, actionId : EUserMessageAction) : vo
     if(messageId == W3CoopTravelMessageId())
     {
         theGame.r_getMultiplayerClient().getCoopEnemies().OnTravelAnswer(actionId == UMA_Yes);
+    }
+    if(messageId == W3CoopPartyMessageId())
+    {
+        theGame.r_getMultiplayerClient().getCoopEnemies().OnPartyAnswer(actionId == UMA_Yes);
     }
     wrappedMethod(messageId, actionId);
 }
