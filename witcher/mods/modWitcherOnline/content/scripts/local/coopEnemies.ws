@@ -434,12 +434,14 @@ class r_CoopEnemies
     public var versionWarnings : int;
     public var muteHz : bool;               // tests: send no presence message (as an older W3Coop or server)
     public var muteHost : bool;             // tests: send no monster snapshot (a leader that went quiet)
+    public var muteWoClock : bool;          // tests: leave Witcher Online's own clock sync out of it
     private var nearUsers : array<string>;  // players near, and since when (CheckSilentPlayers)
     private var nearSince : array<float>;
     private var silenceWarned : array<string>;
     public var silenceWarnings : int;
     private var lastSilenceCheck : float;
-    private var partyAsked : string;       // the player the party question on screen is about (OfferParty)
+    private var partyAsked : string;       // the player the question on screen is about (OfferParty)
+    private var askLeaveAt : float;        // when to ask about leaving the party (after no to trading; 0: not)
     private var travelLeader : string;     // the leader whose place was sampled last (CheckLeaderTravel)
     private var travelArea : int;
     private var travelPos : Vector;
@@ -475,6 +477,7 @@ class r_CoopEnemies
     public var puppetsKilled : int;  // puppets that died with the leader's monster
     public var puppetsTimedOut : int;  // puppets dropped because the leader stopped sending them
     public var puppetsFreed : int;     // puppets killed here that stayed standing and were let go
+    public var clocksFollowed : int;   // times this game's clock was set to the party leader's
     public var twinsBound : int;
     public var spawnFailures : int;
     public var lastError : string;
@@ -696,6 +699,7 @@ class r_CoopEnemies
         RetryFactsBaseline(now);
         SendParkedHorse(now);
         CheckSilentPlayers(now);
+        AskLeaveParty(now);
         ClearThrows(now);
         role = GetRole();
         CheckLeaderTravel(now, role);
@@ -1306,6 +1310,7 @@ class r_CoopEnemies
         killsCredited = 0;
         puppetsTimedOut = 0;
         puppetsFreed = 0;
+        clocksFollowed = 0;
         effectTypesHeld.Clear();
         localEffectsDropped = 0;
         heavyClaims = 0;
@@ -2809,7 +2814,8 @@ class r_CoopEnemies
     // This player's horse standing where it was left (not ridden, within 100 m): other players' games keep Witcher
     // Online's horse for this player there (by itself it showed that horse only while ridden). With it, this player's
     // own effects that show (OwnShownEffects), for their character in the others' games. "hz seq 1 x y z yaw effects",
-    // or "hz seq 0 0 0 0 0 effects"; effects at once when they changed, the horse within 0.3 s, else every 2 s (any
+    // or "hz seq 0 0 0 0 0 effects"; then the W3Coop version and this game's clock. Effects at once when they
+    // changed, the horse within 0.3 s, else every 2 s (any
     // player, in a party or not). The count makes each one new: the client passes a channel's message on only when it
     // changed.
     private function SendParkedHorse(now : float)
@@ -2838,7 +2844,8 @@ class r_CoopEnemies
             ownShownText = effects;
             parkedSentAt = now;
             parkedSent += 1;
-            WO_Send("coop hz " + parkedSent + " " + text + " " + effects + " " + OwnVersion());
+            WO_Send("coop hz " + parkedSent + " " + text + " " + effects + " " + OwnVersion() + " "
+                + GameTimeToSeconds(theGame.GetGameTime()));
         }
     }
 
@@ -2946,6 +2953,7 @@ class r_CoopEnemies
         var p : r_RemotePlayer;
 
         parkedHeard += 1;
+        FollowLeaderClock(sender, WO_Str(9));  // before the lookup: a leader far away has no record here
         p = mpghosts_getPlayer(sender);
         if(!p)
         {
@@ -2967,6 +2975,41 @@ class r_CoopEnemies
             }
         }
         CheckVersion(sender, WO_Str(8));
+    }
+
+    // A member's time of day follows its leader's, whatever the distance or region (Witcher Online does this too,
+    // but only while the leader is near and in the same region, because its clock rides in the near-player
+    // snapshot). Left alone within 90 s, as there: the two clocks run at the same speed, and a few seconds apart
+    // is nothing to anyone.
+    private function FollowLeaderClock(sender : string, text : string)
+    {
+        var client : r_MultiplayerClient;
+        var theirs, mine, day : int;
+
+        if(text == "" || sender == "")
+        {
+            return;
+        }
+        client = theGame.r_getMultiplayerClient();
+        if(!client.getInParty() || client.getJoinedParty() != sender)
+        {
+            return;
+        }
+        theirs = StringToInt(text, -1);
+        mine = GameTimeToSeconds(theGame.GetGameTime());
+        LogSync("CH", 0, theirs - mine, sender);
+        if(theirs < 0)
+        {
+            return;
+        }
+        if(AbsF(mine - theirs) <= 90)
+        {
+            return;
+        }
+        clocksFollowed += 1;
+        LogSync("CL", 0, theirs - mine, "");
+        day = theirs / 86400;
+        theGame.SetGameTime(GameTimeCreate(day, (theirs / 3600) % 24, (theirs / 60) % 60, theirs % 60), true);
     }
 
     // A player near for 15 s without a presence message (sent every 2 s since 0.3.1): it runs an older W3Coop, or the
@@ -3159,13 +3202,55 @@ class r_CoopEnemies
             return;
         }
         partyAsked = user;
+        askLeaveAt = 0;
+        // in their party: trading first, then leaving it (both were theirs in the menu that no longer draws)
         if(client.getInParty() && client.getJoinedParty() == user)
         {
-            guiManager.ShowUserDialogAdv(W3CoopPartyMessageId(), "W3Coop", "Leave " + user + "'s party?", false, UDB_YesNo);
+            guiManager.ShowUserDialogAdv(W3CoopTradeMessageId(), "W3Coop", "Trade with " + user + "?", false, UDB_YesNo);
             return;
         }
         guiManager.ShowUserDialogAdv(W3CoopPartyMessageId(), "W3Coop", "Join " + user + "'s party? Then their world's "
             + "monsters and quest progress count for you both.", false, UDB_YesNo);
+    }
+
+    // the answer to the trading question (CR4GuiManager.UserDialogCallback): no leads to the party question, which
+    // cannot be put up from inside the answer to the one closing, so Tick does it
+    public function OnTradeAnswer(yes : bool)
+    {
+        var ghost : CActor;
+
+        if(partyAsked == "")
+        {
+            return;
+        }
+        if(!yes)
+        {
+            askLeaveAt = theGame.GetEngineTimeAsSeconds() + 0.3;
+            return;
+        }
+        ghost = GhostOf(partyAsked);
+        partyAsked = "";
+        if(ghost)
+        {
+            theGame.r_getMultiplayerClient().tradeWithPlayer(ghost);
+        }
+    }
+
+    private function AskLeaveParty(now : float)
+    {
+        var guiManager : CR4GuiManager;
+
+        if(askLeaveAt == 0 || now < askLeaveAt)
+        {
+            return;
+        }
+        askLeaveAt = 0;
+        guiManager = theGame.GetGuiManager();
+        if(partyAsked == "" || guiManager.GetPopup('MessagePopup'))
+        {
+            return;
+        }
+        guiManager.ShowUserDialogAdv(W3CoopPartyMessageId(), "W3Coop", "Leave " + partyAsked + "'s party?", false, UDB_YesNo);
     }
 
     // the answer to OfferParty's question (CR4GuiManager.UserDialogCallback)
@@ -7369,6 +7454,11 @@ function W3CoopPartyMessageId() : int
     return 731102;
 }
 
+function W3CoopTradeMessageId() : int
+{
+    return 731103;
+}
+
 @wrapMethod(CR4GuiManager)
 function UserDialogCallback(messageId : int, actionId : EUserMessageAction) : void
 {
@@ -7379,6 +7469,10 @@ function UserDialogCallback(messageId : int, actionId : EUserMessageAction) : vo
     if(messageId == W3CoopPartyMessageId())
     {
         theGame.r_getMultiplayerClient().getCoopEnemies().OnPartyAnswer(actionId == UMA_Yes);
+    }
+    if(messageId == W3CoopTradeMessageId())
+    {
+        theGame.r_getMultiplayerClient().getCoopEnemies().OnTradeAnswer(actionId == UMA_Yes);
     }
     wrappedMethod(messageId, actionId);
 }

@@ -890,7 +890,7 @@ statemachine class r_MultiplayerClient
 
         newTime = GameTimeCreate(remotePlayer.day, remotePlayer.hour, remotePlayer.minute, remotePlayer.second);
 
-        if(!isGameTimeCloseEnough(newTime, 90))
+        if(!isGameTimeCloseEnough(newTime, 90) && !getCoopEnemies().muteWoClock)
         {
             theGame.SetGameTime( newTime, true );
         }
