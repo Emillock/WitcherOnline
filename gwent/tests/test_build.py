@@ -14,6 +14,7 @@ import redswf
 GWENT_DIR = Path(__file__).resolve().parent.parent
 GAME_DIR = Path(os.environ.get(
     "WITCHER3_GAME_DIR", r"C:\Program Files (x86)\GOG Galaxy\Games\The Witcher 3 Wild Hunt GOTY"))
+MOVIE_VERSION = 12
 PACKAGE = "red.game.witcher3.menus.gwint"
 
 
@@ -61,6 +62,9 @@ def test_build_lists_probe_class(tmp_path: Path) -> None:
     assert (content / "metadata.store").is_file()
     board = bundle.extract(content / "blob0.bundle", build.BOARD_ENTRY)
     redswf.check_consistency(board)
+    movie = redswf.read_movie(board)
+    assert board[movie.blob_offset:movie.blob_offset + 3] == b"CFX"
+    assert movie.version == MOVIE_VERSION
     swf = tmp_path / "result.swf"
     swf.write_bytes(redswf.read_movie(board).fws)
     classes = ffdec.dump_as3(swf)
