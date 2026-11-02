@@ -1,0 +1,296 @@
+package red.game.witcher3.menus.gwint
+{
+   import flash.events.TimerEvent;
+   import flash.utils.Timer;
+
+   /**
+    * In-game self-test of the board-independent duel classes: replays every vector of DuelVectors (generated
+    * from the Python reference) through DuelRandom, DuelHash, DuelCodec and DuelWindow, plus hand-written checks
+    * of DuelIds, the window cap and the error paths. Runs only when the script sets gwint.game.debug.selfTest
+    * (the w3test bot does, a normal player never), and reports "DUEL SELFTEST pass=n fail=m" and one
+    * "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
+    */
+   public class DuelSelfTest
+   {
+
+      /** Most failure lines report sends (the count in the summary line is always complete). */
+      public static const MAX_REPORTED_FAILURES:int = 20;
+
+      /** Prefix of every line the self-test logs. */
+      public static const PREFIX:String = "DUEL SELFTEST";
+
+      private static var _checks:int = 0;
+
+      private static var _timer:Timer;
+
+      private var _count:int = 0;
+
+      private var _failures:Array;
+
+      /**
+       * Creates an empty test run; use the static run().
+       */
+      public function DuelSelfTest()
+      {
+         super();
+         this._failures = [];
+      }
+
+      /**
+       * Runs every check.
+       * @return The failure messages, empty when everything passed.
+       */
+      public static function run() : Array
+      {
+         var test:DuelSelfTest = new DuelSelfTest();
+         test.guard("random",test.checkRandom);
+         test.guard("hash",test.checkHash);
+         test.guard("codec",test.checkCodec);
+         test.guard("window",test.checkWindow);
+         test.guard("ids",test.checkIds);
+         test.guard("edges",test.checkEdges);
+         _checks = test._count;
+         return test._failures;
+      }
+
+      /**
+       * Number of checks the last run() made (passed and failed).
+       */
+      public static function get checks() : int
+      {
+         return _checks;
+      }
+
+      /**
+       * The lines that report one run: the summary, then the first MAX_REPORTED_FAILURES failures.
+       * @param failures What run() returned.
+       * @param checks How many checks run() made.
+       * @return The log lines.
+       */
+      public static function reportLines(failures:Array, checks:int) : Array
+      {
+         var lines:Array = [PREFIX + " pass=" + (checks - failures.length) + " fail=" + failures.length];
+         for(var i:int = 0; i < failures.length && i < MAX_REPORTED_FAILURES; i++)
+         {
+            lines.push(PREFIX + " FAIL " + failures[i]);
+         }
+         if(failures.length > MAX_REPORTED_FAILURES)
+         {
+            lines.push(PREFIX + " FAIL (" + (failures.length - MAX_REPORTED_FAILURES) + " more not listed)");
+         }
+         return lines;
+      }
+
+      /**
+       * Runs the self-test on the next timer tick (outside the script call that turned it on) and passes each
+       * report line to log.
+       * @param log function(line:String):void, for example a call of the script event OnDuelLog.
+       */
+      public static function start(log:Function) : void
+      {
+         if(_timer != null)
+         {
+            return;
+         }
+         _timer = new Timer(1,1);
+         _timer.addEventListener(TimerEvent.TIMER_COMPLETE,function(event:TimerEvent):void
+         {
+            var lines:Array = reportLines(run(),_checks);
+            for(var i:int = 0; i < lines.length; i++)
+            {
+               log(lines[i]);
+            }
+            _timer = null;
+         });
+         _timer.start();
+      }
+
+      /** Runs one group of checks; an exception becomes a failure instead of ending the run. */
+      private function guard(group:String, body:Function) : void
+      {
+         try
+         {
+            body();
+         }
+         catch(error:Error)
+         {
+            this.expect(false,group + " threw " + error.name + ": " + error.message);
+         }
+      }
+
+      /** Counts one check and records message when it failed. */
+      private function expect(ok:Boolean, message:String) : void
+      {
+         this._count++;
+         if(!ok)
+         {
+            this._failures.push(message);
+         }
+      }
+
+      private function checkRandom() : void
+      {
+         var rows:Array = DuelVectors.RANDOM;
+         for(var r:int = 0; r < rows.length; r++)
+         {
+            var row:Array = rows[r];
+            var rng:DuelRandom = new DuelRandom(uint(row[0]),int(row[1]));
+            var stream:int = int(row[2]);
+            var n:int = int(row[3]);
+            var mismatch:String = null;
+            for(var k:int = 0; k < 8 && mismatch == null; k++)
+            {
+               var got:Number = n == 0 ? Number(rng.nextUint(stream)) : Number(rng.nextInt(stream,n));
+               if(got != Number(row[4 + k]))
+               {
+                  mismatch = "draw " + (k + 1) + " got " + got + " want " + row[4 + k];
+               }
+            }
+            this.expect(mismatch == null,"random row " + r + " (seed " + row[0] + " game " + row[1] + " stream " + stream + " n " + n + "): " + mismatch);
+         }
+      }
+
+      private function checkHash() : void
+      {
+         var rows:Array = DuelVectors.HASH;
+         for(var r:int = 0; r < rows.length; r++)
+         {
+            var row:Array = rows[r];
+            var h:DuelHash = new DuelHash();
+            for(var i:int = 1; i < row.length; i++)
+            {
+               h.addInt(int(row[i]));
+            }
+            this.expect(h.value() == uint(row[0]),"hash row " + r + " (" + (row.length - 1) + " words): got " + h.value() + " want " + row[0]);
+         }
+      }
+
+      private function checkCodec() : void
+      {
+         var rows:Array = DuelVectors.CODEC;
+         for(var r:int = 0; r < rows.length; r++)
+         {
+            var row:Array = rows[r];
+            var token:String = row[0];
+            var m:DuelMessage = DuelCodec.decode(token);
+            var ok:Boolean = m != null && m.version == int(row[1]) && m.matchId == row[2] && m.seq == int(row[3]) && m.type == row[4] && m.args.join(",") == row[5] && m.hash == uint(row[6]);
+            this.expect(ok,"codec decode " + r + " " + token + ": got " + describe(m));
+            var args:Array = row[5] == "" ? [] : String(row[5]).split(",");
+            var encoded:String = DuelCodec.encode(new DuelMessage(int(row[1]),row[2],int(row[3]),row[4],args,uint(row[6])));
+            this.expect(encoded == token,"codec encode " + r + ": got " + encoded + " want " + token);
+         }
+         var malformed:Array = DuelVectors.CODEC_MALFORMED;
+         for(var i:int = 0; i < malformed.length; i++)
+         {
+            var bad:DuelMessage = DuelCodec.decode(malformed[i]);
+            this.expect(bad == null,"codec malformed " + i + " \"" + malformed[i] + "\" decoded to " + describe(bad));
+         }
+      }
+
+      private function checkWindow() : void
+      {
+         var rows:Array = DuelVectors.WINDOW;
+         var window:DuelWindow = null;
+         var scenario:int = -1;
+         var step:int = 0;
+         for(var r:int = 0; r < rows.length; r++)
+         {
+            var row:Array = rows[r];
+            if(int(row[0]) != scenario)
+            {
+               scenario = int(row[0]);
+               window = new DuelWindow(row[2]);
+               step = 0;
+            }
+            window.ingest(row[3]);
+            var pops:Array = [];
+            while(window.peek() != null)
+            {
+               pops.push(window.pop().seq);
+            }
+            var gap:int = window.gap ? 1 : 0;
+            this.expect(pops.join(",") == row[4] && gap == int(row[5]),"window " + row[1] + " step " + step + ": popped [" + pops.join(",") + "] gap " + gap + ", want [" + row[4] + "] gap " + row[5]);
+            step++;
+         }
+      }
+
+      private function checkIds() : void
+      {
+         var ids:DuelIds = new DuelIds();
+         this.expect(ids.assign(DuelIds.SEAT_A,100) == 1,"ids first A is 1");
+         this.expect(ids.assign(DuelIds.SEAT_B,200) == 65537,"ids first B is 65537");
+         this.expect(ids.assign(DuelIds.SEAT_A,101) == 2,"ids second A is 2");
+         this.expect(ids.toLocal(65537) == 200 && ids.toNet(101) == 2,"ids maps both ways");
+         this.expect(ids.toLocal(3) == -1 && ids.toNet(999) == -1,"ids unknown is -1");
+         ids.forget(100);
+         this.expect(ids.toNet(100) == -1 && ids.toLocal(1) == -1 && ids.toLocal(2) == 101,"ids forget drops one instance");
+         this.expect(ids.assign(DuelIds.SEAT_A,100) == 3,"ids are not reused after forget");
+         this.expect(ids.assign(DuelIds.SEAT_A,101) == 4 && ids.toLocal(2) == -1,"ids reassign drops the old id");
+         ids.reset();
+         this.expect(ids.toLocal(4) == -1 && ids.toNet(101) == -1,"ids reset clears the maps");
+         this.expect(ids.assign(DuelIds.SEAT_A,7) == 1 && ids.assign(DuelIds.SEAT_B,8) == 65537,"ids reset restarts the counters");
+         this.expect(DuelIds.format(17) == "A17" && DuelIds.format(65537) == "B1" && DuelIds.format(131071) == "B65535","ids format");
+         this.expect(DuelIds.parse("A17") == 17 && DuelIds.parse("B1") == 65537 && DuelIds.parse("B65535") == 131071,"ids parse");
+         var malformed:Array = ["","A","B","C1","a1","A0","A01","A-1","A1x","A 1","A65536","B999999","1","AA1"];
+         for(var i:int = 0; i < malformed.length; i++)
+         {
+            this.expect(DuelIds.parse(malformed[i]) == -1,"ids parse rejects \"" + malformed[i] + "\"");
+         }
+         this.expect(DuelIds.parse(null) == -1,"ids parse rejects null");
+         this.expect(raises(function():void
+         {
+            DuelIds.format(0);
+         }),"ids format rejects ordinal 0");
+      }
+
+      private function checkEdges() : void
+      {
+         this.expect(DuelRandom.mul32(0xFFFFFFFF,0xFFFFFFFF) == 1,"mul32 max * max");
+         this.expect(DuelRandom.mul32(0x9E3779B9,3) == 0xDAA66D2B,"mul32 golden * 3");
+         this.expect(DuelRandom.mul32(0x12345678,0x9ABCDEF0) == 0x242D2080,"mul32 mixed");
+         this.expect(raises(function():void
+         {
+            new DuelRandom(1,0).nextInt(DuelRandom.STREAM_A,0);
+         }),"nextInt rejects n 0");
+         this.expect(DuelMessage.matchIdFor(0x1A2B3C4D,2) == "1a2b3c4dg2" && DuelMessage.matchIdFor(0xFFFFFFFF,9) == "ffffffffg9","matchIdFor");
+         this.expect(DuelCodec.hex8(0) == "00000000" && DuelCodec.hex8(0xFFFFFFFF) == "ffffffff","hex8");
+         this.expect(raises(function():void
+         {
+            DuelCodec.encode(new DuelMessage(1,"ABCg1",1,"S",[],0));
+         }),"encode rejects a bad match id");
+         this.expect(DuelCodec.encode(new DuelMessage(1,"0g0",1,"S",null,0)) == "1.0g0.1.S._.00000000","encode without args");
+         this.expect(windowTake("0g0",1 + DuelWindow.MAX_AHEAD),"window queues a seq MAX_AHEAD above the next");
+         this.expect(!windowTake("0g0",2 + DuelWindow.MAX_AHEAD),"window ignores a seq further ahead");
+      }
+
+      /** True if a fresh window queues (reports a gap for) a lone message with this seq. */
+      private static function windowTake(matchId:String, seq:int) : Boolean
+      {
+         var window:DuelWindow = new DuelWindow(matchId);
+         window.ingest(DuelCodec.encode(new DuelMessage(DuelCodec.PROTOCOL_VERSION,matchId,seq,"S",[],0)));
+         return window.gap;
+      }
+
+      private static function raises(body:Function) : Boolean
+      {
+         try
+         {
+            body();
+         }
+         catch(error:Error)
+         {
+            return true;
+         }
+         return false;
+      }
+
+      private static function describe(m:DuelMessage) : String
+      {
+         if(m == null)
+         {
+            return "null";
+         }
+         return "[" + m.version + " " + m.matchId + " " + m.seq + " " + m.type + " (" + m.args.join(",") + ") " + m.hash + "]";
+      }
+   }
+}

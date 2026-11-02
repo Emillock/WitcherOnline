@@ -5,11 +5,28 @@
 @addField(CR4GwintGameMenu)
 var duelLogLines : array<string>;
 
-// The board's build probe: DuelProbe.ping, called once from GwintGameMenu.configUI, raises it with "probe-1".
-@addMethod(CR4GwintGameMenu)
-event OnDuelProbe(arg : string)
+// Test tools (the w3test bot, only while it runs) set this before opening the Gwent menu: the board then runs its
+// self-test of the duel classes (DuelSelfTest) and reports "DUEL SELFTEST pass=<n> fail=<m>" through OnDuelLog.
+// Nothing else sets it, so a normal player never runs the self-test.
+@addField(CR4GwintManager)
+var duelSelfTest : bool;
+
+@wrapMethod(CR4GwintGameMenu)
+function OnConfigUI()
 {
-    DuelLog("probe " + arg);
+    wrappedMethod();
+
+    if(theGame.GetGwintManager().duelSelfTest)
+    {
+        m_flashValueStorage.SetFlashBool("gwint.game.debug.selfTest", true);
+    }
+}
+
+// The board's duel log (DuelSelfTest now; DuelSession from Task 9 on).
+@addMethod(CR4GwintGameMenu)
+event OnDuelLog(line : string)
+{
+    DuelLog(line);
 }
 
 @addMethod(CR4GwintGameMenu)

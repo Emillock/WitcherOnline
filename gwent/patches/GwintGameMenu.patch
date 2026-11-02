@@ -1,12 +1,41 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameMenu.as b/red/game/witcher3/menus/gwint/GwintGameMenu.as
-index d420f42..b52c84e 100644
+index d420f42..dc8b308 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameMenu.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameMenu.as
-@@ -143,6 +143,7 @@ package red.game.witcher3.menus.gwint
+@@ -139,6 +139,7 @@ package red.game.witcher3.menus.gwint
+          stage.addEventListener(GestureEventEx.GESTURE_PRESS,this.handleGestureOrMouseClick,false,2,true);
+          this.setupSkipButton();
+          this.mcChoiceDialog.visible = false;
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.selfTest",[this.setDuelSelfTest]));
+          dispatchEvent(new GameEvent(GameEvent.CALL,"OnConfigUI"));
           dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.spawnCardInstance",[this.onSpawnCardInstance]));
           dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.addCardToDeck",[this.onAddCardToDeck]));
-          dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.killCard",[this.onKillCard]));
-+         DuelProbe.ping(this);
+@@ -348,6 +349,28 @@ package red.game.witcher3.menus.gwint
+          _cardManager.cardValues = cardValues as GwintCardValues;
        }
        
-       override public function setPlatform(platformType:uint) : void
++      /**
++       * Flash value gwint.game.debug.selfTest: true runs DuelSelfTest once and reports through OnDuelLog.
++       * Only test tools set it; a normal player never runs the self-test.
++       * @param enabled Whether the script asks for the self-test.
++       */
++      public function setDuelSelfTest(enabled:Boolean) : void
++      {
++         if(enabled)
++         {
++            DuelSelfTest.start(this.duelLog);
++         }
++      }
++      
++      /**
++       * Hands one duel log line to the script (event OnDuelLog, which logs "GwentDuel: <line>").
++       * @param line The line.
++       */
++      public function duelLog(line:String) : void
++      {
++         dispatchEvent(new GameEvent(GameEvent.CALL,"OnDuelLog",[line]));
++      }
++      
+       public function setAIEnabled(turnAIOn:Boolean) : void
+       {
+          if(turnAIOn)

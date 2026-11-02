@@ -1,4 +1,4 @@
-"""Tests for the build pipeline: the diff command and the real end to end probe build."""
+"""Tests for the build pipeline: the diff command and the real end to end build with our classes."""
 import os
 import subprocess
 import sys
@@ -16,6 +16,7 @@ GAME_DIR = Path(os.environ.get(
     "WITCHER3_GAME_DIR", r"C:\Program Files (x86)\GOG Galaxy\Games\The Witcher 3 Wild Hunt GOTY"))
 MOVIE_VERSION = 12
 PACKAGE = "red.game.witcher3.menus.gwint"
+DUEL_CLASSES = sorted(path.stem for path in (GWENT_DIR / "src").glob("Duel*.as"))
 
 
 def test_diff_rewrites_prefixes_so_git_apply_works(tmp_path: Path) -> None:
@@ -51,7 +52,7 @@ def test_diff_removes_stale_patches(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.skipif(not (GAME_DIR / build.GUI_BUNDLE).is_file(), reason="game folder not found")
-def test_build_lists_probe_class(tmp_path: Path) -> None:
+def test_build_lists_duel_classes(tmp_path: Path) -> None:
     out = tmp_path / "out"
     work = tmp_path / "w"
     subprocess.run(
@@ -68,9 +69,11 @@ def test_build_lists_probe_class(tmp_path: Path) -> None:
     swf = tmp_path / "result.swf"
     swf.write_bytes(redswf.read_movie(board).fws)
     classes = ffdec.dump_as3(swf)
-    assert f"{PACKAGE}.DuelProbe" in classes
+    assert len(DUEL_CLASSES) >= 8
+    assert [name for name in DUEL_CLASSES if f"{PACKAGE}.{name}" not in classes] == []
     assert f"{PACKAGE}.CardTransaction" in classes
     decompiled = tmp_path / "decompiled"
     ffdec.export_scripts(swf, decompiled)
     menu = (decompiled / "red" / "game" / "witcher3" / "menus" / "gwint" / "GwintGameMenu.as").read_text()
-    assert "DuelProbe.ping" in menu
+    assert '"gwint.game.debug.selfTest"' in menu and "DuelSelfTest.start" in menu
+    assert "DuelProbe" not in menu
