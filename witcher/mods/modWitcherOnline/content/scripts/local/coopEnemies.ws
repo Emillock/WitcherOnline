@@ -369,11 +369,24 @@ class r_CoopEnemies
     private var acks : array<r_CoopAck>;
     private var hurts : array<r_CoopHurt>;
     private var nextHurtSeq : int;
-    private var lastHurtSend : float;
     private var lastHurtSentCount : int;
     private var armedGhosts : array<CActor>;
     private var wasHost : bool;
-    private var lastHostSend : float;
+    private var nextHostSendAt : float;   // when the next snapshot is due (advances by the interval, no drift)
+    private var nextHurtSendAt : float;
+    private var nextHitSendAt : float;
+    // How often the leader describes its world to the members, and how often either side sends damage: 30 times a
+    // second. At 10 the copies visibly trailed what the leader was fighting.
+    private var sendInterval : float;
+    // how often the leader's snapshots actually arrive here, measured (an older leader still sends 10 a second)
+    public var snapPeriod : float;
+    // counted over the last full second: this game's co-op loop passes (its frame rate) and, as the leader, the
+    // snapshots it sent - the loop runs once a frame, so a slow game cannot reach the rate asked for
+    public var ticksPerSec : int;
+    public var sendsPerSec : int;
+    private var rateWindowAt : float;
+    private var ticksInWindow : int;
+    private var sendsInWindow : int;
     private var hostSeq : int;
 
     private var puppets : array<r_CoopPuppet>;
@@ -385,7 +398,6 @@ class r_CoopEnemies
     private var pendingHits : array<r_CoopHit>;
     private var lastPuppetAction : W3DamageAction;  // this player's last damaging hit on a puppet, and its claim
     private var lastPuppetHit : r_CoopHit;
-    private var lastHitSend : float;
     private var lastHitSentCount : int;
     private var hurtAck : int;
     private var lastSentHurtAck : int;
@@ -567,6 +579,11 @@ class r_CoopEnemies
     public var hitEffectsSent : int;     // member: effects its hits carried
     public var ownEffectsSent : int;     // member: effects it put straight on puppets (Axii, Yrden), sent alone
     public var hurtsDroppedDead : int;   // leader: hurts not sent, their member dead; member: hurts dropped while dead
+    public var hurtsExpired : int;       // leader: hurts too old to mean anything by the time they could be sent
+    // member: a moment after coming back to life in which the leader's world cannot hurt it (its copies and its
+    // ghost there are only just back; damage from before would land on a player who has no idea what hit it)
+    private var hurtGraceUntil : float;
+    private var wasAlive : bool;
     public var killsCredited : int;      // member: puppets that died as this player's kill (it had hit them)
     public var effectTypesHeld : array<int>;  // leader: kinds of members' effects that took hold on its monsters
     public var localEffectsDropped : int;      // member: this world's own effects on puppets the leader's monsters didn't have
@@ -630,10 +647,9 @@ class r_CoopEnemies
     public var lastJournalAppliedStatus : int;
 
     default puppetLocomotion = true;
-    default lastHostSend = -999;
+    default sendInterval = 0.0333;
+    default snapPeriod = 0.1;
     default lastSnapshotAt = -999;
-    default lastHitSend = -999;
-    default lastHurtSend = -999;
     default lastJournalSend = -999;
     default lastFactsSend = -999;
     default journalIndexBuiltAt = -999;
@@ -699,6 +715,23 @@ class r_CoopEnemies
 
         EnsureIds();
         now = theGame.GetEngineTimeAsSeconds();
+        if(thePlayer.IsAlive() != wasAlive)
+        {
+            wasAlive = thePlayer.IsAlive();
+            if(wasAlive)
+            {
+                hurtGraceUntil = now + 1.5;
+            }
+        }
+        ticksInWindow += 1;
+        if(now - rateWindowAt >= 1.0)
+        {
+            ticksPerSec = ticksInWindow;
+            sendsPerSec = sendsInWindow;
+            ticksInWindow = 0;
+            sendsInWindow = 0;
+            rateWindowAt = now;
+        }
         RetryFactsBaseline(now);
         SendParkedHorse(now);
         CheckSilentPlayers(now);
@@ -718,11 +751,10 @@ class r_CoopEnemies
             {
                 fxChanged = true;
             }
-            if(CommitDueAttacks(now) || fxChanged || now - lastHostSend >= 0.1)
+            if(CommitDueAttacks(now) || fxChanged || DueNow(now, nextHostSendAt, HostInterval()))
             {
                 HostCollect(client, now);
                 HostSend();
-                lastHostSend = now;
             }
             MeasureHostStrides(now);
             SendHurts(now);
@@ -878,6 +910,44 @@ class r_CoopEnemies
     //  enemies{netId tpl appearance x y z yaw hp alive attackSeq attackAnim hitSeq hitBy hitReaction moveSeq move
     //  attackTarget projSeq [projTpl fromX fromY fromZ toX toY toZ angle speed range]}" (projSeq 0 = no projectile in the
     //  last 1.5 s; move: see MoveText)
+    // 30 snapshots a second for a normal fight; with a crowd the gap grows so that roughly the same amount goes
+    // on the wire either way (and the member's slide follows, since it measures what arrives)
+    private function HostInterval() : float
+    {
+        if(hostEnemies.Size() <= 8)
+        {
+            return sendInterval;
+        }
+        return ClampF(sendInterval * ((float)hostEnemies.Size()) / 8.0, sendInterval, 0.1);
+    }
+
+    // True when `next` has come round, and books the one after it. A long stall (a loading screen) starts over
+    // instead of firing a burst to catch up.
+    private function DueNow(now : float, out next : float, interval : float) : bool
+    {
+        if(next <= 0)
+        {
+            next = now + interval;
+            return true;
+        }
+        if(now < next)
+        {
+            return false;
+        }
+        if(now - next > interval * 8)
+        {
+            next = now + interval;
+        }
+        else
+        {
+            while(next <= now)
+            {
+                next += interval;
+            }
+        }
+        return true;
+    }
+
     private function HostSend()
     {
         var templates : array<string>;
@@ -895,6 +965,7 @@ class r_CoopEnemies
             return;
         }
         now = theGame.GetEngineTimeAsSeconds();
+        sendsInWindow += 1;
         hostSeq += 1;
         body = "";
         for(i = 0; i < hostEnemies.Size(); i += 1)
@@ -1310,6 +1381,8 @@ class r_CoopEnemies
         ghostEffectsShown = 0;
         ghostEffectsEnded = 0;
         hurtsDroppedDead = 0;
+        hurtsExpired = 0;
+        wasAlive = true;
         killsCredited = 0;
         puppetsTimedOut = 0;
         puppetsFreed = 0;
@@ -1914,7 +1987,7 @@ class r_CoopEnemies
         {
             hurts.Erase(0);
         }
-        lastHurtSend = -999;
+        nextHurtSendAt = 0;
     }
 
     // A shared monster's task put an effect straight on a member's ghost, not through a hit (a fugas' burning vomit, a
@@ -2043,11 +2116,22 @@ class r_CoopEnemies
         var h : r_CoopHurt;
         var i, j, n : int;
 
-        if((hurts.Size() == 0 && lastHurtSentCount == 0) || now - lastHurtSend < 0.1)
+        if((hurts.Size() == 0 && lastHurtSentCount == 0) || !DueNow(now, nextHurtSendAt, sendInterval))
         {
             return;
         }
 
+        // A hit nobody could be told about for two seconds is no longer the hit that happened: it would land in
+        // a world that has moved on - above all on a member that died and has just come back, where a queue of
+        // them used to arrive together and kill it again.
+        for(i = hurts.Size() - 1; i >= 0; i -= 1)
+        {
+            if(now - hurts[i].queuedAt > 2.0)
+            {
+                hurts.Erase(i);
+                hurtsExpired += 1;
+            }
+        }
         text = "coop hurt " + epoch + " " + hurts.Size();
         for(i = 0; i < hurts.Size(); i += 1)
         {
@@ -2087,7 +2171,6 @@ class r_CoopEnemies
             }
         }
         WO_Send(text);
-        lastHurtSend = now;
         lastHurtSentCount = hurts.Size();
     }
 
@@ -2169,7 +2252,7 @@ class r_CoopEnemies
                 e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
                 e.attackAnim = GetAnimNameFromEventAnimInfo(animInfo);
                 HostSend();
-                lastHostSend = theGame.GetEngineTimeAsSeconds();
+                nextHostSendAt = theGame.GetEngineTimeAsSeconds() + HostInterval();
             }
             // the target can be momentarily unset: then still the last player it went for
             if(UserOf(npc.GetTarget()) != "")
@@ -2177,7 +2260,7 @@ class r_CoopEnemies
                 e.attackTarget = UserOf(npc.GetTarget());
             }
             e.hitAnimTime = GetLocalAnimTimeFromEventAnimInfo(animInfo);
-            lastHostSend = -999;  // send it now, not on the next 100 ms tick
+            nextHostSendAt = 0;  // send it now, not when the next snapshot comes due
         }
         else if(eventType == AET_DurationEnd)
         {
@@ -2243,7 +2326,7 @@ class r_CoopEnemies
                 e.attackCut = true;
                 LogSync("LC", e.netId, e.attackSeq, "-");
                 HostSend();
-                lastHostSend = theGame.GetEngineTimeAsSeconds();
+                nextHostSendAt = theGame.GetEngineTimeAsSeconds() + HostInterval();
             }
         }
         else
@@ -2281,7 +2364,7 @@ class r_CoopEnemies
                 e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
                 LogSync("LE", e.netId, e.attackSeq, NameToString(anim) + "#" + e.attackLoop + "/" + NameToString(eventName));
                 HostSend();
-                lastHostSend = theGame.GetEngineTimeAsSeconds();
+                nextHostSendAt = theGame.GetEngineTimeAsSeconds() + HostInterval();
             }
             e.phaseTime = animTime;
             return;
@@ -2298,7 +2381,7 @@ class r_CoopEnemies
         e.attackNamedAt = theGame.GetEngineTimeAsSeconds();
         LogSync("LE", e.netId, e.attackSeq, NameToString(anim) + "/phase " + NameToString(eventName));
         HostSend();
-        lastHostSend = theGame.GetEngineTimeAsSeconds();
+        nextHostSendAt = theGame.GetEngineTimeAsSeconds() + HostInterval();
     }
 
     // An animation that started with the current (or pending) attack: its own time is at most the time since the
@@ -2465,7 +2548,7 @@ class r_CoopEnemies
         LogSync("LE", e.netId, e.attackSeq, NameToString(e.attackAnim) + "/" + NameToString(eventName));
         PoseLearn(e, e.attackAnim);
         HostSend();
-        lastHostSend = theGame.GetEngineTimeAsSeconds();
+        nextHostSendAt = theGame.GetEngineTimeAsSeconds() + HostInterval();
     }
 
     // Enum animation events of the monster itself (OnEnumAnimEvent): many swings have no event for the attack task
@@ -2540,7 +2623,7 @@ class r_CoopEnemies
         e.projSpeed = speed;
         e.projRange = range;
         projectilesSeen += 1;
-        lastHostSend = -999;
+        nextHostSendAt = 0;
     }
 
     public function OnEnemyMove(task : CBTTaskPlayAnimationEventDecorator, animInfo : SAnimationEventAnimInfo)
@@ -2591,7 +2674,7 @@ class r_CoopEnemies
         LogSync("LMV", e.netId, e.moveSeq, e.moveKind + "/" + NameToString(anim));
         // right now, not on the next frame's tick
         HostSend();
-        lastHostSend = theGame.GetEngineTimeAsSeconds();
+        nextHostSendAt = theGame.GetEngineTimeAsSeconds() + HostInterval();
     }
 
     // member: a move animation started on a puppet (a new one or a restart): the mirrored move it was to make, or
@@ -2761,7 +2844,7 @@ class r_CoopEnemies
         e.lastHitAt = theGame.GetEngineTimeAsSeconds();
         e.hitReaction = (int)action.GetHitReactionType();
         LogSync("LH", e.netId, e.attackSeq, IntToString(e.hitReaction));
-        lastHostSend = -999;
+        nextHostSendAt = 0;
     }
 
     // a line in the sync log from elsewhere in the mod (remotePlayer.ws)
@@ -3669,6 +3752,7 @@ class r_CoopEnemies
         var projFrom, projTo : Vector;
         var alive : bool;
         var app : string;
+        var now, gap : float;
 
         if(GetRole() != 2 || sender != leaderName || count < 4)
         {
@@ -3690,7 +3774,19 @@ class r_CoopEnemies
             hurtAck = 0;
             leaderEpoch = snapshotEpoch;
         }
-        lastSnapshotAt = theGame.GetEngineTimeAsSeconds();
+        now = theGame.GetEngineTimeAsSeconds();
+        gap = now - lastSnapshotAt;
+        if(lastSnapshotAt > 0)
+        {
+            if(gap > 0.005)
+            {
+                if(gap < 1.0)
+                {
+                    snapPeriod = snapPeriod * 0.7 + gap * 0.3;
+                }
+            }
+        }
+        lastSnapshotAt = now;
 
         idx = 4;
         n = StringToInt(WO_Str(idx), 0);
@@ -3935,7 +4031,7 @@ class r_CoopEnemies
                     {
                         h.due = MaxF(now, p.attackPlayedAt + MinF(h.hitAnimTime, 1.5));
                     }
-                    if(thePlayer.IsAlive())
+                    if(thePlayer.IsAlive() && now >= hurtGraceUntil)
                     {
                         delayedHurts.PushBack(h);
                     }
@@ -3955,10 +4051,13 @@ class r_CoopEnemies
     {
         var i : int;
 
-        if(!thePlayer.IsAlive() && delayedHurts.Size() > 0)
+        if(delayedHurts.Size() > 0)
         {
-            hurtsDroppedDead += delayedHurts.Size();
-            delayedHurts.Clear();
+            if(!thePlayer.IsAlive() || now < hurtGraceUntil)
+            {
+                hurtsDroppedDead += delayedHurts.Size();
+                delayedHurts.Clear();
+            }
         }
 
         for(i = 0; i < delayedHurts.Size(); i += 1)
@@ -5190,7 +5289,7 @@ class r_CoopEnemies
         poseNamed += 1;
         LogSync("LE", e.netId, e.attackSeq, NameToString(bestAnim) + "/pose");
         HostSend();
-        lastHostSend = theGame.GetEngineTimeAsSeconds();
+        nextHostSendAt = theGame.GetEngineTimeAsSeconds() + HostInterval();
     }
 
     // how far the snapshot is from `anim` at `time` (bones about their centre, summed, in metres)
@@ -5598,7 +5697,9 @@ class r_CoopEnemies
             }
 
             current = p.npc.GetHealthPercents();
-            if(current >= 0 && p.hp > 0 && AbsF(current - p.hp) > 0.002)
+            // the second case: the leader's monster is alive on a sliver of health and this copy has run out
+            // anyway (its own burning ticked) - a difference under the threshold would have left it at zero
+            if(current >= 0 && p.hp > 0 && (AbsF(current - p.hp) > 0.002 || current <= 0.0005))
             {
                 applyingHostState = true;
                 p.npc.SetHealthPerc(p.hp);
@@ -5659,7 +5760,7 @@ class r_CoopEnemies
         adjustor = p.npc.GetMovingAgentComponent().GetMovementAdjustor();
         adjustor.Cancel(adjustor.GetRequest('w3coop_puppet'));
         ticket = adjustor.CreateNewRequest('w3coop_puppet');
-        adjustor.AdjustmentDuration(ticket, 0.15);
+        adjustor.AdjustmentDuration(ticket, ClampF(snapPeriod * 1.5, 0.05, 0.3));
         adjustor.AdjustLocationVertically(ticket, true);
         adjustor.ScaleAnimationLocationVertically(ticket, true);
         adjustor.RotateTo(ticket, p.yaw);
@@ -6064,7 +6165,7 @@ class r_CoopEnemies
             pendingHits.Erase(0);
         }
         hitsSent += 1;
-        lastHitSend = -999;
+        nextHitSendAt = 0;
         return hit;
     }
 
@@ -6091,7 +6192,7 @@ class r_CoopEnemies
         {
             return;
         }
-        if(now - lastHitSend < 0.1)
+        if(!DueNow(now, nextHitSendAt, sendInterval))
         {
             return;
         }
@@ -6114,7 +6215,6 @@ class r_CoopEnemies
             }
         }
         WO_Send(text);
-        lastHitSend = now;
         lastHitSentCount = pendingHits.Size();
         lastSentHurtAck = hurtAck;
     }
