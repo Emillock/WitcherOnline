@@ -528,6 +528,10 @@ statemachine class r_RemotePlayer
             request.fadeIn = 0.4f;
         }
 
+        if(request.type == 'sign')
+        {
+            theGame.r_getMultiplayerClient().getCoopEnemies().NoteSignGesture(username + " " + NameToString(request.anim));
+        }
         ghost.GetRootAnimatedComponent().PlaySlotAnimationAsync(
             request.anim, 
             'NPC_ANIM_SLOT',
@@ -3219,6 +3223,7 @@ statemachine class r_RemotePlayer
         var coop : r_CoopEnemies;
         var castType : ESignType;
 
+
         if(signVisualAt > 0 && theGame.GetEngineTimeAsSeconds() >= signVisualAt)
         {
             signVisualAt = 0;
@@ -3279,11 +3284,14 @@ statemachine class r_RemotePlayer
 
         if(isMounted || isSailing)
         {
+            theGame.r_getMultiplayerClient().getCoopEnemies().LogNote("SGX", username + " mounted/sailing");
             return;
         }
 
         if(lastChillOut || chillOutAnim != '')
         {
+            theGame.r_getMultiplayerClient().getCoopEnemies().LogNote("SGX", username + " chillout " + lastChillOut
+                + " " + NameToString(chillOutAnim));
             lastIdleAnim = theGame.GetEngineTimeAsSeconds();
             return;
         }
@@ -5784,6 +5792,8 @@ statemachine class r_RemotePlayer
                 signVisualType = castType;
                 signVisualAt = theGame.GetEngineTimeAsSeconds() + 0.4;
             }
+            theGame.r_getMultiplayerClient().getCoopEnemies().LogNote("SGQ", username + " sign " + (int)castType
+                + " combat " + inCombat + " held " + heldItem + " chan " + channeling);
             if(inCombat)
             {
                 if(heldItem == "silver" || heldItem == "steel")

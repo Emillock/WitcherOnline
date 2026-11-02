@@ -478,6 +478,7 @@ class r_CoopEnemies
     public var puppetsTimedOut : int;  // puppets dropped because the leader stopped sending them
     public var puppetsFreed : int;     // puppets killed here that stayed standing and were let go
     public var clocksFollowed : int;   // times this game's clock was set to the party leader's
+    public var signGestures : int;     // sign casts played on another player's character here
     public var twinsBound : int;
     public var spawnFailures : int;
     public var lastError : string;
@@ -1311,6 +1312,7 @@ class r_CoopEnemies
         puppetsTimedOut = 0;
         puppetsFreed = 0;
         clocksFollowed = 0;
+        signGestures = 0;
         effectTypesHeld.Clear();
         localEffectsDropped = 0;
         heavyClaims = 0;
@@ -2756,6 +2758,19 @@ class r_CoopEnemies
         e.hitReaction = (int)action.GetHitReactionType();
         LogSync("LH", e.netId, e.attackSeq, IntToString(e.hitReaction));
         lastHostSend = -999;
+    }
+
+    // a line in the sync log from elsewhere in the mod (remotePlayer.ws)
+    public function LogNote(kind : string, text : string)
+    {
+        LogSync(kind, 0, 0, CoopEncode(text));
+    }
+
+    // another player's character is playing the gesture of a sign they cast (remotePlayer.ws)
+    public function NoteSignGesture(anim : string)
+    {
+        signGestures += 1;
+        LogSync("SGP", 0, 0, CoopEncode(anim));
     }
 
     public function PendingHurtCount() : int
