@@ -198,6 +198,10 @@ statemachine class r_RemotePlayer
     public var outgoingGwentRequest : E_GwentRequest;
     public var outgoingGwentBet : int;
     public var outgoingGwentSeed : int;
+    // Gwent duel protocol from the wo3 packet's marker (0: none, a 4.04 client or a 5.x client from before duels)
+    public var gwentProtocol : int;
+    // the wo3 deck fields last parsed into gwentGame
+    public var lastGwentData : string;
 
     public var gwentHandshake : bool;
 
@@ -381,14 +385,16 @@ statemachine class r_RemotePlayer
         gwentGame.deck = val;
     }
 
-    public function setFaction(val : int)
+    // The deck's faction is the leader card's faction.
+    public function setFaction(leader : name)
     {
-        var manager : CR4GwintManager;
-        manager = theGame.GetGwintManager();
+        var card : SCardDefinition;
 
-#ifdef WO_GWENT_PVP
-        gwentGame.faction = manager.leaderIndexToFaction(val);
-#endif
+        gwentGame.faction = GwintFaction_Neutral;
+        if(IsNameValid(leader) && theGame.GetGwintManager().GetGwentCard(leader, card))
+        {
+            gwentGame.faction = card.faction;
+        }
     }
 
     public function getGwentGame() : r_GwentGame

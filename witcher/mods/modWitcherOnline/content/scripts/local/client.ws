@@ -186,7 +186,6 @@ statemachine class r_MultiplayerClient
     private var lastGwentAction : string;
     private var lastGwentActionTime  : float;
     private var gwentActionBuffer : array<string>;
-    private var lastGwentActionWasQuit : bool;
 
     private var activeGwentBet : int;
     private var activeGwentSeed : int;
@@ -1624,6 +1623,22 @@ statemachine class r_MultiplayerClient
         return NULL;
     }
 
+    // A nearby player (one whose wo3 packets arrive) by id.
+    private function getPlayerById(playerId : string) : r_RemotePlayer
+    {
+        var i : int;
+
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(players[i] && players[i].id == playerId)
+            {
+                return players[i];
+            }
+        }
+
+        return NULL;
+    }
+
     public function checkIncomingGwentRequests()
     {
         var i : int;
@@ -1649,6 +1664,18 @@ statemachine class r_MultiplayerClient
                         return;
                     }
 
+                    // a challenge from another duel protocol (or a 4.04 client, which sends none) is declined unseen
+                    if(!gwentProtocolMatches(players[i]))
+                    {
+                        showGwentProtocolMismatch(players[i]);
+                        outgoingGwentTo = players[i].id;
+                        outgoingGwentRequest = E_Decline;
+                        players[i].gwentHandshake = true;
+                        gwentOpponent = players[i];
+                        shownGwentRequestWindow = false;
+                        return;
+                    }
+
                     if(openIncomingGwentRequest(players[i]))
                     {
                         outgoingGwentTo = players[i].id;
@@ -1670,6 +1697,17 @@ statemachine class r_MultiplayerClient
                 }
                 else if(players[i].outgoingGwentRequest == E_Accept && outgoingGwentRequest != E_Ack && !inGwentGame)
                 {
+                    if(!gwentProtocolMatches(players[i]))
+                    {
+                        showGwentProtocolMismatch(players[i]);
+
+                        outgoingGwentRequest = E_Ack;
+                        gwentLastCompleted = theGame.GetEngineTimeAsSeconds();
+                        resetGwentFlagPending = true;
+                        resetGwentFlagAt = gwentLastCompleted + 3.0;
+                        return;
+                    }
+
                     gwentOpponent = players[i];
                     startGwentGame(gwentOpponent, requestedGwentGameType, outgoingGwentBet, outgoingGwentSeed, true);
 
@@ -1681,8 +1719,15 @@ statemachine class r_MultiplayerClient
                 }
                 else if(players[i].outgoingGwentRequest == E_Decline && outgoingGwentRequest != E_Ack && !inGwentGame)
                 {
-                    GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114211));
-                    mpghosts_playSound('gui_enchanting_runeword_remove');
+                    if(gwentProtocolMatches(players[i]))
+                    {
+                        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114211));
+                        mpghosts_playSound('gui_enchanting_runeword_remove');
+                    }
+                    else
+                    {
+                        showGwentProtocolMismatch(players[i]);
+                    }
 
                     outgoingGwentRequest = E_Ack;
                     gwentLastCompleted = theGame.GetEngineTimeAsSeconds();
@@ -1760,7 +1805,6 @@ statemachine class r_MultiplayerClient
         lastGwentAction = "";
         lastGwentActionTime = 0.0;
         gwentActionBuffer.Clear();
-        lastGwentActionWasQuit = false;
         opponent.lastGwentAction = "";
         opponent.lastGwentActionTime = 0.0;
         opponent.prevGwentActionTime = -1;
@@ -1776,21 +1820,16 @@ statemachine class r_MultiplayerClient
         gwentGame = opponent.getGwentGame();
         deck = gwentGame.deck;
 
-#ifdef WO_GWENT_PVP
+        // the 5.01 Gwent menu with Witcher Online's wrappers (gwentDuel.ws) and the rebuilt board
         gwintManager = theGame.GetGwintManager();
         gwintManager.SetEnemyDeckFromMultiplayer(deck);
         gwintManager.multiplayerSeed = seed;
         gwintManager.multiplayerIsHost = host;
         gwintManager.multiplayerIsTimed = (type == GG_Timed);
-        gwintManager.gameRequested = true;
+        // no fade lock when the menu closes
         gwintManager.testMatch = true;
 
         theGame.RequestMenu('GwintGame');
-#else
-        // Remastered (5.x) reworked Gwent; the multiplayer Gwent board is not ported yet.
-        GetWitcherPlayer().DisplayHudMessage("Gwent duels are not available on The Witcher 3 Remastered yet.");
-        onGwentGameEnd(false);
-#endif
     }
 
     public function gwentGameLoop()
@@ -1798,27 +1837,30 @@ statemachine class r_MultiplayerClient
         var action : string;
         var menu : CR4GwintGameMenu;
 
+        // the window waits until the board is up (a message sent while the menu opens is not lost)
+        menu = (CR4GwintGameMenu)theGame.GetGuiManager().GetRootMenu();
+        if(!menu)
+        {
+            return;
+        }
+
         if(checkForGwentAction(action))
         {
-            menu = (CR4GwintGameMenu)theGame.GetGuiManager().GetRootMenu();
-            if(menu)
-            {
-#ifdef WO_GWENT_PVP
-                menu.ReceiveRemoteGwentAction(action);
-#endif
-            }
+            menu.ReceiveRemoteGwentAction(action);
         }
     }
 
+    // The opponent's window whenever its counter changed, the first one included: the board ignores messages of other
+    // matches (the match id comes from the seed), so a window left from an earlier duel is harmless.
     public function checkForGwentAction(out action : string) : bool
     {
-        // handle incoming action
-        if (gwentOpponent.prevGwentActionTime < 0.0f)
+        if(!gwentOpponent)
         {
-            gwentOpponent.prevGwentActionTime = gwentOpponent.lastGwentActionTime;
+            return false;
         }
-        else if (gwentOpponent.lastGwentActionTime != gwentOpponent.prevGwentActionTime)
-        {   
+
+        if(gwentOpponent.lastGwentActionTime != gwentOpponent.prevGwentActionTime)
+        {
             gwentOpponent.prevGwentActionTime = gwentOpponent.lastGwentActionTime;
             action = gwentOpponent.lastGwentAction;
             return true;
@@ -1833,10 +1875,6 @@ statemachine class r_MultiplayerClient
         var i : int;
 
         gwentActionBuffer.PushBack(val);
-        if (StrContains(val, "QUITGAME"))
-        {
-            lastGwentActionWasQuit = true;
-        }
         while (gwentActionBuffer.Size() > 20)
         {
             gwentActionBuffer.Erase(0);
@@ -1883,21 +1921,56 @@ statemachine class r_MultiplayerClient
         }
 
         settleGwentBet(localPlayerWon);
+        finishGwentGame();
+    }
+
+    // A drawn duel that was not replayed: no money moves on either side.
+    public function onGwentGameDraw()
+    {
+        GetWitcherPlayer().DisplayHudMessage("The Gwent duel ended in a draw. No bet was paid.");
+        finishGwentGame();
+    }
+
+    // The board cancelled the duel as no contest (reason: version, templates, decks, desync, opponent_left, ...):
+    // no money moves.
+    public function onGwentGameAborted(reason : string)
+    {
+        GetWitcherPlayer().DisplayHudMessage("The Gwent duel was cancelled (" + reason + "). No bet was paid.");
+        finishGwentGame();
+    }
+
+    // Leaves the duel. The outgoing message window stays as it is until the next duel starts, so the opponent still
+    // receives the last messages (the final move, a surrender, a leave or a desync report) after this menu closed.
+    private function finishGwentGame()
+    {
         clearGwentRequestState();
         inGwentGame = false;
-        if (!lastGwentActionWasQuit)
-        {
-            lastGwentAction = "";
-            lastGwentActionTime = 0.0;
-            gwentActionBuffer.Clear();
-        }
         gwentOpponent = NULL;
         gwentLastCompleted = theGame.GetEngineTimeAsSeconds();
         activeGwentBet = 0;
         activeGwentSeed = 0;
-#ifdef WO_GWENT_PVP
         theGame.GetGwintManager().ClearMultiplayerState();
-#endif
+    }
+
+    // The board's duel log (CR4GwintGameMenu.OnDuelLog). Test tools wrap this to copy the lines into their own log.
+    public function duelLog(line : string)
+    {
+        LogChannel('GwentDuel', line);
+    }
+
+    // Whether `player` speaks this client's Gwent duel protocol (its marker is 0 when its wo3 packet carries none:
+    // a 4.04 client or a 5.x client from before duels).
+    public function gwentProtocolMatches(player : r_RemotePlayer) : bool
+    {
+        return player && player.gwentProtocol == WO_GwentProtocol();
+    }
+
+    public function showGwentProtocolMismatch(player : r_RemotePlayer)
+    {
+        GetWitcherPlayer().DisplayHudMessage("No Gwent duel with " + player.username
+            + ": their Witcher Online has another Gwent duel version (" + player.gwentProtocol + ", yours "
+            + WO_GwentProtocol() + ").");
+        mpghosts_playSound('gui_enchanting_runeword_remove');
     }
 
     public function settleGwentBet(localPlayerWon : bool)
@@ -1947,6 +2020,7 @@ statemachine class r_MultiplayerClient
     
     public function gwentRequest(toRequest : string) : bool
     {
+        var target : r_RemotePlayer;
         var cat : array<name>;
         var m_popupData : W3ItemSelectionPopupData;
         var inventory : CInventoryComponent;
@@ -1960,6 +2034,13 @@ statemachine class r_MultiplayerClient
         else if(inGwentGame)
         {
             GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114220));
+            return false;
+        }
+
+        target = getPlayerById(toRequest);
+        if(target && !gwentProtocolMatches(target))
+        {
+            showGwentProtocolMismatch(target);
             return false;
         }
 
@@ -4590,13 +4671,6 @@ statemachine class r_MultiplayerClient
         var gp : r_RemotePlayer;
         var now : float;
 
-        var remaining : string;
-        var token : string;
-        var factionName : string;
-        var leaderIndex : int;
-        var cardValue : int;
-
-        var gwentCards : array<int>;
         var deck : SDeckDefinition;
 
         setServerReceived(true);
@@ -4633,45 +4707,16 @@ statemachine class r_MultiplayerClient
         p.lastGwentAction = lastGwentAction;
         p.lastGwentActionTime = lastGwentActionTime;
 
-        remaining = gwentData;
-
-        // faction name
-        if (!StrSplitFirst(remaining, " ", factionName, remaining))
+        // the deck rarely changes, the packet comes several times a second
+        if(gwentData == p.lastGwentData)
         {
             return;
         }
+        p.lastGwentData = gwentData;
 
-        // leader index
-        if (!StrSplitFirst(remaining, " ", token, remaining))
-        {
-            return;
-        }
-
-        leaderIndex = StringToInt(token, -1);
-
-        // cards
-        while (StrSplitFirst(remaining, " ", token, remaining))
-        {
-            cardValue = StringToInt(token, -1);
-            gwentCards.PushBack(cardValue);
-        }
-
-        // last remaining card
-        if (StrLen(remaining) > 0)
-        {
-            cardValue = StringToInt(remaining, -1);
-            gwentCards.PushBack(cardValue);
-        }
-
-#ifdef WO_GWENT_PVP
-        deck.cardIndices = gwentCards;
-        deck.leaderIndex = leaderIndex;
-        deck.specialCard = -1;
-#endif
-        deck.unlocked = true;
-
+        p.gwentProtocol = WO_GwentParseDeck(gwentData, deck);
         p.setDeck(deck);
-        p.setFaction(leaderIndex);
+        p.setFaction(deck.leaderCard);
     }
 
     public function updatePlayerData4(serverPlayerId : int, idName : name, inParty : bool, joinedParty : string, weather : name, day : int, hour : int, minute : int, second : int, lastDialogIndex : int, lastDialogCount : int, dialogChoices : string, 
@@ -6427,7 +6472,6 @@ statemachine class r_MultiplayerClient
         var manager : CR4GwintManager;
         var selectedFaction : eGwintFaction;
         var deck : SDeckDefinition;
-        var i : int;
         var list : string;
         var outgoingGwentTo : string;
         var lastGwentAction : string;
@@ -6479,19 +6523,9 @@ statemachine class r_MultiplayerClient
         list += selectedFaction;
         list += " ";
 
-#ifdef WO_GWENT_PVP
-        list += deck.leaderIndex;
+        // the Gwent duel protocol marker, then the deck by card names (each board converts them with its own card table)
+        list += WO_GwentDeckFields(deck);
         list += " ";
-
-        for(i = 0; i < deck.cardIndices.Size(); i+=1)
-        {
-            list += deck.cardIndices[i];
-            list += " ";
-        }
-#else
-        // keep the packet layout: leader index placeholder, no cards
-        list += "0 ";
-#endif
 
         WO_Send("wo3 "+wo_getMovementData()+list);
     }
