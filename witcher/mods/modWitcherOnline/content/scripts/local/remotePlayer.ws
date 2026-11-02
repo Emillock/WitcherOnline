@@ -2972,10 +2972,13 @@ statemachine class r_RemotePlayer
             coop.lastSignVisual = type + ":" + quenShield;
             return;
         }
-        // Yrden's trap stays where it was cast; the others go with the caster
+        // Yrden's trap stays where it was cast; the others go with the caster's hand, as the player's own does
         if(!yrden)
         {
-            sign.CreateAttachment(ghost);
+            if(!sign.CreateAttachment(ghost, 'l_weapon'))
+            {
+                sign.CreateAttachment(ghost);
+            }
         }
         sign.PlayEffect(effect);
         if(IsNameValid(second))
@@ -2989,6 +2992,66 @@ statemachine class r_RemotePlayer
             coop.signVisualsActive += 1;
             coop.CountSignVisual(type);
         }
+    }
+
+    // The effect in the hand while the sign is cast. Played on a sign entity of its own, attached to the copy's
+    // hand: the copy's character template defines no cast effects (the player's own template is where the game
+    // keeps igni_cast, aard_cast and the rest), but the sign entity carries one.
+    private function PlaySignHand(type : ESignType)
+    {
+        var template : CEntityTemplate;
+        var sign : W3SignEntity;
+        var coop : r_CoopEnemies;
+        var effect : name;
+
+        if(!ghost)
+        {
+            return;
+        }
+        effect = SignHandEffect(type);
+        if(!IsNameValid(effect))
+        {
+            return;
+        }
+        template = GetWitcherPlayer().GetSignTemplate(type);
+        if(!template)
+        {
+            return;
+        }
+        sign = (W3SignEntity)theGame.CreateEntity(template, ghost.GetWorldPosition(), ghost.GetWorldRotation());
+        if(!sign)
+        {
+            return;
+        }
+        if(!sign.CreateAttachment(ghost, 'l_weapon'))
+        {
+            sign.Destroy();
+            return;
+        }
+        sign.PlayEffect(effect);
+        coop = theGame.r_getMultiplayerClient().getCoopEnemies();
+        if(sign.IsEffectActive(effect))
+        {
+            coop.signHands += 1;
+        }
+        coop.LogNote("SGH", username + " " + NameToString(effect) + " active="
+            + sign.IsEffectActive(effect));
+        sign.DestroyAfter(1.5);
+    }
+
+    // Igni's and Aard's own hand effect on the sign entity. Yrden and Axii already play their cast effect with the
+    // throw, and Quen shows as the shield on the copy.
+    private function SignHandEffect(type : ESignType) : name
+    {
+        if(type == ST_Igni)
+        {
+            return 'no_cast';
+        }
+        if(type == ST_Aard)
+        {
+            return 'no_cast';
+        }
+        return '';
     }
 
     // Quen's lasting shield on the copy. From a game that sends signFx it is up exactly while the player's own is,
@@ -5791,6 +5854,7 @@ statemachine class r_RemotePlayer
             {
                 signVisualType = castType;
                 signVisualAt = theGame.GetEngineTimeAsSeconds() + 0.4;
+                PlaySignHand(castType);
             }
             theGame.r_getMultiplayerClient().getCoopEnemies().LogNote("SGQ", username + " sign " + (int)castType
                 + " combat " + inCombat + " held " + heldItem + " chan " + channeling);

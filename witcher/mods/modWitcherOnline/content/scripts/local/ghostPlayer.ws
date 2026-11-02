@@ -32,9 +32,12 @@ statemachine class MPDRPlayer extends CNewNPC
 
 		if( actionName == "Interact" )
 		{
-			// the radial menu shows no entries on Remastered: ask about the party in the game's own dialog
-			// (coopmenu() in the console still opens the menu, trading and emotes with it)
-			theGame.r_getMultiplayerClient().getCoopEnemies().OfferParty(((CActor)this));
+			// the radial menu: the party, trading, Gwent, emotes and the rest. If it cannot be built at all,
+			// the party question in the game's own dialog instead
+			if(!theGame.r_getMultiplayerClient().createMenu(((CActor)this)))
+			{
+				theGame.r_getMultiplayerClient().getCoopEnemies().OfferParty(((CActor)this));
+			}
 		}
 	}
 	

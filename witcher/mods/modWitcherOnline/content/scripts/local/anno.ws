@@ -461,6 +461,12 @@ function OnCallSelectItem(itemId : SItemUniqueId)
 {
     var itemName : name;
     var emoteId : int;
+    var coop : r_CoopEnemies;
+
+    if(theGame.r_getMultiplayerClient())
+    {
+        coop = theGame.r_getMultiplayerClient().getCoopEnemies();
+    }
 
     if(m_DataObject.wo_isTrade)
     {
@@ -479,7 +485,7 @@ function OnCallSelectItem(itemId : SItemUniqueId)
     }
     else if(m_DataObject.wo_isGwent)
     {
-        itemName = m_DataObject.targetInventory.GetItemName(itemId);
+        itemName = coop.MenuNameOf(m_DataObject.targetInventory, itemId);
 
         if(itemName == 'wo_timed_gwent')
         {
@@ -499,34 +505,22 @@ function OnCallSelectItem(itemId : SItemUniqueId)
         {
             if(m_selectedItemCategory == 0)
             {
-                itemName = m_DataObject.targetInventory.GetItemName(itemId);
+                itemName = coop.MenuNameOf(m_DataObject.targetInventory, itemId);
             }
-            else if(m_selectedItemCategory == 1)
+            else
             {
-                itemName = theGame.r_getMultiplayerClient().getChatInventory().GetItemName(itemId);
-            }
-            else if(m_selectedItemCategory == 2)
-            {
-                itemName = theGame.r_getMultiplayerClient().getMorphInventory().GetItemName(itemId);
+                itemName = coop.MenuNameOf(m_coopCategoryInv, itemId);
             }
         }
         else
         {
             if(m_selectedItemCategory == 0)
             {
-                itemName = m_DataObject.targetInventory.GetItemName(itemId);
+                itemName = coop.MenuNameOf(m_DataObject.targetInventory, itemId);
             }
-            else if(m_selectedItemCategory == 1)
+            else
             {
-                itemName = theGame.r_getMultiplayerClient().getEmoteInventory().GetItemName(itemId);
-            }
-            else if(m_selectedItemCategory == 2)
-            {
-                itemName = theGame.r_getMultiplayerClient().getChatInventory().GetItemName(itemId);
-            }
-            else if(m_selectedItemCategory == 3)
-            {
-                itemName = theGame.r_getMultiplayerClient().getMorphInventory().GetItemName(itemId);
+                itemName = coop.MenuNameOf(m_coopCategoryInv, itemId);
             }
         }
         
@@ -709,7 +703,8 @@ function OnConfigUI()
         else if(m_DataObject.wo_isReceivingTrade)
         {
             m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-            m_tradeInventory.Initialize( m_DataObject.targetInventory );
+            m_coopCategoryInv = m_DataObject.targetInventory;
+            m_tradeInventory.Initialize( m_coopCategoryInv );
             m_tradeInventory.ignorePosition = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
@@ -723,8 +718,10 @@ function OnConfigUI()
         else if(m_DataObject.wo_isGwent)
         {
             m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-            m_tradeInventory.Initialize( m_DataObject.targetInventory );
+            m_coopCategoryInv = m_DataObject.targetInventory;
+            m_tradeInventory.Initialize( m_coopCategoryInv );
             m_tradeInventory.ignorePosition = true;
+            m_tradeInventory.overrideQuestItemFilters = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
             m_fxSetCategory.InvokeSelfOneArg( FlashArgString(GetLocStringById(2111114245) + " " + m_DataObject.wo_toGwent) );
@@ -737,8 +734,10 @@ function OnConfigUI()
         else if(m_DataObject.wo_isReceivingGwent)
         {
             m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-            m_tradeInventory.Initialize( m_DataObject.targetInventory );
+            m_coopCategoryInv = m_DataObject.targetInventory;
+            m_tradeInventory.Initialize( m_coopCategoryInv );
             m_tradeInventory.ignorePosition = true;
+            m_tradeInventory.overrideQuestItemFilters = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
             m_fxSetCategory.InvokeSelfOneArg( FlashArgString(m_DataObject.wo_toGwent + " " + GetLocStringById(2111114246) + " " + m_DataObject.wo_betAmount + " " + GetLocStringById(2111114244)) );
@@ -753,8 +752,10 @@ function OnConfigUI()
             m_fxShowCategoryButtons.InvokeSelfOneArg( FlashArgBool(true) );	
 
             m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-            m_tradeInventory.Initialize( m_DataObject.targetInventory );
+            m_coopCategoryInv = m_DataObject.targetInventory;
+            m_tradeInventory.Initialize( m_coopCategoryInv );
             m_tradeInventory.ignorePosition = true;
+            m_tradeInventory.overrideQuestItemFilters = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
             m_fxSetCategory.InvokeSelfOneArg( FlashArgString(GetLocStringById(2111114099)) );
@@ -769,8 +770,10 @@ function OnConfigUI()
             m_fxShowCategoryButtons.InvokeSelfOneArg( FlashArgBool(true) );	
 
             m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-            m_tradeInventory.Initialize( m_DataObject.targetInventory );
+            m_coopCategoryInv = m_DataObject.targetInventory;
+            m_tradeInventory.Initialize( m_coopCategoryInv );
             m_tradeInventory.ignorePosition = true;
+            m_tradeInventory.overrideQuestItemFilters = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
             m_fxSetCategory.InvokeSelfOneArg( FlashArgString(m_DataObject.wo_playerMenuPlayer.username) );
@@ -847,22 +850,28 @@ function OnChangeCategory( id : int )
             case 0:
                 locString = GetLocStringById(2111114099);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-                m_tradeInventory.Initialize( m_DataObject.targetInventory );
+                m_coopCategoryInv = m_DataObject.targetInventory;
+                m_tradeInventory.Initialize( m_coopCategoryInv );
                 m_tradeInventory.ignorePosition = true;
+                m_tradeInventory.overrideQuestItemFilters = true;
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 1:
                 locString = GetLocStringById(2111114098);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-                m_tradeInventory.Initialize( theGame.r_getMultiplayerClient().getChatInventory() );
+                m_coopCategoryInv = theGame.r_getMultiplayerClient().getChatInventory();
+                m_tradeInventory.Initialize( m_coopCategoryInv );
                 m_tradeInventory.ignorePosition = true;
+                m_tradeInventory.overrideQuestItemFilters = true;
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 2:
                 locString = GetLocStringById(2111114097);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-                m_tradeInventory.Initialize( theGame.r_getMultiplayerClient().getMorphInventory() );
+                m_coopCategoryInv = theGame.r_getMultiplayerClient().getMorphInventory();
+                m_tradeInventory.Initialize( m_coopCategoryInv );
                 m_tradeInventory.ignorePosition = true;
+                m_tradeInventory.overrideQuestItemFilters = true;
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
         }
@@ -891,29 +900,37 @@ function OnChangeCategory( id : int )
             case 0:
                 locString = m_DataObject.wo_playerMenuPlayer.username;
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-                m_tradeInventory.Initialize( m_DataObject.targetInventory );
+                m_coopCategoryInv = m_DataObject.targetInventory;
+                m_tradeInventory.Initialize( m_coopCategoryInv );
                 m_tradeInventory.ignorePosition = true;
+                m_tradeInventory.overrideQuestItemFilters = true;
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 1:
                 locString = GetLocStringById(2111114099);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-                m_tradeInventory.Initialize( theGame.r_getMultiplayerClient().getEmoteInventory() );
+                m_coopCategoryInv = theGame.r_getMultiplayerClient().getEmoteInventory();
+                m_tradeInventory.Initialize( m_coopCategoryInv );
                 m_tradeInventory.ignorePosition = true;
+                m_tradeInventory.overrideQuestItemFilters = true;
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 2:
                 locString = GetLocStringById(2111114098);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-                m_tradeInventory.Initialize( theGame.r_getMultiplayerClient().getChatInventory() );
+                m_coopCategoryInv = theGame.r_getMultiplayerClient().getChatInventory();
+                m_tradeInventory.Initialize( m_coopCategoryInv );
                 m_tradeInventory.ignorePosition = true;
+                m_tradeInventory.overrideQuestItemFilters = true;
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 3:
                 locString = GetLocStringById(2111114097);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
-                m_tradeInventory.Initialize( theGame.r_getMultiplayerClient().getMorphInventory() );
+                m_coopCategoryInv = theGame.r_getMultiplayerClient().getMorphInventory();
+                m_tradeInventory.Initialize( m_coopCategoryInv );
                 m_tradeInventory.ignorePosition = true;
+                m_tradeInventory.overrideQuestItemFilters = true;
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
         }
@@ -936,6 +953,46 @@ function OnChangeCategory( id : int )
 
 @addField(CR4ItemSelectionPopup)
 var m_tradeInventory: W3GuiSelectItemComponent;
+
+// the inventory the grid on screen was built from, so a click can be read back from that same one
+@addField(CR4ItemSelectionPopup)
+var m_coopCategoryInv : CInventoryComponent;
+
+// Every inventory grid in the game goes through this. For an entry of one of the mod's own menus it carries the
+// label and icon the entry should show instead of the carrier item's own (see MenuAdd in coopEnemies.ws).
+@wrapMethod(W3GuiSelectItemComponent)
+function SetInventoryFlashObjectForItem(item : SItemUniqueId, out flashObject : CScriptedFlashObject) : void
+{
+    var client : r_MultiplayerClient;
+    var coop : r_CoopEnemies;
+    var label, icon : string;
+
+    wrappedMethod(item, flashObject);
+
+    client = theGame.r_getMultiplayerClient();
+    if(!client)
+    {
+        return;
+    }
+    coop = client.getCoopEnemies();
+    if(!coop)
+    {
+        return;
+    }
+    label = coop.MenuLabel(GetInventoryComponent(), item);
+    if(label == "")
+    {
+        return;
+    }
+    flashObject.SetMemberFlashString("itemName", label);
+    flashObject.SetMemberFlashInt("quantity", 1);
+    flashObject.SetMemberFlashBool("isNew", false);
+    icon = coop.MenuIcon(GetInventoryComponent(), item);
+    if(icon != "")
+    {
+        flashObject.SetMemberFlashString("iconPath", icon);
+    }
+}
 
 @addField(W3ItemSelectionPopupData)
 var wo_toTrade : string;

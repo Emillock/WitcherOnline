@@ -11,13 +11,11 @@ exec function coopleave()
     theGame.r_getMultiplayerClient().leaveParty();
 }
 
-// Witcher Online's radial menu for the nearest player (trading, emotes, riding along, Gwent): it shows no entries
-// on Remastered, so this also says whether its entries are items this game knows at all.
+// Witcher Online's radial menu for the nearest player (the party, trading, emotes, riding along, Gwent). It is
+// what interacting with a player opens; this is the way in when no one is in reach of an interaction.
 exec function coopmenu()
 {
     var player : r_RemotePlayer;
-    var inventory : CInventoryComponent;
-    var ids : array<SItemUniqueId>;
 
     player = W3CoopNearestPlayer();
     if(!player)
@@ -25,12 +23,10 @@ exec function coopmenu()
         theGame.GetGuiManager().ShowNotification("W3Coop: no player of yours is near.");
         return;
     }
-    inventory = new CInventoryComponent in theGame;
-    inventory.AddAnItem('wo_joinParty', 1);
-    inventory.GetAllItems(ids);
-    theGame.GetGuiManager().ShowNotification("W3Coop: the menu's entries are " + ids.Size() + " item(s) here (1 = the mod's"
-        + " items load, 0 = they don't).");
-    theGame.r_getMultiplayerClient().createMenu(player.ghost);
+    if(!theGame.r_getMultiplayerClient().createMenu(player.ghost))
+    {
+        theGame.GetGuiManager().ShowNotification("W3Coop: the menu could not be built.");
+    }
 }
 
 exec function cooptrade()

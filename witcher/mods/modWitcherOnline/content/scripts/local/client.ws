@@ -1967,8 +1967,8 @@ statemachine class r_MultiplayerClient
         outgoingGwentTo = toRequest;
 
         inventory = new CInventoryComponent in this;
-        ids = inventory.AddAnItem('wo_timed_gwent', 1);
-        ids = inventory.AddAnItem('wo_notime_gwent', 1);
+        getCoopEnemies().MenuAdd(inventory, 'wo_timed_gwent', "Timed game", "icons/inventory/gwint/ico_gwent_hero_northern_realms.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_notime_gwent', "No time limit", "icons/inventory/gwint/ico_gwent_hero_northern_realms.png");
 
         m_popupData = new W3ItemSelectionPopupData in theGame.GetGuiManager();
         m_popupData.targetInventory = inventory;
@@ -1995,11 +1995,11 @@ statemachine class r_MultiplayerClient
 
         if(player.outgoingGwentRequest == E_RequestTimed)
         {
-            ids = inventory.AddAnItem('wo_timed_gwent', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_timed_gwent', "Accept: timed game", "icons/inventory/gwint/ico_gwent_hero_northern_realms.png");
         }
         else
         {
-            ids = inventory.AddAnItem('wo_notime_gwent', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_notime_gwent', "Accept: no time limit", "icons/inventory/gwint/ico_gwent_hero_northern_realms.png");
         }
 
         if(theGame.GetInGameConfigWrapper().GetVarValue('MPGhosts_Main', 'MPGhosts_AutoDeclineGwent'))
@@ -2720,7 +2720,7 @@ statemachine class r_MultiplayerClient
         return ridingEnabled;
     }
     
-    public function createMenu(actor : CActor)
+    public function createMenu(actor : CActor) : bool
     {
         var m_popupData : W3ItemSelectionPopupData;
         var inventory : CInventoryComponent;
@@ -2729,36 +2729,42 @@ statemachine class r_MultiplayerClient
 
         player = mpghosts_getPlayerFromActor(actor);
         if(!player)
-            return;
+            return false;
 
         cpcPlayerType = NR_GetPlayerManager().GetCurrentPlayerType();
         
         inventory = new CInventoryComponent in theGame;
         
+        getCoopEnemies().MenuClear();
         if(inParty)
         {
-            inventory.AddAnItem('wo_leaveParty', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_leaveParty', "Leave party", "icons/inventory/quests/illusion_medallion_quest_item_64x64.png");
         }
         else
         {
-            inventory.AddAnItem('wo_joinParty', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_joinParty', "Join " + player.username + "'s party", "icons/inventory/quests/illusion_medallion_quest_item_64x64.png");
         }
 
-        inventory.AddAnItem('wo_inviteGwent', 1);
+        getCoopEnemies().MenuAdd(inventory, 'wo_inviteGwent', "Play Gwent", "icons/inventory/gwint/ico_gwent_hero_northern_realms.png");
 
         if(player.isSailing)
         {
-            inventory.AddAnItem('wo_rideBoat', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_rideBoat', "Ride along on the boat", "icons/inventory/quests/q403_ciri_meteor_quest_item_64x64.png");
         }
         else if(player.isMounted)
         {
-            inventory.AddAnItem('wo_rideHorse', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_rideHorse', "Ride along on the horse", "icons/inventory/quests/q403_ciri_meteor_quest_item_64x64.png");
         }
         else
         {
-            inventory.AddAnItem('wo_ride', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_ride', "Be carried", "icons/inventory/quests/q403_ciri_meteor_quest_item_64x64.png");
         }
-        inventory.AddAnItem('wo_trade', 1);
+        getCoopEnemies().MenuAdd(inventory, 'wo_trade', "Trade", "icons/inventory/ingredients/alchemy/alcohol_dwarven_spirit_64x64.png");
+
+        if(getCoopEnemies().menuEntries < 1)
+        {
+            return false;  // nothing to show: the caller falls back on the dialog
+        }
 
         m_popupData = new W3ItemSelectionPopupData in theGame.GetGuiManager();
         m_popupData.targetInventory = inventory;
@@ -2769,6 +2775,7 @@ statemachine class r_MultiplayerClient
         m_popupData.wo_playerMenuPlayer = player;
         
         theGame.RequestPopup('ItemSelectionPopup', m_popupData);
+        return true;
     }
 
     public function Init()
@@ -5197,6 +5204,7 @@ statemachine class r_MultiplayerClient
 
         cpcPlayerType = NR_GetPlayerManager().GetCurrentPlayerType();
         
+        getCoopEnemies().MenuClear();
         inventory = getEmoteInventory();
 
         m_popupData = new W3ItemSelectionPopupData in theGame.GetGuiManager();
@@ -5225,65 +5233,65 @@ statemachine class r_MultiplayerClient
         cpcPlayerType = NR_GetPlayerManager().GetCurrentPlayerType();
         
         inventory = new CInventoryComponent in this;
-        inventory.AddAnItem('wo_emote1', 1);
-        inventory.AddAnItem('wo_emote2', 1);
-        inventory.AddAnItem('wo_emote3', 1);
-        inventory.AddAnItem('wo_emote4', 1);
-        inventory.AddAnItem('wo_emote5', 1);
-        inventory.AddAnItem('wo_emote6', 1);
-        inventory.AddAnItem('wo_emote7', 1);
-        inventory.AddAnItem('wo_emote8', 1);
-        inventory.AddAnItem('wo_emote9', 1);
-        inventory.AddAnItem('wo_emote10', 1);
-        inventory.AddAnItem('wo_emote11', 1);
-        inventory.AddAnItem('wo_emote12', 1);
-        inventory.AddAnItem('wo_emote13', 1);
-        inventory.AddAnItem('wo_emote14', 1);
-        inventory.AddAnItem('wo_emote15', 1);
-        inventory.AddAnItem('wo_emote16', 1);
-        inventory.AddAnItem('wo_emote17', 1);
-        inventory.AddAnItem('wo_emote18', 1);
-        inventory.AddAnItem('wo_emote19', 1);
-        inventory.AddAnItem('wo_emote20', 1);
-        inventory.AddAnItem('wo_emote21', 1);
-        inventory.AddAnItem('wo_emote22', 1);
-        inventory.AddAnItem('wo_emote23', 1);
-        inventory.AddAnItem('wo_emote24', 1);
-        inventory.AddAnItem('wo_emote25', 1);
-        inventory.AddAnItem('wo_emote26', 1);
-        inventory.AddAnItem('wo_emote27', 1);
-        inventory.AddAnItem('wo_emote28', 1);
-        inventory.AddAnItem('wo_emote29', 1);
-        inventory.AddAnItem('wo_emote33', 1);
-        inventory.AddAnItem('wo_emote34', 1);
-        inventory.AddAnItem('wo_emote35', 1);
-        inventory.AddAnItem('wo_emote36', 1);
-        inventory.AddAnItem('wo_emote37', 1);
-        inventory.AddAnItem('wo_emote38', 1);
-        inventory.AddAnItem('wo_emote39', 1);
-        inventory.AddAnItem('wo_emote40', 1);
-        inventory.AddAnItem('wo_emote41', 1);
-        inventory.AddAnItem('wo_emote42', 1);
-        inventory.AddAnItem('wo_emote43', 1);
-        inventory.AddAnItem('wo_emote44', 1);
-        inventory.AddAnItem('wo_emote45', 1);
-        inventory.AddAnItem('wo_emote46', 1);
-        inventory.AddAnItem('wo_emote47', 1);
-        inventory.AddAnItem('wo_emote48', 1);
-        inventory.AddAnItem('wo_emote49', 1);
-        inventory.AddAnItem('wo_emote50', 1);
-        inventory.AddAnItem('wo_emote51', 1);
-        inventory.AddAnItem('wo_emote52', 1);
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote1', "Emote 1", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote2', "Emote 2", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote3', "Emote 3", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote4', "Emote 4", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote5', "Emote 5", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote6', "Emote 6", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote7', "Emote 7", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote8', "Emote 8", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote9', "Emote 9", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote10', "Emote 10", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote11', "Emote 11", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote12', "Emote 12", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote13', "Emote 13", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote14', "Emote 14", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote15', "Emote 15", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote16', "Emote 16", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote17', "Emote 17", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote18', "Emote 18", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote19', "Emote 19", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote20', "Emote 20", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote21', "Emote 21", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote22', "Emote 22", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote23', "Emote 23", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote24', "Emote 24", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote25', "Emote 25", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote26', "Emote 26", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote27', "Emote 27", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote28', "Emote 28", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote29', "Emote 29", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote33', "Emote 33", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote34', "Emote 34", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote35', "Emote 35", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote36', "Emote 36", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote37', "Emote 37", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote38', "Emote 38", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote39', "Emote 39", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote40', "Emote 40", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote41', "Emote 41", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote42', "Emote 42", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote43', "Emote 43", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote44', "Emote 44", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote45', "Emote 45", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote46', "Emote 46", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote47', "Emote 47", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote48', "Emote 48", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote49', "Emote 49", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote50', "Emote 50", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote51', "Emote 51", "icons/inventory/quests/eye_of_loki-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_emote52', "Emote 52", "icons/inventory/quests/eye_of_loki-64x64.png");
 
         if(cpcPlayerType != ENR_PlayerGeralt && cpcPlayerType != ENR_PlayerWitcher && cpcPlayerType != ENR_PlayerUnknown)
         {
-            inventory.AddAnItem('wo_emote55', 1);
-            inventory.AddAnItem('wo_emote56', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_emote55', "Emote 55", "icons/inventory/quests/eye_of_loki-64x64.png");
+            getCoopEnemies().MenuAdd(inventory, 'wo_emote56', "Emote 56", "icons/inventory/quests/eye_of_loki-64x64.png");
         }
         else
         {
-            inventory.AddAnItem('wo_emote53', 1);
-            inventory.AddAnItem('wo_emote54', 1);
+            getCoopEnemies().MenuAdd(inventory, 'wo_emote53', "Emote 53", "icons/inventory/quests/eye_of_loki-64x64.png");
+            getCoopEnemies().MenuAdd(inventory, 'wo_emote54', "Emote 54", "icons/inventory/quests/eye_of_loki-64x64.png");
         }
 
         return inventory;
@@ -5294,19 +5302,19 @@ statemachine class r_MultiplayerClient
         var inventory : CInventoryComponent;
         
         inventory = new CInventoryComponent in this;
-        inventory.AddAnItem('wo_chat1', 1);
-        inventory.AddAnItem('wo_chat2', 1);
-        inventory.AddAnItem('wo_chat3', 1);
-        inventory.AddAnItem('wo_chat4', 1);
-        inventory.AddAnItem('wo_chat5', 1);
-        inventory.AddAnItem('wo_chat6', 1);
-        inventory.AddAnItem('wo_chat7', 1);
-        inventory.AddAnItem('wo_chat8', 1);
-        inventory.AddAnItem('wo_chat9', 1);
-        inventory.AddAnItem('wo_chat10', 1);
-        inventory.AddAnItem('wo_chat11', 1);
-        inventory.AddAnItem('wo_chat12', 1);
-        inventory.AddAnItem('wo_chat13', 1);
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat1', "Hello", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat2', "Bye", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat3', "Follow me", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat4', "Wait here", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat5', "Need a ride?", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat6', "Trade?", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat7', "Thanks", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat8', "Sorry", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat9', "Look here", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat10', "Help!", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat11', "Nice armor", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat12', "Nice sword", "icons/inventory/quests/bell-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_chat13', "Nice outfit", "icons/inventory/quests/bell-64x64.png");
 
         return inventory;
     }
@@ -5316,10 +5324,10 @@ statemachine class r_MultiplayerClient
         var inventory : CInventoryComponent;
         
         inventory = new CInventoryComponent in this;
-        inventory.AddAnItem('wo_morph1', 1);
-        inventory.AddAnItem('wo_morph2', 1);
-        inventory.AddAnItem('wo_morph3', 1);
-        inventory.AddAnItem('wo_morph4', 1);
+        getCoopEnemies().MenuAdd(inventory, 'wo_morph1', "Cat", "icons/inventory/quests/ciris_phylactery-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_morph2', "Fox", "icons/inventory/quests/ciris_phylactery-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_morph3', "Owl", "icons/inventory/quests/ciris_phylactery-64x64.png");
+        getCoopEnemies().MenuAdd(inventory, 'wo_morph4', "Crow", "icons/inventory/quests/ciris_phylactery-64x64.png");
 
         return inventory;
     }

@@ -479,6 +479,8 @@ class r_CoopEnemies
     public var puppetsFreed : int;     // puppets killed here that stayed standing and were let go
     public var clocksFollowed : int;   // times this game's clock was set to the party leader's
     public var signGestures : int;     // sign casts played on another player's character here
+    public var signHands : int;        // cast effects shown in another player's character's hand
+    public var menuEntries : int;      // entries the player menu last built (see MenuAdd)
     public var twinsBound : int;
     public var spawnFailures : int;
     public var lastError : string;
@@ -1313,6 +1315,8 @@ class r_CoopEnemies
         puppetsFreed = 0;
         clocksFollowed = 0;
         signGestures = 0;
+        signHands = 0;
+        MenuClear();
         effectTypesHeld.Clear();
         localEffectsDropped = 0;
         heavyClaims = 0;
@@ -2776,6 +2780,179 @@ class r_CoopEnemies
     public function PendingHurtCount() : int
     {
         return hurts.Size();
+    }
+
+    // ------------------------------------------------------- the player menu's entries
+    //
+    // Witcher Online builds its radial menus out of items of its own (wo_joinParty and the rest), defined in its
+    // DLC's XML. Remastered never registers those definitions, so the adds do nothing and the menu draws empty.
+    // Instead every entry now rides on a plain game item that does exist, and the label and icon it should show
+    // are kept here, by the item's flash id, for the grid override in anno.ws and the click in OnCallSelectItem.
+
+    private var menuCarrier : int;     // the carrier name to try first for the next entry
+    private var menuInvs : array<CInventoryComponent>;
+    private var menuIds : array<int>;
+    private var menuActions : array<name>;
+    private var menuLabels : array<string>;
+    private var menuIcons : array<string>;
+
+    public function MenuClear()
+    {
+        menuInvs.Clear();
+        menuIds.Clear();
+        menuActions.Clear();
+        menuLabels.Clear();
+        menuIcons.Clear();
+        menuEntries = 0;
+        menuCarrier = 0;
+    }
+
+    // Plain game items that exist in every install, do not stack (so each add is a grid slot of its own) and are
+    // never seen as themselves: the label and icon drawn over them come from MenuAdd.
+    private function MenuCarrierName(i : int) : name
+    {
+        if(i == 1)
+        {
+            return 'Illusion Medallion';
+        }
+        if(i == 2)
+        {
+            return 'q103_bell';
+        }
+        if(i == 3)
+        {
+            return 'q203_eyeofloki';
+        }
+        if(i == 4)
+        {
+            return 'Potestaquisitor';
+        }
+        if(i == 5)
+        {
+            return 'ciris_phylactery';
+        }
+        if(i == 6)
+        {
+            return 'q403_ciri_meteor';
+        }
+        return 'Oil Lamp';
+    }
+
+    // One entry: adds the carrier item to the menu's own inventory and remembers what it stands for. The carrier
+    // is a plain game item that does not stack, so each add is a grid slot of its own.
+    public function MenuAdd(inv : CInventoryComponent, action : name, label : string, icon : string) : bool
+    {
+        var ids : array<SItemUniqueId>;
+        var id, attempt, which : int;
+        var got : bool;
+
+        if(!inv)
+        {
+            return false;
+        }
+        for(attempt = 0; attempt < 7; attempt += 1)
+        {
+            which = menuCarrier + attempt;
+            if(which >= 7)
+            {
+                which -= 7;
+            }
+            ids.Clear();
+            ids = inv.AddAnItem(MenuCarrierName(which), 1, true, true);
+            if(ids.Size() > 0)
+            {
+                id = ItemToFlashUInt(ids[0]);
+                if(MenuIndex(inv, id) < 0)
+                {
+                    menuCarrier = which;  // this one makes a slot of its own, so start with it next time
+                    got = true;
+                    break;
+                }
+                // it stacked onto an entry already there: try the next carrier
+            }
+        }
+        if(!got)
+        {
+            return false;
+        }
+        menuInvs.PushBack(inv);
+        menuIds.PushBack(id);
+        menuActions.PushBack(action);
+        menuLabels.PushBack(label);
+        menuIcons.PushBack(icon);
+        menuEntries += 1;
+        return true;
+    }
+
+    private function MenuIndex(inv : CInventoryComponent, id : int) : int
+    {
+        var i : int;
+
+        for(i = 0; i < menuIds.Size(); i += 1)
+        {
+            if(menuIds[i] == id)
+            {
+                if(menuInvs[i] == inv)
+                {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    // What the menu entry stands for: the wo_* name Witcher Online's own handler expects, or '' for an item that
+    // is not an entry of ours (every other inventory grid in the game goes through the same override)
+    public function MenuAction(inv : CInventoryComponent, item : SItemUniqueId) : name
+    {
+        var i : int;
+
+        i = MenuIndex(inv, ItemToFlashUInt(item));
+        if(i < 0)
+        {
+            return '';
+        }
+        return menuActions[i];
+    }
+
+    public function MenuLabel(inv : CInventoryComponent, item : SItemUniqueId) : string
+    {
+        var i : int;
+
+        i = MenuIndex(inv, ItemToFlashUInt(item));
+        if(i < 0)
+        {
+            return "";
+        }
+        return menuLabels[i];
+    }
+
+    // The name a menu click stands for: the entry's wo_* name, or the item's own for anything not ours
+    public function MenuNameOf(inv : CInventoryComponent, item : SItemUniqueId) : name
+    {
+        var n : name;
+
+        n = MenuAction(inv, item);
+        if(n == '')
+        {
+            if(inv)
+            {
+                n = inv.GetItemName(item);
+            }
+        }
+        return n;
+    }
+
+    public function MenuIcon(inv : CInventoryComponent, item : SItemUniqueId) : string
+    {
+        var i : int;
+
+        i = MenuIndex(inv, ItemToFlashUInt(item));
+        if(i < 0)
+        {
+            return "";
+        }
+        return menuIcons[i];
     }
 
     // ---------------------------------------------------------------- member
