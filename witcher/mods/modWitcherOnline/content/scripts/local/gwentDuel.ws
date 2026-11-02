@@ -190,12 +190,15 @@ var duelSeed : int;
 
 // The board ended a draw without a replay (OnMultiplayerDraw). Contract with the board (Task 14): it calls
 // OnMultiplayerDraw only when the match ends as a draw that is not replayed. Defensively the flag is also cleared by a
-// later result (OnMatchResult), a surrender (OnQuitGameConfirmed) and a new game of the duel (a new match id).
+// later result (OnMatchResult), a surrender (OnQuitGameConfirmed: a surrender is a loss, not a draw), the menu opening
+// and a new game of the duel (a new match id).
 @addField(CR4GwintGameMenu)
 var duelDraw : bool;
 
-// The board cancelled the duel (OnMultiplayerAbort). Cleared like duelDraw by a surrender and a new game of the duel,
-// so both sides settle a surrender the same way (the opponent's board takes QUITGAME as its win).
+// The board cancelled the duel game as no contest (OnMultiplayerAbort). Sticky for the rest of that game: a later
+// result or a surrender does not clear it, and the close then settles nothing (no settleGwentBet, no
+// NotifyGwentMatchEnded), so a player who leaves an aborted board through the surrender popup pays nothing. Only the
+// menu opening and a new game of the duel (a new match id) clear it.
 @addField(CR4GwintGameMenu)
 var duelAborted : bool;
 
@@ -305,8 +308,8 @@ function OnQuitGameConfirmed()
 
     if(IsDuel())
     {
-        // a surrender is a loss here and a win for the opponent, whatever was signalled before
-        ClearDuelEndSignals();
+        // a surrender is a loss, not a draw; an abort stays (an aborted game settles nothing, surrender or not)
+        duelDraw = false;
         fxNotifyQuit = m_flashModule.GetMemberFlashFunction("onQuitConfirmed");
         if(fxNotifyQuit)
         {
@@ -359,6 +362,7 @@ function OnClosingMenu()
 
 // ---- board to script ----
 
+// Both end signals, at the menu opening and when a new game of the duel starts.
 @addMethod(CR4GwintGameMenu)
 function ClearDuelEndSignals()
 {
