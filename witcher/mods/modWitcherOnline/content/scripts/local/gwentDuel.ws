@@ -2,6 +2,19 @@
 // The rebuilt board (WitcherOnline\gwent) reads the flash values set here and calls the events below from Flash.
 // Outside a duel (multiplayerSeed 0) the menu runs as vanilla; the board falls back to vanilla when gwint.game.seed is 0.
 // gwentHooks.ws adds HandleOutgoingGwentAction and NotifyGwentMatchEnded, which hand messages and results to the client.
+//
+// Transport: the client sends the last 20 outbound messages as one "~"-joined window in its wo3 packet and hands the
+// opponent's window to the board (gwint.game.remoteInput) whenever its counter changes. The client clears its window
+// when a duel starts and WO_GwentWindowLingerSeconds() after one ends. Second line of defence: every message carries
+// the match id (<seed hex>g<game number>), and the board's DuelWindow ignores messages of any other match id, so a
+// window left from an earlier duel or game can never be applied to the current one.
+
+// How long the window of a finished duel keeps being sent, so the last messages (final move, surrender, leave, desync
+// report) still reach the opponent after this menu closed.
+function WO_GwentWindowLingerSeconds() : float
+{
+    return 30.0;
+}
 
 // ---- duel protocol marker and deck exchange (wo3 packet) ----
 
@@ -175,13 +188,20 @@ public function ClearMultiplayerState()
 @addField(CR4GwintGameMenu)
 var duelSeed : int;
 
-// The board ended a draw without a replay (OnMultiplayerDraw); a later OnMatchResult (a replayed game) clears it.
+// The board ended a draw without a replay (OnMultiplayerDraw). Contract with the board (Task 14): it calls
+// OnMultiplayerDraw only when the match ends as a draw that is not replayed. Defensively the flag is also cleared by a
+// later result (OnMatchResult), a surrender (OnQuitGameConfirmed) and a new game of the duel (a new match id).
 @addField(CR4GwintGameMenu)
 var duelDraw : bool;
 
-// The board cancelled the duel (OnMultiplayerAbort); final, whatever comes after it.
+// The board cancelled the duel (OnMultiplayerAbort). Cleared like duelDraw by a surrender and a new game of the duel,
+// so both sides settle a surrender the same way (the opponent's board takes QUITGAME as its win).
 @addField(CR4GwintGameMenu)
 var duelAborted : bool;
+
+// The match id of the last outbound message ("<seed hex>g<game number>"); a different one means a new game started.
+@addField(CR4GwintGameMenu)
+var duelMatchId : string;
 
 @addField(CR4GwintGameMenu)
 var duelAbortReason : string;
@@ -210,9 +230,8 @@ function OnConfigUI()
         // left over from a duel whose menu never opened: this is a single-player match
         manager.ClearMultiplayerState();
     }
-    duelDraw = false;
-    duelAborted = false;
-    duelAbortReason = "";
+    ClearDuelEndSignals();
+    duelMatchId = "";
 
     wrappedMethod();
 
@@ -286,6 +305,8 @@ function OnQuitGameConfirmed()
 
     if(IsDuel())
     {
+        // a surrender is a loss here and a win for the opponent, whatever was signalled before
+        ClearDuelEndSignals();
         fxNotifyQuit = m_flashModule.GetMemberFlashFunction("onQuitConfirmed");
         if(fxNotifyQuit)
         {
@@ -338,10 +359,31 @@ function OnClosingMenu()
 
 // ---- board to script ----
 
-// One outbound duel message (a token without spaces or "~").
+@addMethod(CR4GwintGameMenu)
+function ClearDuelEndSignals()
+{
+    duelDraw = false;
+    duelAborted = false;
+    duelAbortReason = "";
+}
+
+// One outbound duel message (a token without spaces or "~": "<version>.<matchId>.<seq>.<type>.<args>.<hash>").
 @addMethod(CR4GwintGameMenu)
 event OnMultiplayerMessage(message : string)
 {
+    var version : string;
+    var matchId : string;
+    var rest : string;
+
+    if(StrSplitFirst(message, ".", version, rest) && StrSplitFirst(rest, ".", matchId, rest))
+    {
+        if(duelMatchId != "" && matchId != duelMatchId)
+        {
+            // the first message of a replayed game: the end signals of the earlier game no longer apply
+            ClearDuelEndSignals();
+        }
+        duelMatchId = matchId;
+    }
     HandleOutgoingGwentAction(message);
 }
 

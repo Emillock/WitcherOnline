@@ -186,6 +186,9 @@ statemachine class r_MultiplayerClient
     private var lastGwentAction : string;
     private var lastGwentActionTime  : float;
     private var gwentActionBuffer : array<string>;
+    // when the window of the duel that ended is cleared (engine seconds; < 0: nothing pending), see finishGwentGame
+    private var gwentWindowClearAt : float;
+    default gwentWindowClearAt = -1;
 
     private var activeGwentBet : int;
     private var activeGwentSeed : int;
@@ -1802,9 +1805,10 @@ statemachine class r_MultiplayerClient
         var gwentGame : r_GwentGame;
         var deck : SDeckDefinition;
 
-        lastGwentAction = "";
-        lastGwentActionTime = 0.0;
-        gwentActionBuffer.Clear();
+        // a new duel never carries the previous duel's messages: empty window, a counter value the opponent has not
+        // seen yet (the counter only grows, so the first new window always reads as a change), fresh baseline for the
+        // opponent's window
+        clearGwentWindow();
         opponent.lastGwentAction = "";
         opponent.lastGwentActionTime = 0.0;
         opponent.prevGwentActionTime = -1;
@@ -1939,10 +1943,12 @@ statemachine class r_MultiplayerClient
         finishGwentGame();
     }
 
-    // Leaves the duel. The outgoing message window stays as it is until the next duel starts, so the opponent still
-    // receives the last messages (the final move, a surrender, a leave or a desync report) after this menu closed.
+    // Leaves the duel. The outgoing message window lingers for WO_GwentWindowLingerSeconds() (or until the next duel
+    // starts), so the opponent still receives the last messages (the final move, a surrender, a leave or a desync
+    // report) after this menu closed; then expireGwentWindow clears it.
     private function finishGwentGame()
     {
+        gwentWindowClearAt = theGame.GetEngineTimeAsSeconds() + WO_GwentWindowLingerSeconds();
         clearGwentRequestState();
         inGwentGame = false;
         gwentOpponent = NULL;
@@ -1950,6 +1956,24 @@ statemachine class r_MultiplayerClient
         activeGwentBet = 0;
         activeGwentSeed = 0;
         theGame.GetGwintManager().ClearMultiplayerState();
+    }
+
+    // Empties the outgoing message window and moves its counter on, so receivers see the change.
+    private function clearGwentWindow()
+    {
+        lastGwentAction = "";
+        lastGwentActionTime = lastGwentActionTime + 1.0f;
+        gwentActionBuffer.Clear();
+        gwentWindowClearAt = -1;
+    }
+
+    // Called every tick: clears the last duel's window once its linger time is over (not during a duel).
+    public function expireGwentWindow()
+    {
+        if(!inGwentGame && gwentWindowClearAt >= 0 && theGame.GetEngineTimeAsSeconds() >= gwentWindowClearAt)
+        {
+            clearGwentWindow();
+        }
     }
 
     // The board's duel log (CR4GwintGameMenu.OnDuelLog). Test tools wrap this to copy the lines into their own log.
@@ -1967,9 +1991,18 @@ statemachine class r_MultiplayerClient
 
     public function showGwentProtocolMismatch(player : r_RemotePlayer)
     {
-        GetWitcherPlayer().DisplayHudMessage("No Gwent duel with " + player.username
-            + ": their Witcher Online has another Gwent duel version (" + player.gwentProtocol + ", yours "
-            + WO_GwentProtocol() + ").");
+        if(player.lastGwentData == "")
+        {
+            // no wo3 packet from them yet, so no marker to compare
+            GetWitcherPlayer().DisplayHudMessage("No Gwent duel with " + player.username
+                + " yet: their Gwent duel version is unknown, try again in a moment.");
+        }
+        else
+        {
+            GetWitcherPlayer().DisplayHudMessage("No Gwent duel with " + player.username
+                + ": their Witcher Online has another Gwent duel version (" + player.gwentProtocol + ", yours "
+                + WO_GwentProtocol() + ").");
+        }
         mpghosts_playSound('gui_enchanting_runeword_remove');
     }
 
@@ -7762,6 +7795,7 @@ state WO_Tick in r_MultiplayerClient
             parent.pruneGlobalPlayers(5);
             parent.checkOutgoingTrades();
             parent.checkIncomingGwentRequests();
+            parent.expireGwentWindow();
             parent.checkRidingAttachment();
             parent.checkPlayerChange();
             parent.updateWorldSync();
