@@ -319,10 +319,19 @@ function OnQuitGameConfirmed()
     {
         // a surrender is a loss, not a draw; an abort stays (an aborted game settles nothing, surrender or not)
         duelDraw = false;
+        // the board sends QUITGAME: "1" (it settles: a loss here, a win there) once its Hello is complete, "0" before
+        // (no contest, it calls OnMultiplayerAbort)
         fxNotifyQuit = m_flashModule.GetMemberFlashFunction("onQuitConfirmed");
         if(fxNotifyQuit)
         {
             fxNotifyQuit.InvokeSelf();
+        }
+        if(duelMatchId == "")
+        {
+            // the board has sent nothing yet, not even its Hello (it may not have its duel values yet): the opponent
+            // never learns of a forfeit, so nobody pays (it ends by its own Hello wait as no contest)
+            OnDuelLog("DUEL END result=nocontest reason=quit game=0");
+            OnMultiplayerAbort("quit");
         }
     }
     wrappedMethod();
