@@ -1,0 +1,44 @@
+diff --git a/red/game/witcher3/menus/gwint/GwintDeck.as b/red/game/witcher3/menus/gwint/GwintDeck.as
+index 86f26f2..e17f427 100644
+--- a/red/game/witcher3/menus/gwint/GwintDeck.as
++++ b/red/game/witcher3/menus/gwint/GwintDeck.as
+@@ -152,7 +152,10 @@ package red.game.witcher3.menus.gwint
+          return strength;
+       }
+       
+-      public function shuffleDeck(otherDeckStrength:int) : void
++      /**
++       * Duel: ownerPlayer is the local player index that owns this deck; its seat's stream shuffles (spec 7.3).
++       */
++      public function shuffleDeck(otherDeckStrength:int, ownerPlayer:int = -1) : void
+       {
+          var i:int = 0;
+          var randomIndex:int = 0;
+@@ -166,7 +169,7 @@ package red.game.witcher3.menus.gwint
+          this.cardIndicesInDeck.length = 0;
+          while(originalIndices.length > 0)
+          {
+-            randomIndex = Math.min(Math.floor(Math.random() * originalIndices.length),originalIndices.length - 1);
++            randomIndex = DuelSession.randomInt(ownerPlayer,originalIndices.length);
+             this.cardIndicesInDeck.push(originalIndices[randomIndex]);
+             originalIndices.splice(randomIndex,1);
+          }
+@@ -198,12 +201,16 @@ package red.game.witcher3.menus.gwint
+          }
+       }
+       
+-      public function readdCard(templateID:int, random:Boolean = false) : void
++      /**
++       * Duel: with random set, ownerPlayer is the local player index that owns this deck; its seat's stream picks
++       * the position (spec 7.3).
++       */
++      public function readdCard(templateID:int, random:Boolean = false, ownerPlayer:int = -1) : void
+       {
+          var newIndex:int = 0;
+          if(random)
+          {
+-            newIndex = Math.min(Math.floor(Math.random() * this.cardIndicesInDeck.length),this.cardIndicesInDeck.length - 1);
++            newIndex = DuelSession.randomInt(ownerPlayer,this.cardIndicesInDeck.length);
+             this.cardIndicesInDeck.splice(newIndex,0,templateID);
+          }
+          else

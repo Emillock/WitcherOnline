@@ -1,0 +1,98 @@
+diff --git a/red/game/witcher3/menus/gwint/CardInstance.as b/red/game/witcher3/menus/gwint/CardInstance.as
+index b1187d8..da51dec 100644
+--- a/red/game/witcher3/menus/gwint/CardInstance.as
++++ b/red/game/witcher3/menus/gwint/CardInstance.as
+@@ -1354,7 +1354,7 @@ package red.game.witcher3.menus.gwint
+             {
+                if(cardManagerRef.cardEffectManager.randomResEnabled && !this.templateRef.isType(CardTemplate.CardType_Hero))
+                {
+-                  this.handleNurseChoice(copyList[Math.min(Math.floor(Math.random() * copyList.length),copyList.length - 1)].instanceId);
++                  this.handleNurseChoice(copyList[DuelSession.randomInt(this.owningPlayer,copyList.length)].instanceId);
+                }
+                else if(gameFlowRef.playerControllers[this.listsPlayer] is AIPlayerController)
+                {
+@@ -1535,6 +1535,11 @@ package red.game.witcher3.menus.gwint
+       protected function onNurseEffectEnded(cardInstance:CardInstance = null) : void
+       {
+          var cardManagerRef:CardManager = CardManager.getInstance();
++         if(cardInstance && DuelSession.active != null)
++         {
++            this.duelPlaceResurrected(cardManagerRef,cardInstance);
++            return;
++         }
+          if(cardInstance)
+          {
+             cardInstance.recalculatePowerPotential(cardManagerRef);
+@@ -1542,6 +1547,72 @@ package red.game.witcher3.menus.gwint
+          }
+       }
+       
++      /**
++       * Duel medic placement (spec 7.3): the row vanilla gets from recalculatePowerPotential, worked out the same way
++       * but seat-relative (the side of the graveyard the card comes from, where vanilla counts PLAYER_1's rows for an
++       * agile card that improves neighbours), and a tie between melee and ranged for an agile card is broken from
++       * this medic's owner's stream instead of Math.random. recalculatePowerPotential itself stays AI-only.
++       * @param cardManagerRef The card manager.
++       * @param cardInstance The card this medic brings back, still in its graveyard.
++       */
++      private function duelPlaceResurrected(cardManagerRef:CardManager, cardInstance:CardInstance) : void
++      {
++         var side:int = cardInstance.listsPlayer;
++         var targetPlayer:int = cardInstance.templateRef.isType(CardTemplate.CardType_Spy) ? cardInstance.notListPlayer : side;
++         var targetSlot:int = CardManager.CARD_LIST_LOC_SEIGE;
++         var meleePower:int = 0;
++         var rangedPower:int = 0;
++         var rowCreatures:Vector.<CardInstance> = null;
++         if(cardInstance.templateRef.isType(CardTemplate.CardType_Melee))
++         {
++            targetSlot = CardManager.CARD_LIST_LOC_MELEE;
++         }
++         else if(cardInstance.templateRef.isType(CardTemplate.CardType_Ranged))
++         {
++            targetSlot = CardManager.CARD_LIST_LOC_RANGED;
++         }
++         if(cardInstance.templateRef.isType(CardTemplate.CardType_RangedMelee))
++         {
++            meleePower = this.duelPowerOnRow(cardManagerRef,cardInstance,CardManager.CARD_LIST_LOC_MELEE,side);
++            rangedPower = this.duelPowerOnRow(cardManagerRef,cardInstance,CardManager.CARD_LIST_LOC_RANGED,side);
++            if(cardInstance.templateRef.hasEffect(CardTemplate.CardEffect_ImproveNeighbours))
++            {
++               // the same sums as vanilla: melee power + melee creatures, ranged power + melee and ranged creatures
++               rowCreatures = new Vector.<CardInstance>();
++               cardManagerRef.getAllCreaturesNonHero(CardManager.CARD_LIST_LOC_MELEE,side,rowCreatures);
++               meleePower += rowCreatures.length;
++               cardManagerRef.getAllCreaturesNonHero(CardManager.CARD_LIST_LOC_RANGED,side,rowCreatures);
++               rangedPower += rowCreatures.length;
++            }
++            if(rangedPower > meleePower || rangedPower == meleePower && DuelSession.randomInt(this.owningPlayer,2) == 1)
++            {
++               targetSlot = CardManager.CARD_LIST_LOC_RANGED;
++            }
++         }
++         cardManagerRef.addCardInstanceToList(cardInstance,targetSlot,targetPlayer);
++      }
++
++      /**
++       * A card's power with the effects registered on one row (weather, horns, morale), as recalculatePowerPotential
++       * evaluates it; leaves the card's effectedByCardsRefList empty, as vanilla does.
++       */
++      private function duelPowerOnRow(cardManagerRef:CardManager, cardInstance:CardInstance, listID:int, playerID:int) : int
++      {
++         var power:int = 0;
++         var effects:Vector.<CardInstance> = cardManagerRef.cardEffectManager.getEffectsForList(listID,playerID);
++         cardInstance.effectedByCardsRefList.length = 0;
++         for(var i:int = 0; i < effects.length; i++)
++         {
++            if(effects[i] != cardInstance)
++            {
++               cardInstance.effectedByCardsRefList.push(effects[i]);
++            }
++         }
++         power = cardInstance.getTotalPower();
++         cardInstance.effectedByCardsRefList.length = 0;
++         return power;
++      }
++
+       protected function onScorchFXEnd(cardInstance:CardInstance) : void
+       {
+          CardManager.getInstance().sendToGraveyard(cardInstance);

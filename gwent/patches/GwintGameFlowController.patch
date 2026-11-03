@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameFlowController.as b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
-index 9ffd03a..5ea5a76 100644
+index 9ffd03a..acc0211 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 @@ -1,6 +1,8 @@
@@ -160,7 +160,20 @@ index 9ffd03a..5ea5a76 100644
                 this.playerControllers[CardManager.PLAYER_1].resetCurrentRoundStatus();
                 this.playerControllers[CardManager.PLAYER_2].resetCurrentRoundStatus();
                 if(this.playerControllers[this.currentPlayer].currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE)
-@@ -836,6 +941,7 @@ package red.game.witcher3.menus.gwint
+@@ -723,7 +828,11 @@ package red.game.witcher3.menus.gwint
+       protected function state_begin_ClearingBoard() : void
+       {
+          var monsterAbilityTriggered:Boolean = false;
+-         if(this.cardManager.playerDeckDefinitions[CardManager.PLAYER_1].getDeckFaction() == CardTemplate.FactionId_No_Mans_Land && this.cardManager.chooseCreatureToExclude(CardManager.PLAYER_1) != null)
++         if(DuelSession.active != null)
++         {
++            monsterAbilityTriggered = this.cardManager.hasCreatureToExclude(CardManager.PLAYER_1) || this.cardManager.hasCreatureToExclude(CardManager.PLAYER_2);
++         }
++         else if(this.cardManager.playerDeckDefinitions[CardManager.PLAYER_1].getDeckFaction() == CardTemplate.FactionId_No_Mans_Land && this.cardManager.chooseCreatureToExclude(CardManager.PLAYER_1) != null)
+          {
+             monsterAbilityTriggered = true;
+          }
+@@ -836,6 +945,7 @@ package red.game.witcher3.menus.gwint
           {
              GwintGameMenu.mSingleton.playSound("gui_gwint_battle_draw");
           }
@@ -168,7 +181,7 @@ index 9ffd03a..5ea5a76 100644
           this.mcEndGameDialog.show(gameWinner,this.OnEndGameResult);
        }
        
-@@ -845,6 +951,11 @@ package red.game.witcher3.menus.gwint
+@@ -845,6 +955,11 @@ package red.game.witcher3.menus.gwint
        
        protected function OnEndGameResult(result:int) : void
        {

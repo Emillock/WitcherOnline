@@ -194,6 +194,34 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * A random index for a rules draw (spec 7.3; the audit of every Math.random is in DuelRandom). In a duel it
+       * draws from the stream of the owner's seat, so the result does not depend on which seat's code runs first on a
+       * client. Outside duels it is the vanilla expression, so single-player Gwent is unchanged.
+       * @param ownerPlayer The local player index (CardManager.PLAYER_1 or PLAYER_2) whose deck, graveyard, hand or
+       * card the draw belongs to.
+       * @param n The number of choices.
+       * @return A value from 0 to n - 1 (n - 1, without a draw, when n is below 1, as vanilla would give).
+       */
+      public static function randomInt(ownerPlayer:int, n:int) : int
+      {
+         if(_active == null)
+         {
+            return Math.min(Math.floor(Math.random() * n),n - 1);
+         }
+         if(n < 1)
+         {
+            return n - 1;
+         }
+         var seat:int = _active.seatOf(ownerPlayer);
+         if(seat != DuelIds.SEAT_A && seat != DuelIds.SEAT_B)
+         {
+            _active.abort("random_owner");
+            return 0;
+         }
+         return _active.random.nextInt(seat == DuelIds.SEAT_A ? DuelRandom.STREAM_A : DuelRandom.STREAM_B,n);
+      }
+
+      /**
        * The net ids of this game's card instances.
        */
       public function get ids() : DuelIds
