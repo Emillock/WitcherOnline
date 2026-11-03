@@ -6,7 +6,8 @@ package red.game.witcher3.menus.gwint
    /**
     * In-game self-test of the board-independent duel classes: replays every vector of DuelVectors (generated
     * from the Python reference) through DuelRandom, DuelHash, DuelCodec and DuelWindow, plus hand-written checks
-    * of DuelIds, the window cap and the error paths. Runs only when the script sets gwint.game.debug.selfTest
+    * of DuelIds, the window cap, the error paths, and the routing of synthetic D and M messages (DuelDecision.route,
+    * DuelMulligan.route). Runs only when the script sets gwint.game.debug.selfTest
     * (the w3test bot does, a normal player never), and reports "DUEL SELFTEST pass=n fail=m" and one
     * "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
     */
@@ -49,6 +50,7 @@ package red.game.witcher3.menus.gwint
          test.guard("window",test.checkWindow);
          test.guard("ids",test.checkIds);
          test.guard("edges",test.checkEdges);
+         test.guard("decisions",test.checkDecisions);
          _checks = test._count;
          return test._failures;
       }
@@ -261,6 +263,69 @@ package red.game.witcher3.menus.gwint
          this.expect(DuelCodec.encode(new DuelMessage(1,"0g0",1,"S",null,0)) == "1.0g0.1.S._.00000000","encode without args");
          this.expect(windowTake("0g0",1 + DuelWindow.MAX_AHEAD),"window queues a seq MAX_AHEAD above the next");
          this.expect(!windowTake("0g0",2 + DuelWindow.MAX_AHEAD),"window ignores a seq further ahead");
+      }
+
+      /**
+       * The routing of the opponent's D and M (spec 9.4, 9.6) on synthetic messages: an early D is held until its
+       * decision point and until the board settles, a D of another kind or asker is a desync, a D while the local
+       * player decides and any other message while a D is awaited are desyncs, and the mulligan accepts both orders of
+       * the two seats' M (round 1 only once both are done), at most two redraws, nothing after M or after round 1.
+       */
+      private function checkDecisions() : void
+      {
+         var nur:DuelMessage = decision(["NUR","A13","A6"]);
+         var remote:DuelDecision = new DuelDecision("NUR","A13",DuelStateHash.SCOPE_FULL,null,null,null);
+         var local:DuelDecision = new DuelDecision("LRES","B1",DuelStateHash.SCOPE_FULL,null,null,null);
+         this.expect(DuelDecision.route(nur,null,null,true) == DuelDecision.WAIT,"decision: an early D waits for its decision point");
+         this.expect(DuelDecision.route(nur,remote,null,false) == DuelDecision.WAIT,"decision: a D waits until the board settles");
+         this.expect(DuelDecision.route(nur,remote,null,true) == DuelDecision.APPLY,"decision: the D of the open decision applies");
+         this.expect(isDesync(DuelDecision.route(decision(["LRES","A13","A6"]),remote,null,true)),"decision: a D of another kind is a desync");
+         this.expect(isDesync(DuelDecision.route(decision(["NUR","A12","A6"]),remote,null,true)),"decision: a D of another asker is a desync");
+         this.expect(isDesync(DuelDecision.route(decision(["NUR","A13"]),remote,null,true)),"decision: a D without a choice is a desync");
+         this.expect(isDesync(DuelDecision.route(nur,null,local,true)),"decision: a D while the local player decides is a desync");
+         this.expect(isDesync(DuelDecision.route(new DuelMessage(1,"0g0",9,"P",["B3","4","B"],0),remote,null,true)),"decision: a move while a D is awaited is a desync");
+         this.expect(DuelDecision.route(new DuelMessage(1,"0g0",9,"P",["B3","4","B"],0),null,null,true) == DuelDecision.NOT_MINE,"decision: a move without an open decision goes on to the moves");
+         var mul:DuelMessage = decision([DuelSession.MULLIGAN,DuelSession.ASKER_PERK,"B3"]);
+         var done:DuelMessage = new DuelMessage(1,"0g0",9,DuelSession.MULLIGAN_DONE,[],0);
+         var first:DuelMulligan = new DuelMulligan();
+         this.expect(first.route(mul) == DuelMulligan.WAIT && first.route(done) == DuelMulligan.WAIT,"mulligan: D MUL and M wait until the hands are drawn");
+         first.open();
+         this.expect(first.route(mul) == DuelMulligan.REDRAW,"mulligan: first redraw");
+         first.remoteRedraws++;
+         this.expect(first.route(mul) == DuelMulligan.REDRAW,"mulligan: second redraw");
+         first.remoteRedraws++;
+         this.expect(isDesync(first.route(mul)),"mulligan: a third redraw is a desync");
+         this.expect(isDesync(first.route(decision([DuelSession.MULLIGAN,"coin","B3"]))),"mulligan: a redraw with another asker is a desync");
+         this.expect(isDesync(first.route(new DuelMessage(1,"0g0",9,DuelSession.MULLIGAN_DONE,["1"],0))),"mulligan: an M with arguments is a desync");
+         this.expect(!first.roundMayStart(true),"mulligan: local done first, round 1 waits for the opponent's M");
+         this.expect(first.route(done) == DuelMulligan.DONE,"mulligan: the opponent's M");
+         first.remoteDone = true;
+         this.expect(first.roundMayStart(true),"mulligan: local done first, then the opponent's M: round 1 starts");
+         this.expect(isDesync(first.route(done)) && isDesync(first.route(mul)),"mulligan: nothing after the opponent's M");
+         var second:DuelMulligan = new DuelMulligan();
+         second.open();
+         this.expect(second.route(done) == DuelMulligan.DONE,"mulligan: the opponent's M before any local answer");
+         second.remoteDone = true;
+         this.expect(!second.roundMayStart(false),"mulligan: opponent done first, round 1 waits for the local player");
+         this.expect(second.roundMayStart(true),"mulligan: opponent done first, then the local player: round 1 starts");
+         second.close();
+         this.expect(isDesync(second.route(done)),"mulligan: an M after round 1 started is a desync");
+         var late:DuelMulligan = new DuelMulligan();
+         late.open();
+         late.close();
+         this.expect(isDesync(late.route(mul)),"mulligan: a redraw after round 1 started is a desync");
+      }
+
+      /** A synthetic D with these args. */
+      private static function decision(args:Array) : DuelMessage
+      {
+         return new DuelMessage(1,"0g0",9,DuelSession.DECISION,args,0);
+      }
+
+      /** Whether a route() result is the detail of a desync (anything but the routing words). */
+      private static function isDesync(route:String) : Boolean
+      {
+         return route != DuelDecision.WAIT && route != DuelDecision.APPLY && route != DuelDecision.NOT_MINE && route != DuelMulligan.WAIT && route != DuelMulligan.REDRAW && route != DuelMulligan.DONE;
       }
 
       /** True if a fresh window queues (reports a gap for) a lone message with this seq. */

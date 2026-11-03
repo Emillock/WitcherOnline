@@ -17,7 +17,9 @@ package red.game.witcher3.menus.gwint
     * that is not known here, a card that is not in this seat's hand, or a leader that cannot be used is a desync. Its
     * DUEL DESYNC line then shows two equal hashes (the hash check had passed); DUEL MISMATCH names the cause.
     * S (pass) marks the seat done. A choice inside the opponent's move (medic, leader dialogs) is a decision
-    * (DuelSession.decide): ApplyingCard holds until the opponent's D has been applied.
+    * (DuelSession.decide): ApplyingCard holds until the opponent's D has been applied. This controller never sets
+    * BasePlayerController.isAI, so ApplyLeaderAbility takes the same (human) branches on both boards and every leader
+    * choice goes through decide (CardLeaderInstance.duelDecide).
     */
    public class NetOpponentController extends BasePlayerController
    {

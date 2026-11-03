@@ -69,7 +69,7 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     swf = tmp_path / "result.swf"
     swf.write_bytes(redswf.read_movie(board).fws)
     classes = ffdec.dump_as3(swf)
-    assert len(DUEL_CLASSES) >= 8
+    assert len(DUEL_CLASSES) >= 10
     assert [name for name in DUEL_CLASSES if f"{PACKAGE}.{name}" not in classes] == []
     assert f"{PACKAGE}.CardTransaction" in classes
     assert f"{PACKAGE}.NetOpponentController" in classes
@@ -79,7 +79,7 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     assert '"gwint.game.debug.selfTest"' in menu and "DuelSelfTest.start" in menu
     assert "DuelProbe" not in menu
     for key in ("seed", "isHost", "isTimed", "opponentLeft", "remoteInput", "debug.autoplay", "debug.mulligan",
-                "debug.corruptAt", "debug.forceDraw", "debug.breakTemplates"):
+                "debug.leaderFirst", "debug.corruptAt", "debug.forceDraw", "debug.breakTemplates"):
         assert f'"gwint.game.{key}"' in menu
     gwint = decompiled / "red" / "game" / "witcher3" / "menus" / "gwint"
     assert "DuelSession.active.update()" in (gwint / "GwintGameFlowController.as").read_text()

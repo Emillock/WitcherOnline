@@ -153,11 +153,13 @@ package red.game.witcher3.menus.gwint
 
       private var _lastAppliedHash:uint;
 
-      /** The decision the local seat makes now: kind, asker, scope, showFn, applyFn, autoFn, shown (or null). */
-      private var _localDecision:Object;
+      /** The decision the local seat makes now, or null. */
+      private var _localDecision:DuelDecision;
 
-      /** The decision the opponent makes now: kind, asker, scope, applyFn (or null). */
-      private var _remoteDecision:Object;
+      /** The decision the opponent makes now, or null. */
+      private var _remoteDecision:DuelDecision;
+
+      private var _mulligan:DuelMulligan;
 
       /**
        * Starts a duel game (use start(), which also makes it the active one).
@@ -175,6 +177,7 @@ package red.game.witcher3.menus.gwint
          this._window = new DuelWindow(this._matchId);
          this._outSeq = 0;
          this._mulligans = [0,0];
+         this._mulligan = new DuelMulligan();
          this._recent = [];
          this._sentHashes = {};
          this._startMs = getTimer();
@@ -366,6 +369,14 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * The mulligan of this game for both seats (phase, the opponent's redraws and M, this seat's M).
+       */
+      public function get mulligan() : DuelMulligan
+      {
+         return this._mulligan;
+      }
+
+      /**
        * Counts one applied mulligan redraw of a seat (after the redraw, so D MUL hashes the count before it).
        * @param seat DuelIds.SEAT_A or SEAT_B.
        */
@@ -413,6 +424,14 @@ package red.game.witcher3.menus.gwint
        * @param apply function(choice:String):Boolean, applies a choice; false if it is not one of the options (a
        * desync).
        * @param autoChoice function():String, the choice duel autoplay makes (null: autoplay never answers).
+       *
+       * Only one decision is open at a time (R34). A second decide while one is open ends the duel as a local desync
+       * rather than queueing it: the vanilla rules ask one choice per step and the next choice only from the handler
+       * of the previous one (two LBIN then LPICK, a medic bringing back a medic), and both boards clear the open
+       * decision before that handler runs. No 5.01 case opens two at once: the only rules code that places two cards
+       * in one step, the Skellige round 3 perk (ressurectFromGraveyard), cannot meet a choice, since Skellige has no
+       * non-hero medic and no resurrect leader, and its picks are seeded draws. A future rule with two choices in one
+       * step would end the match as a desync, never hang it.
        */
       public function decide(kind:String, seat:int, askerNetId:int, showLocal:Function, apply:Function, autoChoice:Function = null) : void
       {
@@ -426,7 +445,7 @@ package red.game.witcher3.menus.gwint
             this.localDesync("decision " + kind + " while another is open");
             return;
          }
-         var decision:Object = {"kind":kind,"asker":asker,"scope":scopeOf(kind),"showFn":showLocal,"applyFn":apply,"autoFn":autoChoice,"shown":false};
+         var decision:DuelDecision = new DuelDecision(kind,asker,scopeOf(kind),showLocal,apply,autoChoice);
          if(seat == this.localSeat)
          {
             this.log("DUEL DECIDE " + kind + " asker=" + asker + " by=local");
@@ -451,7 +470,7 @@ package red.game.witcher3.menus.gwint
        */
       public function answer(kind:String, choice:String) : void
       {
-         var decision:Object = this._localDecision;
+         var decision:DuelDecision = this._localDecision;
          if(this._ended || decision == null || decision.kind != kind || !decision.shown || choice == null)
          {
             return;
@@ -838,18 +857,12 @@ package red.game.witcher3.menus.gwint
             }
             return;
          }
-         if(this._remoteDecision != null && next.type != DECISION)
-         {
-            this._window.pop();
-            this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,"expected decision " + this._remoteDecision.kind);
-            return;
-         }
-         if(next.type == MULLIGAN_DONE || next.type == DECISION && next.args.length > 0 && next.args[0] == MULLIGAN)
+         if(this._remoteDecision == null && (next.type == MULLIGAN_DONE || next.type == DECISION && next.args.length > 0 && next.args[0] == MULLIGAN))
          {
             this.dispatchMulligan(next);
             return;
          }
-         if(next.type == DECISION)
+         if(next.type == DECISION || this._remoteDecision != null)
          {
             this.dispatchDecision(next);
             return;
@@ -874,29 +887,32 @@ package red.game.witcher3.menus.gwint
        */
       private function dispatchMulligan(next:DuelMessage) : void
       {
-         var flow:GwintGameFlowController = GwintGameFlowController.getInstance();
-         if(flow.duelMulliganPhase == GwintGameFlowController.DUEL_MULLIGAN_NOT_YET)
+         var route:String = this._mulligan.route(next);
+         if(route == DuelMulligan.WAIT)
          {
             return;
          }
          this._window.pop();
+         if(route != DuelMulligan.REDRAW && route != DuelMulligan.DONE)
+         {
+            this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_SEAT),next.hash,route);
+            return;
+         }
          if(!this.checkApply(next,DuelStateHash.SCOPE_SEAT))
          {
             return;
          }
-         var applied:Boolean;
-         if(next.type == MULLIGAN_DONE)
+         if(route == DuelMulligan.DONE)
          {
-            applied = next.args.length == 0 && flow.duelApplyRemoteMulliganDone();
+            this._mulligan.remoteDone = true;
+            return;
          }
-         else
+         if(!GwintGameFlowController.getInstance().duelApplyRemoteRedraw(this.cardOfArg(next.args[2])))
          {
-            applied = next.args.length == 3 && next.args[1] == ASKER_PERK && flow.duelApplyRemoteRedraw(this.cardOfArg(next.args[2]));
+            this.desync(next.seq,this._lastAppliedHash,next.hash,"mulligan card " + next.args[2]);
+            return;
          }
-         if(!applied)
-         {
-            this.desync(next.seq,this._lastAppliedHash,next.hash,"mulligan " + next.args.join(","));
-         }
+         this._mulligan.remoteRedraws++;
       }
 
       /**
@@ -907,25 +923,20 @@ package red.game.witcher3.menus.gwint
        */
       private function dispatchDecision(next:DuelMessage) : void
       {
-         if(this._localDecision != null)
-         {
-            this._window.pop();
-            this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,"decision while local " + this._localDecision.kind);
-            return;
-         }
-         var pending:Object = this._remoteDecision;
-         if(pending == null || !this.settled())
+         var pending:DuelDecision = this._remoteDecision;
+         var route:String = DuelDecision.route(next,pending,this._localDecision,this.settled());
+         if(route == DuelDecision.WAIT || route == DuelDecision.NOT_MINE)
          {
             return;
          }
          this._window.pop();
-         if(!this.checkApply(next,pending.scope))
+         if(route != DuelDecision.APPLY)
          {
+            this.desync(next.seq,this.logApply(next,pending != null ? pending.scope : DuelStateHash.SCOPE_FULL),next.hash,route);
             return;
          }
-         if(next.args.length != 3 || next.args[0] != pending.kind || next.args[1] != pending.asker)
+         if(!this.checkApply(next,pending.scope))
          {
-            this.desync(next.seq,this._lastAppliedHash,next.hash,"decision " + next.args.join(",") + " for " + pending.kind + "," + pending.asker);
             return;
          }
          this._remoteDecision = null;
@@ -1185,8 +1196,7 @@ package red.game.witcher3.menus.gwint
          }
          else if(what == "mulligan")
          {
-            this.log("DUEL AUTOPLAY mulligan " + (menu.duelDebugMulligan ? "redraw" : "decline"));
-            flow.duelAutoMulligan(menu.duelDebugMulligan);
+            this.log("DUEL AUTOPLAY mulligan " + (flow.duelAutoMulligan(menu.duelDebugMulligan) ? "redraw" : "decline"));
          }
          else if(what == "dialog")
          {

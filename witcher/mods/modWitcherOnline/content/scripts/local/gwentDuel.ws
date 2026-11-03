@@ -150,6 +150,10 @@ var duelDebugAutoplay : bool;
 @addField(CR4GwintManager)
 var duelDebugMulligan : bool;
 
+// Autoplay plays its leader as soon as it can be used (the leader decisions the vanilla AI never picks).
+@addField(CR4GwintManager)
+var duelDebugLeaderFirst : bool;
+
 // The outbound sequence number the board corrupts (0: off).
 @addField(CR4GwintManager)
 var duelDebugCorruptAt : int;
@@ -244,6 +248,7 @@ function OnConfigUI()
 
     m_flashValueStorage.SetFlashBool("gwint.game.debug.autoplay", manager.duelDebugAutoplay);
     m_flashValueStorage.SetFlashBool("gwint.game.debug.mulligan", manager.duelDebugMulligan);
+    m_flashValueStorage.SetFlashBool("gwint.game.debug.leaderFirst", manager.duelDebugLeaderFirst);
     m_flashValueStorage.SetFlashInt("gwint.game.debug.corruptAt", manager.duelDebugCorruptAt);
     m_flashValueStorage.SetFlashBool("gwint.game.debug.forceDraw", manager.duelDebugForceDraw);
     m_flashValueStorage.SetFlashBool("gwint.game.debug.breakTemplates", manager.duelDebugBreakTemplates);

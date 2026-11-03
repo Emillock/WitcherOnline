@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
-index bea2665..810f7be 100644
+index bea2665..700607d 100644
 --- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
 +++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
 @@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
@@ -24,7 +24,7 @@ index bea2665..810f7be 100644
        public function HumanPlayerController()
        {
           super();
-@@ -94,19 +102,142 @@ package red.game.witcher3.menus.gwint
+@@ -94,19 +102,150 @@ package red.game.witcher3.menus.gwint
        {
           if(CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID).length == 0 && !CardManager.getInstance().getCardLeader(playerID).canBeUsed)
           {
@@ -107,6 +107,14 @@ index bea2665..810f7be 100644
 +            this._duelAutoAI.opponentID = opponentID;
 +         }
 +         move = this._duelAutoAI.duelSuggestMove();
++         if(GwintGameMenu.mSingleton.duelDebugLeaderFirst && CardManager.getInstance().getCardLeader(playerID) != null && CardManager.getInstance().getCardLeader(playerID).canBeUsed)
++         {
++            // test switch gwint.game.debug.leaderFirst: the leader before the AI's move
++            move = new CardTransaction();
++            move.sourceCardInstanceRef = CardManager.getInstance().getCardLeader(playerID);
++            move.targetPlayerID = playerID;
++            DuelSession.active.log("DUEL AUTOPLAY leader first");
++         }
 +         if(move == null || move.sourceCardInstanceRef == null || !this.duelPlayable(move))
 +         {
 +            DuelSession.active.log("DUEL AUTOPLAY pass");
@@ -168,7 +176,7 @@ index bea2665..810f7be 100644
              currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
              _turnOver = true;
              if(_transactionCard != null)
-@@ -208,6 +339,10 @@ package red.game.witcher3.menus.gwint
+@@ -208,6 +347,10 @@ package red.game.witcher3.menus.gwint
           var isCardEffect:Boolean = false;
           var isGlobalEffect:Boolean = false;
           this.on_state_about_to_update();
@@ -179,7 +187,7 @@ index bea2665..810f7be 100644
           if(_transactionCard)
           {
              cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
-@@ -313,18 +448,19 @@ package red.game.witcher3.menus.gwint
+@@ -313,18 +456,19 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction = new CardTransaction();
              _decidedCardTransaction.targetPlayerID = playerID;
              _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
@@ -201,7 +209,7 @@ index bea2665..810f7be 100644
           _boardRenderer.activateAllHolders(true);
           if(Boolean(this._handHolder) && _boardRenderer.getSelectedCardHolder() != this._handHolder)
           {
-@@ -450,7 +586,7 @@ package red.game.witcher3.menus.gwint
+@@ -450,7 +594,7 @@ package red.game.witcher3.menus.gwint
                       _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
                       _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
                       _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -210,7 +218,7 @@ index bea2665..810f7be 100644
                    }
              }
           }
-@@ -468,7 +604,7 @@ package red.game.witcher3.menus.gwint
+@@ -468,7 +612,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
              _decidedCardTransaction.targetCardInstanceRef = null;
              _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -219,7 +227,7 @@ index bea2665..810f7be 100644
           }
        }
        
-@@ -522,6 +658,10 @@ package red.game.witcher3.menus.gwint
+@@ -522,6 +666,10 @@ package red.game.witcher3.menus.gwint
        
        private function cancelCardTransaction(restoreSelection:Boolean = false) : void
        {

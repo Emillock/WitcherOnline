@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameMenu.as b/red/game/witcher3/menus/gwint/GwintGameMenu.as
-index d420f42..6aea497 100644
+index d420f42..54ee838 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameMenu.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameMenu.as
 @@ -3,7 +3,9 @@ package red.game.witcher3.menus.gwint
@@ -12,7 +12,7 @@ index d420f42..6aea497 100644
     import red.core.constants.KeyCode;
     import red.core.events.GameEvent;
     import red.core.events.GestureEventEx;
-@@ -57,6 +59,29 @@ package red.game.witcher3.menus.gwint
+@@ -57,6 +59,32 @@ package red.game.witcher3.menus.gwint
        
        public var mcBoardRenderer:GwintBoardRenderer;
        
@@ -25,6 +25,9 @@ index d420f42..6aea497 100644
 +      /** Test switch gwint.game.debug.mulligan: autoplay redraws at the mulligan instead of declining. */
 +      public var duelDebugMulligan:Boolean = false;
 +      
++      /** Test switch gwint.game.debug.leaderFirst: autoplay plays a usable leader before anything else. */
++      public var duelDebugLeaderFirst:Boolean = false;
++
 +      /** Test switch gwint.game.debug.corruptAt: the outbound seq whose state the board corrupts (0: off; Task 11). */
 +      public var duelDebugCorruptAt:int = 0;
 +      
@@ -42,7 +45,7 @@ index d420f42..6aea497 100644
        public function GwintGameMenu()
        {
           super();
-@@ -139,6 +164,17 @@ package red.game.witcher3.menus.gwint
+@@ -139,6 +167,18 @@ package red.game.witcher3.menus.gwint
           stage.addEventListener(GestureEventEx.GESTURE_PRESS,this.handleGestureOrMouseClick,false,2,true);
           this.setupSkipButton();
           this.mcChoiceDialog.visible = false;
@@ -53,6 +56,7 @@ index d420f42..6aea497 100644
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.remoteInput",[this.setDuelRemoteInput]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.autoplay",[this.setDuelDebugAutoplay]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.mulligan",[this.setDuelDebugMulligan]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.leaderFirst",[this.setDuelDebugLeaderFirst]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.corruptAt",[this.setDuelDebugCorruptAt]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.forceDraw",[this.setDuelDebugForceDraw]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.breakTemplates",[this.setDuelDebugBreakTemplates]));
@@ -60,7 +64,7 @@ index d420f42..6aea497 100644
           dispatchEvent(new GameEvent(GameEvent.CALL,"OnConfigUI"));
           dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.spawnCardInstance",[this.onSpawnCardInstance]));
           dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.addCardToDeck",[this.onAddCardToDeck]));
-@@ -348,8 +384,241 @@ package red.game.witcher3.menus.gwint
+@@ -348,8 +388,252 @@ package red.game.witcher3.menus.gwint
           _cardManager.cardValues = cardValues as GwintCardValues;
        }
        
@@ -167,6 +171,17 @@ index d420f42..6aea497 100644
 +         this.duelDebugMulligan = redraw;
 +      }
 +      
++      /**
++       * Flash value gwint.game.debug.leaderFirst (test bots only): duel autoplay plays its leader as soon as it can be
++       * used, so the leader decisions the vanilla AI never picks (Bin2_Pick1, View_3_Enemy) are reached in tests. It
++       * only changes what autoplay chooses; autoplay itself runs only with gwint.game.debug.autoplay in a duel.
++       * @param enabled Whether autoplay plays the leader first.
++       */
++      public function setDuelDebugLeaderFirst(enabled:Boolean) : void
++      {
++         this.duelDebugLeaderFirst = enabled;
++      }
++
 +      /**
 +       * Flash value gwint.game.debug.corruptAt (test bots only, used from Task 11).
 +       * @param seq The outbound seq to corrupt, 0 for none.
@@ -302,7 +317,7 @@ index d420f42..6aea497 100644
           if(turnAIOn)
           {
              this.gameFlowController.turnOnAI(CardManager.PLAYER_1);
-@@ -367,6 +636,12 @@ package red.game.witcher3.menus.gwint
+@@ -367,6 +651,12 @@ package red.game.witcher3.menus.gwint
        
        public function setFirstTurn(playerFirst:Boolean) : void
        {
@@ -315,7 +330,7 @@ index d420f42..6aea497 100644
           if(playerFirst)
           {
              this.mcMessageQueue.PushMessage("[[gwint_player_will_go_first_message]]");
-@@ -448,9 +723,28 @@ package red.game.witcher3.menus.gwint
+@@ -448,9 +738,28 @@ package red.game.witcher3.menus.gwint
           return null;
        }
        
@@ -344,7 +359,7 @@ index d420f42..6aea497 100644
           if(params.length < 3)
           {
              throw Error;
-@@ -464,6 +758,10 @@ package red.game.witcher3.menus.gwint
+@@ -464,6 +773,10 @@ package red.game.witcher3.menus.gwint
        
        private function onAddCardToDeck(params:Array) : *
        {
@@ -355,7 +370,7 @@ index d420f42..6aea497 100644
           if(params.length < 2)
           {
              throw Error;
-@@ -477,6 +775,10 @@ package red.game.witcher3.menus.gwint
+@@ -477,6 +790,10 @@ package red.game.witcher3.menus.gwint
        private function onKillCard(params:Array) : *
        {
           var card:* = undefined;

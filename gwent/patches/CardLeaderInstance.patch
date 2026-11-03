@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/CardLeaderInstance.as b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
-index 05341cb..4492733 100644
+index 05341cb..f6b03d3 100644
 --- a/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 @@ -15,6 +15,18 @@ package red.game.witcher3.menus.gwint
@@ -30,7 +30,7 @@ index 05341cb..4492733 100644
                 {
                    this.ShowEnemyHand(3);
                 }
-@@ -528,6 +540,123 @@ package red.game.witcher3.menus.gwint
+@@ -528,6 +540,127 @@ package red.game.witcher3.menus.gwint
           }
        }
        
@@ -47,6 +47,10 @@ index 05341cb..4492733 100644
 +      /**
 +       * A leader choice in a duel (spec 9.6): the leader's owner decides (the local player through the vanilla dialog,
 +       * the opponent through its D); both boards then run the vanilla handler with the same choice.
++       * This routing relies on ApplyLeaderAbility getting isAI false for both seats of a duel: PLAYER_1 is a
++       * HumanPlayerController and PLAYER_2 a NetOpponentController, and neither sets BasePlayerController.isAI. With
++       * isAI true vanilla would pick the resurrect target itself, skip Bin2_Pick1 and take the first weather card on
++       * one board only (test_decisions.py pins that neither controller sets isAI).
 +       * @param kind LRES, LWEA, LBIN or LPICK.
 +       * @param cards The card options (LRES, LBIN), or null.
 +       * @param templates The template options (LWEA, LPICK), or null.
@@ -154,7 +158,7 @@ index 05341cb..4492733 100644
        protected function clearWeather() : void
        {
           var cardFXManager:CardFXManager = CardFXManager.getInstance();
-@@ -608,13 +737,18 @@ package red.game.witcher3.menus.gwint
+@@ -608,13 +741,18 @@ package red.game.witcher3.menus.gwint
           {
              if(cardManagerRef.cardEffectManager.randomResEnabled)
              {
@@ -174,7 +178,7 @@ index 05341cb..4492733 100644
              else
              {
                 GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(cardsInGraveyard,this.handleResurrectChoice,null,"[[gwint_choose_card_to_ressurect]]");
-@@ -650,6 +784,11 @@ package red.game.witcher3.menus.gwint
+@@ -650,6 +788,11 @@ package red.game.witcher3.menus.gwint
              {
                 throw new Error("GFX [ERROR] - tried to pick weather card when there was none");
              }
@@ -186,7 +190,7 @@ index 05341cb..4492733 100644
              GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardTemplates(templateList,this.handleCardDrawChoice_Weather,null,"[[gwint_pick_card_to_draw]]");
           }
        }
-@@ -691,6 +830,11 @@ package red.game.witcher3.menus.gwint
+@@ -691,6 +834,11 @@ package red.game.witcher3.menus.gwint
           {
              throw new Error("GFX [ERROR] - Tried to bin a card when there are none left in the hand");
           }
@@ -198,7 +202,7 @@ index 05341cb..4492733 100644
           GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(cardsInHand,this.handleBinChoice,null,"[[gwint_choose_card_to_dump]]");
        }
        
-@@ -724,6 +868,11 @@ package red.game.witcher3.menus.gwint
+@@ -724,6 +872,11 @@ package red.game.witcher3.menus.gwint
           {
              throw new Error("GFX [ERROR] - Tried to pick a card when there are none left in the deck");
           }
