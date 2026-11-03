@@ -8,8 +8,8 @@ package red.game.witcher3.menus.gwint
     * from the Python reference) through DuelRandom, DuelHash, DuelCodec and DuelWindow, plus hand-written checks
     * of DuelIds, the window cap, the error paths, and the routing of synthetic D and M messages (DuelDecision.route,
     * DuelMulligan.route), the order of deferred effects and the double scorch guard (DuelDeferred). Runs only when
-    * the script sets gwint.game.debug.selfTest (the w3test bot does, a normal player never), and reports "DUEL SELFTEST pass=n fail=m" and one
-    * "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
+    * the script sets gwint.game.debug.selfTest (the w3test bot does, a normal player never), and reports
+    * "DUEL SELFTEST pass=n fail=m" and one "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
     */
    public class DuelSelfTest
    {
