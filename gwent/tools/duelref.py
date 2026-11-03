@@ -15,7 +15,8 @@ Wire format: six fields joined by ".":  version.matchId.seq.type.args.hash
   type     one of TYPES
   args     "_" when empty, else arguments joined by "," (each one of [A-Za-z0-9]+)
            (QUITGAME: exactly one, "1" if the quitter settles the bet, "0" if not;
-           E, the end of a game: the winner as the sender sees it, A, B or N for a draw)
+           E, the end of a game: the winner as the sender sees it, A, B or N for a draw;
+           Y: the sender's hash, the seq that failed, and "stuck" or "hello" when a wait expired)
   hash     exactly 8 lowercase hex digits
 Messages in a window are joined by "~". "none" stands for an empty window.
 """
@@ -244,6 +245,8 @@ def _codec_vectors() -> dict[str, list[Any]]:
         ("1a2b3c4dg2", 12, "QUITGAME", ["1"], 0x7FFFFFFF),
         ("1a2b3c4dg2", 15, "QUITGAME", ["0"], 0x00000001),
         ("1a2b3c4dg2", 13, "Y", ["deadbeef", "12"], 0x80000000),
+        ("1a2b3c4dg2", 18, "Y", ["0badf00d", "0", "stuck"], 0x0BADF00D),
+        ("1a2b3c4dg2", 1, "Y", ["00000000", "0", "hello"], 0),
         ("1a2b3c4dg2", 14, "R", [], 0x01020304),
         ("1a2b3c4dg2", 999999999, "X", [], 0xCAFEBABE),
         ("1a2b3c4dg2", 16, "E", ["A"], 0x2468ACE0),

@@ -297,6 +297,8 @@ package red.game.witcher3.menus.gwint
             ["1.1a2b3c4dg2.12.QUITGAME.1.7fffffff",1,"1a2b3c4dg2",12,"QUITGAME","1",2147483647],
             ["1.1a2b3c4dg2.15.QUITGAME.0.00000001",1,"1a2b3c4dg2",15,"QUITGAME","0",1],
             ["1.1a2b3c4dg2.13.Y.deadbeef,12.80000000",1,"1a2b3c4dg2",13,"Y","deadbeef,12",2147483648],
+            ["1.1a2b3c4dg2.18.Y.0badf00d,0,stuck.0badf00d",1,"1a2b3c4dg2",18,"Y","0badf00d,0,stuck",195948557],
+            ["1.1a2b3c4dg2.1.Y.00000000,0,hello.00000000",1,"1a2b3c4dg2",1,"Y","00000000,0,hello",0],
             ["1.1a2b3c4dg2.14.R._.01020304",1,"1a2b3c4dg2",14,"R","",16909060],
             ["1.1a2b3c4dg2.999999999.X._.cafebabe",1,"1a2b3c4dg2",999999999,"X","",3405691582],
             ["1.1a2b3c4dg2.16.E.A.2468ace0",1,"1a2b3c4dg2",16,"E","A",610839776],

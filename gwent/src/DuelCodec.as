@@ -9,7 +9,8 @@ package red.game.witcher3.menus.gwint
     *   type     one of TYPES
     *   args     "_" when empty, else arguments of [A-Za-z0-9]+ joined by ","
     *            (QUITGAME: exactly one, "1" if the quitter settles the bet, "0" if not;
-    *            E, the end of a game: the winner as the sender sees it, A, B or N for a draw, checked by DuelEnd)
+    *            E, the end of a game: the winner as the sender sees it, A, B or N for a draw, checked by DuelEnd;
+    *            Y: the sender's hash, the seq that failed, and "stuck" or "hello" when a wait expired, DuelWait)
     *   hash     exactly 8 lowercase hex digits
     * Tokens never contain spaces or "~" (the window separator). Parsing is done by hand, character by
     * character, so it does not depend on RegExp support in the player.

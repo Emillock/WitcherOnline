@@ -104,4 +104,5 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     assert "function onQuitConfirmed" in menu and "stopDuelTimer" in menu
     assert "duelShowEndDialog" in flow and "duelStartNextGame" in flow
     assert "DUEL CONFIRMED winner=" in (gwint / "DuelSession.as").read_text()
-    assert "confirmExpired" in (gwint / "DuelEnd.as").read_text()
+    assert "lateLeave" in (gwint / "DuelEnd.as").read_text()
+    assert "leftEnds" in (gwint / "DuelWait.as").read_text() and "DUEL STUCK " in (gwint / "DuelSession.as").read_text()

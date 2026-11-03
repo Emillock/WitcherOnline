@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/CardLeaderInstance.as b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
-index 05341cb..f6b03d3 100644
+index 05341cb..b9a1aa8 100644
 --- a/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 @@ -15,6 +15,18 @@ package red.game.witcher3.menus.gwint
@@ -30,7 +30,7 @@ index 05341cb..f6b03d3 100644
                 {
                    this.ShowEnemyHand(3);
                 }
-@@ -528,6 +540,127 @@ package red.game.witcher3.menus.gwint
+@@ -528,6 +540,137 @@ package red.game.witcher3.menus.gwint
           }
        }
        
@@ -62,7 +62,7 @@ index 05341cb..f6b03d3 100644
 +         this._duelChoiceCards = cards;
 +         this._duelChoiceTemplates = templates;
 +         this._duelChoiceText = text;
-+         DuelSession.active.decide(kind,DuelSession.active.seatOf(owningPlayer),DuelSession.active.ids.toNet(instanceId),this.duelShowChoice,this.duelApplyChoice,this.duelAutoChoice);
++         DuelSession.active.decide(kind,DuelSession.active.seatOf(owningPlayer),DuelSession.active.ids.toNet(instanceId),this.duelShowChoice,this.duelApplyChoice,this.duelAutoChoice,this.duelFirstChoice);
 +      }
 +
 +      /** The vanilla dialog for the open leader choice, answered through DuelSession.answer. */
@@ -133,6 +133,16 @@ index 05341cb..f6b03d3 100644
 +         return true;
 +      }
 +
++      /** The first option of the open leader choice: the answer when the dialog goes away unanswered (R48). */
++      private function duelFirstChoice() : String
++      {
++         if(this._duelChoiceCards == null)
++         {
++            return "t" + this._duelChoiceTemplates[0];
++         }
++         return DuelSession.active.netName(this._duelChoiceCards[0].instanceId);
++      }
++
 +      /**
 +       * Autoplay's leader choice: the vanilla AI's where it has one (resurrect: getHigherOrLowerValueCardFromTargetGraveyard;
 +       * weather: the first weather card), else the first option (bin, pick: the vanilla AI has no such choice).
@@ -158,7 +168,7 @@ index 05341cb..f6b03d3 100644
        protected function clearWeather() : void
        {
           var cardFXManager:CardFXManager = CardFXManager.getInstance();
-@@ -608,13 +741,18 @@ package red.game.witcher3.menus.gwint
+@@ -608,13 +751,18 @@ package red.game.witcher3.menus.gwint
           {
              if(cardManagerRef.cardEffectManager.randomResEnabled)
              {
@@ -178,7 +188,7 @@ index 05341cb..f6b03d3 100644
              else
              {
                 GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(cardsInGraveyard,this.handleResurrectChoice,null,"[[gwint_choose_card_to_ressurect]]");
-@@ -650,6 +788,11 @@ package red.game.witcher3.menus.gwint
+@@ -650,6 +798,11 @@ package red.game.witcher3.menus.gwint
              {
                 throw new Error("GFX [ERROR] - tried to pick weather card when there was none");
              }
@@ -190,7 +200,7 @@ index 05341cb..f6b03d3 100644
              GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardTemplates(templateList,this.handleCardDrawChoice_Weather,null,"[[gwint_pick_card_to_draw]]");
           }
        }
-@@ -691,6 +834,11 @@ package red.game.witcher3.menus.gwint
+@@ -691,6 +844,11 @@ package red.game.witcher3.menus.gwint
           {
              throw new Error("GFX [ERROR] - Tried to bin a card when there are none left in the hand");
           }
@@ -202,7 +212,7 @@ index 05341cb..f6b03d3 100644
           GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(cardsInHand,this.handleBinChoice,null,"[[gwint_choose_card_to_dump]]");
        }
        
-@@ -724,6 +872,11 @@ package red.game.witcher3.menus.gwint
+@@ -724,6 +882,11 @@ package red.game.witcher3.menus.gwint
           {
              throw new Error("GFX [ERROR] - Tried to pick a card when there are none left in the deck");
           }

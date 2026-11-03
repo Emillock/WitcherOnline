@@ -60,13 +60,14 @@ def test_settling_needs_a_confirmed_result() -> None:
 
 
 def test_a_desync_or_no_confirmation_pays_nobody() -> None:
-    """R43: Y wins over the end routing; no E within the stuck-wait limit is no contest; both are aborts."""
+    """R43, R47: Y wins over the end routing; no E within the stuck-wait limit (DuelWait, kind END) is no contest;
+    both are aborts."""
     text = session()
     dispatch = function_body(text, "private function dispatch(")
     assert dispatch.index("next.type == DESYNC") < dispatch.index("this.dispatchEnd(next)")
-    update = function_body(text, "public function update(")
-    assert "confirmExpired(getTimer(),STUCK_WAIT_MS)" in update and 'abort("end_timeout")' in update
-    assert "HELLO_TIMEOUT_MS:int = STUCK_WAIT_MS" in text and "STUCK_WAIT_MS:int = 120000" in text
+    kind_of = function_body((SRC / "DuelWait.as").read_text(encoding="utf-8"), "public static function kindOf(")
+    assert "endPhase == DuelEnd.CONFIRMING" in kind_of and "return END" in kind_of
+    assert 'this.abort("stuck_wait",STUCK_TEXT)' in function_body(text, "private function stuckWait(")
 
 
 def test_a_corrupt_end_message_is_the_test_of_the_last_message() -> None:
@@ -83,8 +84,8 @@ def test_draws_replay_together_or_end_without_money() -> None:
     leave = function_body(text, "public function localLeave(")
     assert leave.index("send(LEAVE,") < leave.index('finishDraw("leave")')
     assert 'finishDraw("opponent_leave")' in function_body(text, "private function dispatchEnd(")
-    update = function_body(text, "public function update(")
-    assert update.index("replayExpired(") < update.index("send(LEAVE,") < update.index('finishDraw("replay_timeout")')
+    # R47: no R within the stuck-wait limit after the local R goes through the one rule (Y, then no contest)
+    assert "this.waitingForReplay" in function_body(text, "private function waitingFor(")
     assert 'duelFinish("draw")' in function_body(text, "private function finishDraw(")
 
 
@@ -147,7 +148,7 @@ def test_end_routing_is_covered_by_the_self_test() -> None:
     assert 'test.guard("end",test.checkEnd)' in text
     body = function_body(text, "private function checkEnd(")
     assert len(re.findall(r"this\.expect\(", body)) >= 15
-    assert "DuelEnd.CONFIRM" in body and "confirmExpired(" in body and "replayExpired(" in body
+    assert "DuelEnd.CONFIRM" in body and "DuelEnd.lateLeave(" in body
 
 
 def test_end_message_routes_in_duel_end() -> None:
@@ -166,14 +167,14 @@ def test_script_match_id_clear_skips_an_empty_id() -> None:
 
 
 def test_end_timeout_sends_y_before_it_ends() -> None:
-    """Review Important 1: on end_timeout this board sends Y (its E hash) before it ends as no contest, so an opponent
-    that was only held finds the queued E and the Y back to back and ends as no contest too."""
-    update = function_body(session(), "public function update(")
-    expired = update.index("confirmExpired(getTimer(),STUCK_WAIT_MS)")
-    y = update.index("this.send(DESYNC,[DuelCodec.hex8(this._end.endHash)", expired)
-    assert y < update.index('this.abort("end_timeout")', expired)
-    assert update.index("this.dispatch(next)") < expired
-    assert update.index("this.dispatch(next)") < update.index("replayExpired(")
+    """Review Important 1 (now R47): when the wait for E expires this board sends Y (its E hash) before it ends as no
+    contest, so an opponent that was only held finds the queued E and the Y back to back and ends as no contest too."""
+    text = session()
+    stuck = function_body(text, "private function stuckWait(")
+    assert "kind == DuelWait.END ? this._end.endHash" in stuck
+    assert stuck.index("this.send(DESYNC,") < stuck.index('this.abort("stuck_wait",STUCK_TEXT)')
+    update = function_body(text, "public function update(")
+    assert update.index("this.dispatch(next)") < update.index("this.opponentGone()")
 
 
 def test_a_late_leave_or_quit_of_the_game_before_is_still_taken() -> None:

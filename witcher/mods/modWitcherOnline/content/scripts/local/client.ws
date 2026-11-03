@@ -192,6 +192,14 @@ statemachine class r_MultiplayerClient
 
     private var activeGwentBet : int;
     private var activeGwentSeed : int;
+    // the duel board of this duel was up at least once (gwentGameLoop); when the duel started (GetLocalTimeAsMilliseconds)
+    private var gwentBoardSeen : bool;
+    private var gwentStartedMs : int;
+    // the board was told the opponent left (gwint.game.opponentLeft)
+    private var gwentOpponentLeftSent : bool;
+    // the opponent's last movement sequence seen during the duel, and when it last changed (GetLocalTimeAsMilliseconds)
+    private var gwentOpponentSeq : int;
+    private var gwentOpponentSeenMs : int;
 
     // party
     private var inParty : bool;
@@ -1817,6 +1825,9 @@ statemachine class r_MultiplayerClient
         gwentOpponent = opponent;
         activeGwentBet = bet;
         activeGwentSeed = seed;
+        gwentBoardSeen = false;
+        gwentStartedMs = theGame.GetLocalTimeAsMilliseconds();
+        gwentOpponentLeftSent = false;
 
         multiplayerLocalName = username;
         multiplayerOpponentName = opponent.username;
@@ -1847,6 +1858,39 @@ statemachine class r_MultiplayerClient
         menu = (CR4GwintGameMenu)theGame.GetGuiManager().GetRootMenu();
         if(!menu || !menu.IsDuel())
         {
+            if(!gwentBoardSeen && WO_GwentMsSince(gwentStartedMs) > (int)(WO_GwentBoardOpenSeconds() * 1000.0))
+            {
+                // R49: the duel board never opened (the menu request was refused or lost): leave the duel, so this
+                // player is not stuck "in Gwent"; no bet is held, none is paid (the opponent ends by its Hello wait)
+                duelLog("DUEL BOARD not open " + FloatToString(WO_GwentBoardOpenSeconds()) + " s after the duel started");
+                GetWitcherPlayer().DisplayHudMessage("The Gwent duel could not start. No bet was paid.");
+                finishGwentGame();
+            }
+            return;
+        }
+        if(!gwentBoardSeen)
+        {
+            gwentBoardSeen = true;
+            gwentOpponentSeq = -1;
+            gwentOpponentSeenMs = theGame.GetLocalTimeAsMilliseconds();
+        }
+
+        if(!gwentOpponent || gwentOpponentSilent())
+        {
+            // Witcher Online lost the opponent (disconnect, game closed): its window will not change any more
+            if(!gwentOpponentLeftSent)
+            {
+                gwentOpponentLeftSent = true;
+                if(gwentOpponent)
+                {
+                    duelLog("DUEL OPPONENT gone (no packet for " + FloatToString(WO_GwentOpponentSilentSeconds()) + " s)");
+                }
+                else
+                {
+                    duelLog("DUEL OPPONENT gone (Witcher Online lost the opponent)");
+                }
+                menu.SetDuelOpponentLeft();
+            }
             return;
         }
 
@@ -1854,6 +1898,26 @@ statemachine class r_MultiplayerClient
         {
             menu.ReceiveRemoteGwentAction(action);
         }
+    }
+
+    // Whether the opponent's packets stopped during the duel. Witcher Online's own presence check (pruneGlobalPlayers,
+    // 5 s without an update) counts engine time, which stands still while the Gwent board pauses the game, so it never
+    // removes a player during a duel; the opponent's packets still raise its movement sequence (about 60 a second, also
+    // while its own board is up), so a sequence that does not change for WO_GwentOpponentSilentSeconds() of real time
+    // means its game closed or it lost its connection.
+    private function gwentOpponentSilent() : bool
+    {
+        if(!gwentOpponent)
+        {
+            return true;
+        }
+        if(gwentOpponent.lastMovementSequence != gwentOpponentSeq)
+        {
+            gwentOpponentSeq = gwentOpponent.lastMovementSequence;
+            gwentOpponentSeenMs = theGame.GetLocalTimeAsMilliseconds();
+            return false;
+        }
+        return WO_GwentMsSince(gwentOpponentSeenMs) > (int)(WO_GwentOpponentSilentSeconds() * 1000.0);
     }
 
     // The opponent's window whenever its counter changed, the first one included: the board ignores messages of other

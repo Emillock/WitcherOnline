@@ -35,6 +35,9 @@ package red.game.witcher3.menus.gwint
       /** function():String, the choice duel autoplay makes, or null. */
       public var autoFn:Function;
 
+      /** function():String, the first option: the answer when the dialog goes away unanswered (R48), or null. */
+      public var firstFn:Function;
+
       /** True once showFn ran (only then does an answer count). */
       public var shown:Boolean = false;
 
@@ -46,8 +49,9 @@ package red.game.witcher3.menus.gwint
        * @param showFn Shows the choice locally.
        * @param applyFn Applies a choice.
        * @param autoFn The autoplay choice, or null.
+       * @param firstFn The first option, or null.
        */
-      public function DuelDecision(kind:String, asker:String, scope:int, showFn:Function, applyFn:Function, autoFn:Function)
+      public function DuelDecision(kind:String, asker:String, scope:int, showFn:Function, applyFn:Function, autoFn:Function, firstFn:Function = null)
       {
          super();
          this.kind = kind;
@@ -56,6 +60,7 @@ package red.game.witcher3.menus.gwint
          this.showFn = showFn;
          this.applyFn = applyFn;
          this.autoFn = autoFn;
+         this.firstFn = firstFn;
       }
 
       /**

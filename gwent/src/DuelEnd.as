@@ -3,16 +3,16 @@ package red.game.witcher3.menus.gwint
    /**
     * The end of one duel game (spec 9.8, rulings R43 and R13): the confirmation of the final state, then on a draw the
     * replay or the leave. Board-independent, so DuelSelfTest can run synthetic E, R and X messages through route() in
-    * any order; DuelSession sends, checks hashes, applies what route() accepts and runs the timers.
+    * any order; DuelSession sends, checks hashes and applies what route() accepts, and DuelWait limits its waits.
     *
     * When a game ends (GwintGameFlowController.state_begin_ShowingFinalResult, the board settled) each board sends E
     * with the winner as it sees it (seat A, B, or N for a draw) and the hash of its final state, then waits. Neither
     * seat settles until the opponent's E arrives with the same winner and the same hash as its own E: then the result is
-    * confirmed and the end screen opens. A Y in that wait, a mismatch, or no E within DuelSession.STUCK_WAIT_MS end the
-    * game as no contest, so a desync on the last message of a match pays neither side. Both seats compare the same two
-    * hashes (their own E and the opponent's E), so they always reach the same verdict.
+    * confirmed and the end screen opens. A Y in that wait, a mismatch, or no E within the stuck-wait limit (DuelWait)
+    * end the game as no contest, so a desync on the last message of a match pays neither side. Both seats compare the
+    * same two hashes (their own E and the opponent's E), so they always reach the same verdict.
     * A confirmed draw is replayed when both seats sent R (DuelSession then starts the next game); X (a player closed
-    * the end screen) or no R within the stuck-wait limit ends it as a draw that moves no money.
+    * the end screen) ends it as a draw that moves no money, no R within the stuck-wait limit as no contest.
     */
    public class DuelEnd
    {
@@ -53,14 +53,8 @@ package red.game.witcher3.menus.gwint
       /** The hash this board's E carried (its final state). */
       public var endHash:uint = 0;
 
-      /** When this board sent its E (getTimer ms). */
-      public var endAtMs:int = 0;
-
       /** This board sent R. */
       public var replaySent:Boolean = false;
-
-      /** When this board sent R (getTimer ms). */
-      public var replayAtMs:int = 0;
 
       /** The opponent's R was applied. */
       public var replayReceived:Boolean = false;
@@ -78,15 +72,13 @@ package red.game.witcher3.menus.gwint
        * @param winnerSeat "A", "B" or DRAW.
        * @param seq The seq of the E.
        * @param hash The hash the E carried.
-       * @param nowMs getTimer().
        */
-      public function reached(winnerSeat:String, seq:int, hash:uint, nowMs:int) : void
+      public function reached(winnerSeat:String, seq:int, hash:uint) : void
       {
          this.phase = CONFIRMING;
          this.winner = winnerSeat;
          this.endSeq = seq;
          this.endHash = hash;
-         this.endAtMs = nowMs;
       }
 
       /**
@@ -164,26 +156,6 @@ package red.game.witcher3.menus.gwint
             }
          }
          return null;
-      }
-
-      /**
-       * True when this board waited longer than limitMs for the opponent's E.
-       * @param nowMs getTimer().
-       * @param limitMs The stuck-wait limit.
-       */
-      public function confirmExpired(nowMs:int, limitMs:int) : Boolean
-      {
-         return this.phase == CONFIRMING && nowMs - this.endAtMs > limitMs;
-      }
-
-      /**
-       * True when this board sent R and waited longer than limitMs for the opponent's R.
-       * @param nowMs getTimer().
-       * @param limitMs The stuck-wait limit.
-       */
-      public function replayExpired(nowMs:int, limitMs:int) : Boolean
-      {
-         return this.replaySent && !this.replayReceived && nowMs - this.replayAtMs > limitMs;
       }
    }
 }

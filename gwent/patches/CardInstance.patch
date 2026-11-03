@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/CardInstance.as b/red/game/witcher3/menus/gwint/CardInstance.as
-index b1187d8..b2a2bd8 100644
+index b1187d8..f753f73 100644
 --- a/red/game/witcher3/menus/gwint/CardInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardInstance.as
 @@ -29,6 +29,14 @@ package red.game.witcher3.menus.gwint
@@ -105,7 +105,7 @@ index b1187d8..b2a2bd8 100644
           if(cardInstance)
           {
              cardInstance.recalculatePowerPotential(cardManagerRef);
-@@ -1542,11 +1605,149 @@ package red.game.witcher3.menus.gwint
+@@ -1542,11 +1605,155 @@ package red.game.witcher3.menus.gwint
           }
        }
        
@@ -118,7 +118,7 @@ index b1187d8..b2a2bd8 100644
 +      private function duelDecideNurse(targets:Vector.<CardInstance>) : void
 +      {
 +         this._duelNurseTargets = targets;
-+         DuelSession.active.decide("NUR",DuelSession.active.seatOf(this.listsPlayer),DuelSession.active.ids.toNet(this.instanceId),this.duelShowNurseChoice,this.duelApplyNurseChoice,this.duelAutoNurseChoice);
++         DuelSession.active.decide("NUR",DuelSession.active.seatOf(this.listsPlayer),DuelSession.active.ids.toNet(this.instanceId),this.duelShowNurseChoice,this.duelApplyNurseChoice,this.duelAutoNurseChoice,this.duelFirstNurseChoice);
 +      }
 +
 +      /** The vanilla medic dialog, answered through DuelSession.answer. */
@@ -146,6 +146,12 @@ index b1187d8..b2a2bd8 100644
 +         this._duelNurseTargets = null;
 +         this.handleNurseChoice(card.instanceId);
 +         return true;
++      }
++
++      /** The first medic target: the answer when the dialog goes away unanswered (R48). */
++      private function duelFirstNurseChoice() : String
++      {
++         return DuelSession.active.netName(this._duelNurseTargets[0].instanceId);
 +      }
 +
 +      /** Autoplay's medic pick: the vanilla AI's (getHigherOrLowerValueCardFromTargetGraveyard), else the first. */

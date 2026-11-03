@@ -16,6 +16,35 @@ function WO_GwentWindowLingerSeconds() : float
     return 30.0;
 }
 
+// How long after a duel starts its board must have opened; without one the client leaves the duel (R49). The same
+// limit as the board's own wait for the opponent's Hello (stuck-wait limit, spec 10).
+function WO_GwentBoardOpenSeconds() : float
+{
+    return 120.0;
+}
+
+// How long the opponent's packets may stop during a duel before the client takes it as gone (its game closed or it
+// lost its connection; r_MultiplayerClient.gwentOpponentSilent). Witcher Online drops a silent player after 5 s and
+// the server after about 6 s; the opponent's packets come about 60 times a second.
+function WO_GwentOpponentSilentSeconds() : float
+{
+    return 10.0;
+}
+
+// Real milliseconds since startMs (theGame.GetLocalTimeAsMilliseconds, which runs on while a menu pauses the game,
+// unlike engine time; it starts again from 0 at midnight).
+function WO_GwentMsSince(startMs : int) : int
+{
+    var elapsed : int;
+
+    elapsed = theGame.GetLocalTimeAsMilliseconds() - startMs;
+    if(elapsed < 0)
+    {
+        elapsed += 86400000;
+    }
+    return elapsed;
+}
+
 // ---- duel protocol marker and deck exchange (wo3 packet) ----
 
 // The Gwent duel protocol this build speaks. Clients only duel when both send the same value; raise it whenever the
@@ -420,7 +449,7 @@ event OnMultiplayerMessage(message : string)
     HandleOutgoingGwentAction(message);
 }
 
-// The board cancelled the duel as no contest (desync, Hello mismatch, opponent left, stuck wait).
+// The board cancelled the duel as no contest (desync, Hello mismatch, opponent_left, stuck_wait, hello_timeout).
 @addMethod(CR4GwintGameMenu)
 event OnMultiplayerAbort(reason : string)
 {
@@ -457,6 +486,17 @@ event OnDuelLog(line : string)
 
 // ---- script to board ----
 
+// Witcher Online lost the opponent during the duel (its game closed or it disconnected; r_MultiplayerClient.
+// gwentGameLoop): the board ends the duel as no contest (opponent_left) once what the opponent sent has applied.
+@addMethod(CR4GwintGameMenu)
+public function SetDuelOpponentLeft()
+{
+    if(IsDuel())
+    {
+        m_flashValueStorage.SetFlashBool("gwint.game.opponentLeft", true);
+    }
+}
+
 // The opponent's latest message window ("~"-joined tokens, "none" when empty).
 @addMethod(CR4GwintGameMenu)
 public function ReceiveRemoteGwentAction(message : string)
@@ -465,4 +505,46 @@ public function ReceiveRemoteGwentAction(message : string)
     {
         m_flashValueStorage.SetFlashString("gwint.game.remoteInput", message);
     }
+}
+
+// ---- the Scoia'tael popup (who goes first) in a duel ----
+
+// The popup was answered (go first or go second).
+@addField(W3ChooseGwintTurnPopup)
+var duelAnswered : bool;
+
+@wrapMethod(W3ChooseGwintTurnPopup)
+function OnUserAccept()
+{
+    duelAnswered = true;
+    wrappedMethod();
+}
+
+@wrapMethod(W3ChooseGwintTurnPopup)
+function OnUserDecline()
+{
+    duelAnswered = true;
+    wrappedMethod();
+}
+
+// R48: in a duel the popup closed without an answer counts as its first option, "go first" (the board would otherwise
+// wait for the choice forever, and the opponent with it). OnClosing belongs to W3PopupData, so the wrap is there.
+@wrapMethod(W3PopupData)
+function OnClosing()
+{
+    var turnPopup : W3ChooseGwintTurnPopup;
+    var client : r_MultiplayerClient;
+
+    turnPopup = (W3ChooseGwintTurnPopup)this;
+    if(turnPopup && !turnPopup.duelAnswered && turnPopup.gwintMenuRef && turnPopup.gwintMenuRef.IsDuel())
+    {
+        turnPopup.duelAnswered = true;
+        client = theGame.r_getMultiplayerClient();
+        if(client)
+        {
+            client.duelLog("DUEL COIN popup closed unanswered: go first");
+        }
+        turnPopup.gwintMenuRef.SetPlayerStarts(true);
+    }
+    wrappedMethod();
 }

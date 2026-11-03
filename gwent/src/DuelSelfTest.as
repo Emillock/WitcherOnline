@@ -7,8 +7,9 @@ package red.game.witcher3.menus.gwint
     * In-game self-test of the board-independent duel classes: replays every vector of DuelVectors (generated
     * from the Python reference) through DuelRandom, DuelHash, DuelCodec and DuelWindow, plus hand-written checks
     * of DuelIds, the window cap, the error paths, and the routing of synthetic D and M messages (DuelDecision.route,
-    * DuelMulligan.route), the order of deferred effects and the double scorch guard (DuelDeferred), and the end of a
-    * game (DuelEnd.route: confirmation, replay, leave and the stuck-wait timers). Runs only when
+    * DuelMulligan.route), the order of deferred effects and the double scorch guard (DuelDeferred), the end of a
+    * game (DuelEnd.route: confirmation, replay, leave), and the stuck-wait rule and the opponent leaving (DuelWait:
+    * every wait kind, its limit, what resets it, the marked Y). Runs only when
     * the script sets gwint.game.debug.selfTest (the w3test bot does, a normal player never), and reports
     * "DUEL SELFTEST pass=n fail=m" and one "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
     */
@@ -54,6 +55,7 @@ package red.game.witcher3.menus.gwint
          test.guard("decisions",test.checkDecisions);
          test.guard("deferred",test.checkDeferred);
          test.guard("end",test.checkEnd);
+         test.guard("wait",test.checkWait);
          _checks = test._count;
          return test._failures;
       }
@@ -322,9 +324,9 @@ package red.game.witcher3.menus.gwint
       /**
        * The end of a game (spec 9.8, R43, DuelEnd) on synthetic E, R and X: the opponent's E waits until this board sent
        * its own, then confirms only with the same winner; nothing is settled before that (a Y in the wait goes to the
-       * desync path, a move after the end is a desync, and no E within the limit expires); R and X count only after a
-       * confirmed draw, one R each; the replay wait expires without the opponent's R; after a replay the opponent's
-       * late X or QUITGAME of the game before is found at the new game's first seq (DuelEnd.lateLeave), nothing else.
+       * desync path, a move after the end is a desync; the waits themselves are DuelWait's, checkWait); R and X count
+       * only after a confirmed draw, one R each; after a replay the opponent's late X or QUITGAME of the game before is
+       * found at the new game's first seq (DuelEnd.lateLeave), nothing else.
        */
       private function checkEnd() : void
       {
@@ -335,35 +337,24 @@ package red.game.witcher3.menus.gwint
          var won:DuelEnd = new DuelEnd();
          this.expect(won.route(endA) == DuelEnd.WAIT && !won.over,"end: the opponent's E waits until this board ends the game");
          this.expect(isDesync(won.route(replay)) && isDesync(won.route(leave)),"end: R and X during the game are desyncs");
-         won.reached("A",29,7,1000);
+         won.reached("A",29,7);
          this.expect(won.over && won.phase == DuelEnd.CONFIRMING,"end: after its own E this board waits for the opponent's");
          this.expect(isDesync(won.route(move)),"end: a move after the end is a desync");
          this.expect(isDesync(won.route(new DuelMessage(1,"0g0",30,DuelSession.END,["B"],7))),"end: an E with another winner is a desync");
          this.expect(isDesync(won.route(new DuelMessage(1,"0g0",30,DuelSession.END,[],7))),"end: an E without a winner is a desync");
          this.expect(isDesync(won.route(replay)),"end: R before the result is confirmed is a desync");
-         this.expect(!won.confirmExpired(1000 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: the wait for E lasts the stuck-wait limit");
-         this.expect(won.confirmExpired(1001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: no E within the stuck-wait limit expires");
          this.expect(won.route(endA) == DuelEnd.CONFIRM,"end: the opponent's E with the same winner confirms");
          won.confirm();
-         this.expect(!won.confirmExpired(1001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: a confirmed result no longer expires");
          this.expect(isDesync(won.route(endA)),"end: a second E is a desync");
          this.expect(isDesync(won.route(replay)) && isDesync(won.route(leave)),"end: R and X after a confirmed win are desyncs");
          var draw:DuelEnd = new DuelEnd();
-         draw.reached(DuelEnd.DRAW,29,7,1000);
+         draw.reached(DuelEnd.DRAW,29,7);
          this.expect(draw.route(new DuelMessage(1,"0g0",30,DuelSession.END,[DuelEnd.DRAW],7)) == DuelEnd.CONFIRM,"end: a draw confirms with the opponent's draw");
          draw.confirm();
          this.expect(draw.isDraw && draw.route(replay) == DuelEnd.REPLAY && draw.route(leave) == DuelEnd.LEAVE,"end: after a confirmed draw R replays and X leaves");
          this.expect(isDesync(draw.route(new DuelMessage(1,"0g0",31,DuelSession.REPLAY,["1"],7))),"end: R with arguments is a desync");
          draw.replayReceived = true;
          this.expect(isDesync(draw.route(replay)),"end: a second R is a desync");
-         var waiting:DuelEnd = new DuelEnd();
-         waiting.reached(DuelEnd.DRAW,29,7,1000);
-         waiting.confirm();
-         waiting.replaySent = true;
-         waiting.replayAtMs = 5000;
-         this.expect(!waiting.replayExpired(5000 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS) && waiting.replayExpired(5001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: no R within the stuck-wait limit after this board's R expires");
-         waiting.replayReceived = true;
-         this.expect(!waiting.replayExpired(5001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: the replay wait ends with the opponent's R");
          var oldR:String = "1.1g0.16.R._.00000007";
          var quit:DuelMessage = DuelEnd.lateLeave([oldR,"1.1g0.17.QUITGAME.1.00000009","1.1g1.18.M._.00000001"].join("~"),"1g0",17);
          this.expect(quit != null && quit.type == DuelCodec.SURRENDER && quit.args[0] == "1","end: a QUITGAME after the opponent's R of the game before is taken at the new game's first seq");
@@ -371,6 +362,64 @@ package red.game.witcher3.menus.gwint
          this.expect(left != null && left.type == DuelSession.LEAVE,"end: an X after the opponent's R of the game before is taken at the new game's first seq");
          this.expect(DuelEnd.lateLeave("1.1g0.17.X._.00000007","1g0",18) == null && DuelEnd.lateLeave("1.1g1.17.X._.00000007","1g0",17) == null,"end: a late X of another seq or match is not taken");
          this.expect(DuelEnd.lateLeave("1.1g0.17.S._.00000007~none","1g0",17) == null && DuelEnd.lateLeave(null,"1g0",17) == null,"end: only X and QUITGAME are taken late");
+      }
+
+      /**
+       * The stuck-wait rule (spec 10, R47, DuelWait) on synthetic board states and times: the limit of each mode; what
+       * the board waits for in each state (the Hello whatever the window holds, nothing while the opponent's next
+       * message is already there, else E, R, a decision, the mulligan, a move); every kind of wait ends only after its
+       * limit; a message applied, another kind of wait or a moment without one starts it over, so a message arriving
+       * resets it; the Y of an expired wait carries its reason to the opponent; the opponent leaving ends the game
+       * once nothing it sent is left to apply (or after LEFT_DRAIN_MS), never a confirmed win or loss.
+       */
+      private function checkWait() : void
+      {
+         var normal:int = DuelWait.limitFor(false);
+         var timed:int = DuelWait.limitFor(true);
+         this.expect(normal == 120000,"wait: 120 s in Normal mode");
+         this.expect(timed == DuelWait.TURN_MS + 30000 && DuelWait.TURN_MS == 60000,"wait: turn time + 30 s in Timed mode");
+         this.expect(DuelWait.kindOf(false,false,DuelEnd.PLAYING,false,false,false,false) == DuelWait.HELLO,"wait: the Hello until both agreed");
+         this.expect(DuelWait.kindOf(false,true,DuelEnd.PLAYING,false,false,false,false) == DuelWait.HELLO,"wait: the Hello also with a message in the window");
+         this.expect(DuelWait.kindOf(true,true,DuelEnd.CONFIRMING,true,true,true,true) == DuelWait.NONE,"wait: nothing while the opponent's next message is there");
+         this.expect(DuelWait.kindOf(true,false,DuelEnd.CONFIRMING,false,false,false,true) == DuelWait.END,"wait: the opponent's E after this board's");
+         this.expect(DuelWait.kindOf(true,false,DuelEnd.CONFIRMED,true,false,false,false) == DuelWait.REPLAY,"wait: the opponent's R after this board's");
+         this.expect(DuelWait.kindOf(true,false,DuelEnd.CONFIRMED,false,false,false,false) == DuelWait.NONE,"wait: nothing while the end screen waits for the local player");
+         this.expect(DuelWait.kindOf(true,false,DuelEnd.PLAYING,false,true,false,false) == DuelWait.DECISION,"wait: an opponent decision");
+         this.expect(DuelWait.kindOf(true,false,DuelEnd.PLAYING,false,false,true,false) == DuelWait.MULLIGAN,"wait: the opponent's mulligan");
+         this.expect(DuelWait.kindOf(true,false,DuelEnd.PLAYING,false,false,false,true) == DuelWait.MOVE,"wait: the opponent's move");
+         this.expect(DuelWait.kindOf(true,false,DuelEnd.PLAYING,false,false,false,false) == DuelWait.NONE,"wait: nothing on the local turn");
+         var kinds:Array = [DuelWait.HELLO,DuelWait.MOVE,DuelWait.DECISION,DuelWait.MULLIGAN,DuelWait.END,DuelWait.REPLAY];
+         for(var k:int = 0; k < kinds.length; k++)
+         {
+            for(var mode:int = 0; mode < 2; mode++)
+            {
+               var limit:int = mode == 0 ? normal : timed;
+               var wait:DuelWait = new DuelWait();
+               var early:Boolean = wait.tick(kinds[k],7,1000,limit) || wait.tick(kinds[k],7,1000 + limit,limit);
+               this.expect(!early && wait.tick(kinds[k],7,1001 + limit,limit),"wait: " + kinds[k] + " ends after its limit (" + limit + " ms)");
+            }
+         }
+         var none:DuelWait = new DuelWait();
+         this.expect(!none.tick(DuelWait.NONE,7,1000,normal) && !none.tick(DuelWait.NONE,7,1000 + 10 * normal,normal),"wait: no wait never ends");
+         var reset:DuelWait = new DuelWait();
+         reset.tick(DuelWait.MOVE,7,1000,normal);
+         this.expect(!reset.tick(DuelWait.MOVE,8,1000 + normal,normal) && !reset.tick(DuelWait.MOVE,8,1001 + normal,normal),"wait: a message applied starts the wait over");
+         this.expect(reset.tick(DuelWait.MOVE,8,1001 + 2 * normal,normal),"wait: after the message the next wait has the whole limit");
+         var gap:DuelWait = new DuelWait();
+         gap.tick(DuelWait.MULLIGAN,7,1000,normal);
+         gap.tick(DuelWait.NONE,7,2000,normal);
+         this.expect(!gap.tick(DuelWait.MULLIGAN,7,1001 + normal,normal),"wait: a message arriving (nothing to wait for) starts the wait over");
+         var other:DuelWait = new DuelWait();
+         other.tick(DuelWait.DECISION,7,1000,normal);
+         this.expect(!other.tick(DuelWait.MOVE,7,1001 + normal,normal) && other.kind == DuelWait.MOVE,"wait: another kind of wait starts over");
+         this.expect(DuelWait.reasonOfY(["0badf00d","0",DuelWait.MARK_STUCK]) == "stuck_wait","wait: a stuck Y ends the opponent with stuck_wait");
+         this.expect(DuelWait.reasonOfY(["0badf00d","0",DuelWait.MARK_HELLO]) == "hello_timeout","wait: a Hello Y ends the opponent with hello_timeout");
+         this.expect(DuelWait.reasonOfY(["0badf00d","12"]) == "" && DuelWait.reasonOfY(["0badf00d","0","x"]) == "","wait: any other Y is a desync");
+         this.expect(DuelWait.leftEnds(1000,1000,false,false),"left: ends at once when nothing waits in the window");
+         this.expect(!DuelWait.leftEnds(1000,1000 + DuelWait.LEFT_DRAIN_MS,true,false) && DuelWait.leftEnds(1000,1001 + DuelWait.LEFT_DRAIN_MS,true,false),"left: what the opponent sent applies first, for a while");
+         this.expect(!DuelWait.leftEnds(1000,1000 + 10 * normal,false,true),"left: a confirmed win or loss stands");
+         var stuckY:DuelMessage = DuelCodec.decode("1.1g0.9.Y.0badf00d,0,stuck.0badf00d");
+         this.expect(stuckY != null && DuelWait.reasonOfY(stuckY.args) == "stuck_wait","wait: the marked Y goes through the codec");
       }
 
       /**

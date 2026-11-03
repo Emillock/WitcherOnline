@@ -78,7 +78,8 @@ def test_every_desync_sends_y() -> None:
     """R29: gap, non-H before Hello, malformed Hello, unsupported messages and moves end through desync (Y)."""
     text = (SRC / "DuelSession.as").read_text(encoding="utf-8")
     aborts = re.findall(r'this\.abort\("(\w+)"', text)
-    assert sorted(set(aborts)) == ["decks", "desync", "end_timeout", "hello_timeout", "quit", "templates", "version"]
+    assert sorted(set(aborts)) == ["decks", "desync", "hello_timeout", "opponent_left", "quit", "stuck_wait",
+                                   "templates", "version"]
     assert aborts.count("desync") == 1
     assert 'abort("desync",DESYNC_TEXT)' in function_body(text, "function endDesync(")
     assert '"gap")' in function_body(text, "public function update(")
