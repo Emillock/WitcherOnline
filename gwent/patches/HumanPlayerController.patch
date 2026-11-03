@@ -1,0 +1,137 @@
+diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
+index bea2665..cbe7373 100644
+--- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
++++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
+@@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
+    import flash.events.Event;
+    import flash.events.GestureEvent;
+    import flash.events.MouseEvent;
++   import flash.utils.getTimer;
+    import red.core.constants.KeyCode;
+    import red.core.events.GestureEventEx;
+    import red.game.witcher3.constants.GwintInputFeedback;
+@@ -32,6 +33,10 @@ package red.game.witcher3.menus.gwint
+       
+       protected var _cardConfirmation:Boolean;
+       
++      private var _duelAutoAI:AIPlayerController;
++      
++      private var _duelAutoTurnMs:int = -1;
++      
+       public function HumanPlayerController()
+       {
+          super();
+@@ -96,13 +101,75 @@ package red.game.witcher3.menus.gwint
+          {
+             currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
+          }
++         else if(DuelSession.active != null && DuelSession.ALWAYS_PASS)
++         {
++            super.startTurn();
++            DuelSession.active.send("S",[],DuelStateHash.SCOPE_FULL);
++            currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
++            _turnOver = true;
++         }
+          else
+          {
+             super.startTurn();
++            this._duelAutoTurnMs = -1;
+             _stateMachine.ChangeState("ChoosingCard");
+          }
+       }
+       
++      /**
++       * Every local move goes through here (the three commit points of spec 5 and duel autoplay): the transaction is
++       * applied by the vanilla ApplyingCard state.
++       * @param transaction The decided move.
++       */
++      protected function commitTransaction(transaction:CardTransaction) : void
++      {
++         _decidedCardTransaction = transaction;
++         _stateMachine.ChangeState("ApplyingCard");
++      }
++      
++      /**
++       * Duel autoplay (gwint.game.debug.autoplay, test bots): on the local turn, after a short pause, plays the move
++       * the vanilla AI evaluation picks for PLAYER_1 through commitTransaction, or passes. The leader is left to a
++       * player for now (its choice dialogs are synced in Task 12), so a leader pick passes instead.
++       * @return True while autoplay handles the turn (ChoosingCard then does nothing else this update).
++       */
++      private function duelAutoplayTick() : Boolean
++      {
++         var move:CardTransaction = null;
++         if(DuelSession.active == null || !GwintGameMenu.mSingleton.duelDebugAutoplay || _transactionCard != null || this._currentZoomedHolder != null || this.mcChoiceDialog.isShown())
++         {
++            return false;
++         }
++         if(this._duelAutoTurnMs < 0)
++         {
++            this._duelAutoTurnMs = getTimer();
++            return true;
++         }
++         if(getTimer() - this._duelAutoTurnMs < DuelSession.AUTOPLAY_DELAY_MS)
++         {
++            return true;
++         }
++         this._duelAutoTurnMs = -1;
++         if(this._duelAutoAI == null)
++         {
++            this._duelAutoAI = new AIPlayerController();
++            this._duelAutoAI.gameFlowControllerRef = gameFlowControllerRef;
++            this._duelAutoAI.playerID = playerID;
++            this._duelAutoAI.opponentID = opponentID;
++         }
++         move = this._duelAutoAI.duelSuggestMove();
++         if(move == null || move.sourceCardInstanceRef == null || move.sourceCardInstanceRef is CardLeaderInstance)
++         {
++            DuelSession.active.log("DUEL AUTOPLAY pass");
++            this.skipTurn();
++            return true;
++         }
++         DuelSession.active.log("DUEL AUTOPLAY play " + DuelIds.format(DuelSession.active.ids.toNet(move.sourceCardInstanceRef.instanceId)) + " slot=" + move.targetSlotID);
++         startCardTransaction(move.sourceCardInstanceRef.instanceId);
++         this.commitTransaction(move);
++         return true;
++      }
++      
+       override public function skipTurn() : void
+       {
+          if(_stateMachine.currentState == "ChoosingCard" && this._currentZoomedHolder == null)
+@@ -208,6 +275,10 @@ package red.game.witcher3.menus.gwint
+          var isCardEffect:Boolean = false;
+          var isGlobalEffect:Boolean = false;
+          this.on_state_about_to_update();
++         if(this.duelAutoplayTick())
++         {
++            return;
++         }
+          if(_transactionCard)
+          {
+             cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
+@@ -313,7 +384,7 @@ package red.game.witcher3.menus.gwint
+             _decidedCardTransaction = new CardTransaction();
+             _decidedCardTransaction.targetPlayerID = playerID;
+             _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
+-            _stateMachine.ChangeState("ApplyingCard");
++            this.commitTransaction(_decidedCardTransaction);
+          }
+       }
+       
+@@ -450,7 +521,7 @@ package red.game.witcher3.menus.gwint
+                      _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
+                      _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
+                      _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
+-                     _stateMachine.ChangeState("ApplyingCard");
++                     this.commitTransaction(_decidedCardTransaction);
+                   }
+             }
+          }
+@@ -468,7 +539,7 @@ package red.game.witcher3.menus.gwint
+             _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
+             _decidedCardTransaction.targetCardInstanceRef = null;
+             _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
+-            _stateMachine.ChangeState("ApplyingCard");
++            this.commitTransaction(_decidedCardTransaction);
+          }
+       }
+       

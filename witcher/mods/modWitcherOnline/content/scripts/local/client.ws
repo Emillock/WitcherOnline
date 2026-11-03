@@ -1841,9 +1841,11 @@ statemachine class r_MultiplayerClient
         var action : string;
         var menu : CR4GwintGameMenu;
 
-        // the window waits until the board is up (a message sent while the menu opens is not lost)
+        // the window waits until the board is up and knows it is in a duel (OnConfigUI ran): a window handed over
+        // earlier would be dropped (ReceiveRemoteGwentAction ignores it) and its counter change lost, so the first
+        // message (the opponent's Hello) would never reach the board
         menu = (CR4GwintGameMenu)theGame.GetGuiManager().GetRootMenu();
-        if(!menu)
+        if(!menu || !menu.IsDuel())
         {
             return;
         }

@@ -1,0 +1,157 @@
+diff --git a/red/game/witcher3/menus/gwint/GwintGameFlowController.as b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
+index 9ffd03a..69547b7 100644
+--- a/red/game/witcher3/menus/gwint/GwintGameFlowController.as
++++ b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
+@@ -1,6 +1,8 @@
+ package red.game.witcher3.menus.gwint
+ {
+    import flash.events.Event;
++   import flash.events.TimerEvent;
++   import flash.utils.Timer;
+    import red.core.constants.KeyCode;
+    import red.game.witcher3.constants.GwintInputFeedback;
+    import red.game.witcher3.controls.InputFeedbackButton;
+@@ -64,6 +66,11 @@ package red.game.witcher3.menus.gwint
+       
+       protected var sawEndGameTutorial:Boolean = false;
+       
++      /** Duel: the local player index that won the game shown on the end screen (PLAYER_INVALID for a draw). */
++      public var duelGameWinner:int = -1;
++      
++      private var _duelTimer:Timer;
++      
+       public function GwintGameFlowController()
+       {
+          var newController:BasePlayerController = null;
+@@ -109,6 +116,10 @@ package red.game.witcher3.menus.gwint
+       
+       protected function shouldDisallowStateChangeFunc() : Boolean
+       {
++         if(DuelSession.active != null && DuelSession.active.ended)
++         {
++            return true;
++         }
+          if(Boolean(this.mcTutorials) && Boolean(this.mcTutorials.visible) && !this.mcTutorials.isPaused)
+          {
+             return true;
+@@ -116,6 +127,69 @@ package red.game.witcher3.menus.gwint
+          return this.mcMessageQueue.ShowingMessage() || CardFXManager.getInstance().isPlayingAnyCardFX() || this.mcChoiceDialog.isShown() || CardTweenManager.getInstance().isAnyCardMoving();
+       }
+       
++      /**
++       * Duel setup (spec 9.1), called by GwintGameMenu while the flow is still in Initializing: PLAYER_1 is the local
++       * human (never the AI), PLAYER_2 a NetOpponentController, and DuelSession.update runs every 20 ms.
++       */
++      public function installDuelControllers() : void
++      {
++         var human:HumanPlayerController = null;
++         var opponent:NetOpponentController = null;
++         if(!(this.playerControllers[CardManager.PLAYER_1] is HumanPlayerController))
++         {
++            human = new HumanPlayerController();
++            human.gameFlowControllerRef = this;
++            human.playerID = CardManager.PLAYER_1;
++            human.opponentID = CardManager.PLAYER_2;
++            human.skipButton = this._skipButton;
++            this.playerControllers[CardManager.PLAYER_1] = human;
++         }
++         opponent = new NetOpponentController();
++         opponent.gameFlowControllerRef = this;
++         opponent.playerID = CardManager.PLAYER_2;
++         opponent.opponentID = CardManager.PLAYER_1;
++         this.playerControllers[CardManager.PLAYER_2] = opponent;
++         if(this._duelTimer == null)
++         {
++            this._duelTimer = new Timer(20,0);
++            this._duelTimer.addEventListener(TimerEvent.TIMER,this.onDuelTick,false,0,true);
++            this._duelTimer.start();
++         }
++      }
++      
++      private function onDuelTick(event:TimerEvent) : void
++      {
++         if(DuelSession.active != null)
++         {
++            DuelSession.active.update();
++         }
++      }
++      
++      /**
++       * Whether the local player finished the mulligan (duel autoplay waits for the dialog).
++       */
++      public function get duelMulliganDecided() : Boolean
++      {
++         return this._mulliganDecided;
++      }
++      
++      /**
++       * Duel autoplay (test bots): answers the mulligan dialog as a player would.
++       * @param redraw True redraws one card (twice in all, then the dialog closes by itself), false declines.
++       */
++      public function duelAutoMulligan(redraw:Boolean) : void
++      {
++         var hand:Vector.<CardInstance> = this.cardManager.getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,CardManager.PLAYER_1);
++         if(redraw && this._mulliganCardsCount < 2 && hand.length > 0)
++         {
++            this.handleAcceptMulligan(hand[0].instanceId);
++         }
++         else
++         {
++            this.handleDeclineMulligan();
++         }
++      }
++      
+       public function turnOnAI(playerIndex:int) : void
+       {
+          var newController:BasePlayerController = null;
+@@ -154,7 +228,7 @@ package red.game.witcher3.menus.gwint
+       
+       protected function state_update_Initializing() : void
+       {
+-         if(Boolean(CardManager.getInstance()) && Boolean(CardManager.getInstance().cardTemplatesReceived) && CardFXManager.getInstance() != null)
++         if(Boolean(CardManager.getInstance()) && Boolean(CardManager.getInstance().cardTemplatesReceived) && CardFXManager.getInstance() != null && (DuelSession.active == null || DuelSession.active.helloDone))
+          {
+             this.stateMachine.ChangeState("Tutorials");
+          }
+@@ -293,6 +367,10 @@ package red.game.witcher3.menus.gwint
+             {
+                this.currentPlayer = CardManager.PLAYER_1;
+             }
++            else if(DuelSession.active != null)
++            {
++               this.currentPlayer = DuelSession.active.playerOf(DuelSession.active.random.nextInt(DuelRandom.STREAM_SHARED,2));
++            }
+             else
+             {
+                this.currentPlayer = Math.floor(Math.random() * 2);
+@@ -422,6 +500,10 @@ package red.game.witcher3.menus.gwint
+             }
+             if(this.shouldDisallowStateChangeFunc() == false)
+             {
++               if(DuelSession.active != null)
++               {
++                  DuelSession.active.logRound(this.currentRound + 1);
++               }
+                this.playerControllers[CardManager.PLAYER_1].resetCurrentRoundStatus();
+                this.playerControllers[CardManager.PLAYER_2].resetCurrentRoundStatus();
+                if(this.playerControllers[this.currentPlayer].currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE)
+@@ -836,6 +918,7 @@ package red.game.witcher3.menus.gwint
+          {
+             GwintGameMenu.mSingleton.playSound("gui_gwint_battle_draw");
+          }
++         this.duelGameWinner = gameWinner;
+          this.mcEndGameDialog.show(gameWinner,this.OnEndGameResult);
+       }
+       
+@@ -845,6 +928,11 @@ package red.game.witcher3.menus.gwint
+       
+       protected function OnEndGameResult(result:int) : void
+       {
++         if(DuelSession.active != null)
++         {
++            DuelSession.active.finishGame(this.duelGameWinner);
++            return;
++         }
+          if(result == GwintEndGameDialog.EndGameDialogResult_Restart)
+          {
+             this.stateMachine.ChangeState("Reset");

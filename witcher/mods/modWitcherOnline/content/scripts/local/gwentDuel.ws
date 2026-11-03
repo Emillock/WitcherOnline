@@ -146,6 +146,10 @@ var duelSelfTest : bool;
 @addField(CR4GwintManager)
 var duelDebugAutoplay : bool;
 
+// Autoplay redraws at the mulligan instead of declining.
+@addField(CR4GwintManager)
+var duelDebugMulligan : bool;
+
 // The outbound sequence number the board corrupts (0: off).
 @addField(CR4GwintManager)
 var duelDebugCorruptAt : int;
@@ -239,6 +243,7 @@ function OnConfigUI()
     wrappedMethod();
 
     m_flashValueStorage.SetFlashBool("gwint.game.debug.autoplay", manager.duelDebugAutoplay);
+    m_flashValueStorage.SetFlashBool("gwint.game.debug.mulligan", manager.duelDebugMulligan);
     m_flashValueStorage.SetFlashInt("gwint.game.debug.corruptAt", manager.duelDebugCorruptAt);
     m_flashValueStorage.SetFlashBool("gwint.game.debug.forceDraw", manager.duelDebugForceDraw);
     m_flashValueStorage.SetFlashBool("gwint.game.debug.breakTemplates", manager.duelDebugBreakTemplates);
