@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/CardInstance.as b/red/game/witcher3/menus/gwint/CardInstance.as
-index b1187d8..5d17f10 100644
+index b1187d8..b2a2bd8 100644
 --- a/red/game/witcher3/menus/gwint/CardInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardInstance.as
 @@ -29,6 +29,14 @@ package red.game.witcher3.menus.gwint
@@ -65,7 +65,7 @@ index b1187d8..5d17f10 100644
                 }
                 else if(gameFlowRef.playerControllers[this.listsPlayer] is AIPlayerController)
                 {
-@@ -1498,9 +1538,23 @@ package red.game.witcher3.menus.gwint
+@@ -1498,9 +1538,27 @@ package red.game.witcher3.menus.gwint
        
        protected function morphFXEnded(cardInstance:CardInstance) : void
        {
@@ -79,17 +79,21 @@ index b1187d8..5d17f10 100644
        
 +      /**
 +       * Duel (spec 7.4): the effects of this card at the end of its morph FX (several berserkers morph at once under a
-+       * mushroom), run by DuelSession in canonical order.
++       * mushroom), run by DuelSession in canonical order. Skipped if the card has left the rows meanwhile
++       * (DuelDeferred.stillOnBoard).
 +       */
 +      private function duelRunMorphEffects() : void
 +      {
-+         this.updateEffectsApplied(this);
++         if(DuelDeferred.stillOnBoard(this.inList,CardManager.getInstance().getCardInstance(this.instanceId) == this))
++         {
++            this.updateEffectsApplied(this);
++         }
 +      }
 +      
        protected function handleNurseChoice(instanceId:int) : void
        {
           var targetSlot:CardSlot = null;
-@@ -1535,6 +1589,11 @@ package red.game.witcher3.menus.gwint
+@@ -1535,6 +1593,11 @@ package red.game.witcher3.menus.gwint
        protected function onNurseEffectEnded(cardInstance:CardInstance = null) : void
        {
           var cardManagerRef:CardManager = CardManager.getInstance();
@@ -101,7 +105,7 @@ index b1187d8..5d17f10 100644
           if(cardInstance)
           {
              cardInstance.recalculatePowerPotential(cardManagerRef);
-@@ -1542,11 +1601,143 @@ package red.game.witcher3.menus.gwint
+@@ -1542,11 +1605,149 @@ package red.game.witcher3.menus.gwint
           }
        }
        
@@ -235,11 +239,17 @@ index b1187d8..5d17f10 100644
        
 +      /**
 +       * Duel (spec 7.4): this card goes to the graveyard at the end of its scorch FX, run by DuelSession in canonical
-+       * order (a scorch burns several cards at once; the graveyards are ordered lists).
++       * order (a scorch burns several cards at once; the graveyards are ordered lists). Skipped if the card has left
++       * the rows meanwhile: two scorches landing together target the same cards, and only the first graveyard move
++       * counts. This differs on purpose from vanilla, which moves such a card twice and throws on a second banish
++       * (DuelDeferred.stillOnBoard).
 +       */
 +      private function duelRunScorched() : void
 +      {
-+         CardManager.getInstance().sendToGraveyard(this);
++         if(DuelDeferred.stillOnBoard(this.inList,CardManager.getInstance().getCardInstance(this.instanceId) == this))
++         {
++            CardManager.getInstance().sendToGraveyard(this);
++         }
 +      }
 +      
        protected function powerChangeSorter(element1:CardInstance, element2:CardInstance) : Number

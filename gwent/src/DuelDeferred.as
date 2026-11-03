@@ -78,6 +78,21 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * Whether a deferred FX-end effect (scorch, morph) still applies to its card: the card still exists and is on a
+       * unit row. Two scorchers that land together (both seats' pirates from the Skellige round 3 perk) target the same
+       * cards twice; the second graveyard move must skip a card the first one already took. This differs from vanilla
+       * on purpose: vanilla sends such a card to the graveyard twice (reordering the graveyard, a scorched cow spawning
+       * two Chorts) and throws on a second banish, which would stall both boards inside the queue.
+       * @param listId The card's current list (CardManager.CARD_LIST_LOC_*).
+       * @param exists Whether CardManager still knows the card instance.
+       * @return True if the effect runs.
+       */
+      public static function stillOnBoard(listId:int, exists:Boolean) : Boolean
+      {
+         return exists && (listId == CardManager.CARD_LIST_LOC_SEIGE || listId == CardManager.CARD_LIST_LOC_RANGED || listId == CardManager.CARD_LIST_LOC_MELEE);
+      }
+
+      /**
        * Drops every queued effect (the game ended: nothing may carry over into the next one).
        */
       public function clear() : void

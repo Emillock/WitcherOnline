@@ -7,8 +7,8 @@ package red.game.witcher3.menus.gwint
     * In-game self-test of the board-independent duel classes: replays every vector of DuelVectors (generated
     * from the Python reference) through DuelRandom, DuelHash, DuelCodec and DuelWindow, plus hand-written checks
     * of DuelIds, the window cap, the error paths, and the routing of synthetic D and M messages (DuelDecision.route,
-    * DuelMulligan.route) and the order of deferred effects (DuelDeferred). Runs only when the script sets gwint.game.debug.selfTest
-    * (the w3test bot does, a normal player never), and reports "DUEL SELFTEST pass=n fail=m" and one
+    * DuelMulligan.route), the order of deferred effects and the double scorch guard (DuelDeferred). Runs only when
+    * the script sets gwint.game.debug.selfTest (the w3test bot does, a normal player never), and reports "DUEL SELFTEST pass=n fail=m" and one
     * "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
     */
    public class DuelSelfTest
@@ -357,6 +357,77 @@ package red.game.witcher3.menus.gwint
          queue.add(DuelIds.SEAT_A,4,new Object(),recorder(ran,"A4"));
          queue.clear();
          this.expect(!queue.pending && queue.takeNext() == null,"deferred: clear drops every queued effect");
+         this.checkDoubleScorch();
+      }
+
+      /**
+       * The double scorch guard (DuelDeferred.stillOnBoard): two scorches that land together queue a graveyard move
+       * for the same three cards twice (one of them is banished instead, as a summoned card is). Every move runs
+       * without error and each card leaves its row exactly once; a second move of a card would throw here, as the
+       * second banish does in vanilla.
+       */
+      private function checkDoubleScorch() : void
+      {
+         var queue:DuelDeferred = new DuelDeferred();
+         var targets:Array = [{"list":CardManager.CARD_LIST_LOC_MELEE,"exists":true,"banish":false,"moves":0},{"list":CardManager.CARD_LIST_LOC_RANGED,"exists":true,"banish":true,"moves":0},{"list":CardManager.CARD_LIST_LOC_SEIGE,"exists":true,"banish":false,"moves":0}];
+         var scorch:int;
+         var i:int;
+         var threw:Boolean = false;
+         for(scorch = 0; scorch < 2; scorch++)
+         {
+            for(i = 0; i < targets.length; i++)
+            {
+               queue.add(DuelIds.SEAT_A,i + 1,targets[i],scorchMove(targets[i]));
+            }
+         }
+         try
+         {
+            while(queue.pending)
+            {
+               queue.takeNext().run();
+            }
+         }
+         catch(error:Error)
+         {
+            threw = true;
+         }
+         var once:Boolean = true;
+         for(i = 0; i < targets.length; i++)
+         {
+            once = once && targets[i].moves == 1;
+         }
+         this.expect(!threw && once,"deferred: a double scorch moves each card once without error");
+         this.expect(DuelDeferred.stillOnBoard(CardManager.CARD_LIST_LOC_MELEE,true) && DuelDeferred.stillOnBoard(CardManager.CARD_LIST_LOC_RANGED,true) && DuelDeferred.stillOnBoard(CardManager.CARD_LIST_LOC_SEIGE,true),"deferred: a card on a unit row is still on the board");
+         this.expect(!DuelDeferred.stillOnBoard(CardManager.CARD_LIST_LOC_GRAVEYARD,true) && !DuelDeferred.stillOnBoard(CardManager.CARD_LIST_LOC_HAND,true) && !DuelDeferred.stillOnBoard(CardManager.CARD_LIST_LOC_MELEE,false),"deferred: a card in a graveyard, a hand or deleted is not");
+      }
+
+      /**
+       * A deferred scorch end for a synthetic target, guarded as CardInstance.duelRunScorched is: it sends the target
+       * to the graveyard (or banishes it) and throws if the target already left its row.
+       */
+      private static function scorchMove(target:Object) : Function
+      {
+         return function():void
+         {
+            if(!DuelDeferred.stillOnBoard(target.list,target.exists))
+            {
+               return;
+            }
+            if(target.moves > 0)
+            {
+               throw new Error("moved twice");
+            }
+            target.moves++;
+            if(target.banish)
+            {
+               target.exists = false;
+               target.list = CardManager.CARD_LIST_LOC_INVALID;
+            }
+            else
+            {
+               target.list = CardManager.CARD_LIST_LOC_GRAVEYARD;
+            }
+         };
       }
 
       /** An effect that records its name in ran when it runs. */

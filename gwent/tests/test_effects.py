@@ -128,7 +128,7 @@ def test_round_start_perks_run_in_seat_order(board: Path) -> None:
     # one callback runs every perk at the same logical point (the player may skip messages)
     assert push.count("duelPushPerk(") == 2
     perk = function_body(flow, "private function duelPushPerk(")
-    assert "this._duelPerkPlayers.length == 0 ? this.duelRunRoundStartPerks : null" in perk
+    assert "first ? this.duelRunRoundStartPerks : null" in perk
     run = function_body(flow, "private function duelRunRoundStartPerks(")
     assert "drawCard(" in run and "ressurectFromGraveyard(" in run
 
@@ -162,3 +162,36 @@ def test_effects_at_the_end_of_simultaneous_fx_are_deferred(board: Path) -> None
     assert "updateEffectsApplied(this)" in function_body(patched, "private function duelRunMorphEffects(")
     leader = (board / "CardLeaderInstance.as").read_text(encoding="utf-8")
     assert "function onScorchFXEnd" not in leader and "playScorchEffectFX(scorchList[i],onScorchFXEnd)" in leader
+
+
+@needs_vanilla
+def test_perk_list_is_filled_before_the_message_is_pushed(board: Path) -> None:
+    # review finding 1: PushMessage runs the first callback at once when nothing is showing
+    flow = (board / "GwintGameFlowController.as").read_text(encoding="utf-8")
+    perk = function_body(flow, "private function duelPushPerk(")
+    assert perk.index("_duelPerkPlayers.push(player)") < perk.index("PushMessage(")
+    assert perk.index("_duelPerkKinds.push(kind)") < perk.index("PushMessage(")
+    assert "first ? this.duelRunRoundStartPerks : null" in perk
+
+
+@needs_vanilla
+def test_deferred_fx_ends_skip_cards_that_left_the_rows(board: Path) -> None:
+    # review finding 2: two scorches landing together target the same cards; only the first graveyard move counts
+    patched = (board / "CardInstance.as").read_text(encoding="utf-8")
+    guard = "DuelDeferred.stillOnBoard(this.inList,CardManager.getInstance().getCardInstance(this.instanceId) == this)"
+    scorched = function_body(patched, "private function duelRunScorched(")
+    assert scorched.index(guard) < scorched.index("sendToGraveyard(this)")
+    morph = function_body(patched, "private function duelRunMorphEffects(")
+    assert morph.index(guard) < morph.index("updateEffectsApplied(this)")
+    deferred = (SRC / "DuelDeferred.as").read_text(encoding="utf-8")
+    on_board = function_body(deferred, "public static function stillOnBoard(")
+    for row in ("CARD_LIST_LOC_SEIGE", "CARD_LIST_LOC_RANGED", "CARD_LIST_LOC_MELEE"):
+        assert row in on_board
+    assert "exists &&" in on_board
+    doc = deferred[deferred.rindex("/**", 0, deferred.index("stillOnBoard(")):deferred.index("stillOnBoard(")]
+    assert "differs from vanilla" in doc
+    self_test = (SRC / "DuelSelfTest.as").read_text(encoding="utf-8")
+    assert "this.checkDoubleScorch()" in function_body(self_test, "private function checkDeferred(")
+    check = function_body(self_test, "private function checkDoubleScorch(")
+    assert "DuelDeferred.stillOnBoard(" in check and "double scorch moves each card once" in check
+    assert "DuelDeferred.stillOnBoard(" in function_body(self_test, "private static function scorchMove(")

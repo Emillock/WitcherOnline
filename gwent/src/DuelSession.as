@@ -517,7 +517,8 @@ package red.game.witcher3.menus.gwint
        * once no card moves, no card FX plays and no decision is open, so every effect and everything it starts (FX,
        * scorch, summons, a medic's choice) has settled before the next one runs. Both boards therefore apply the same
        * effects in the same order whatever the animation timing; while any is queued the board holds (effectsPending),
-       * so the hash of the next message includes them. Several effects of one card run in the order queued. After the end of the game the effect runs at once, as in vanilla (nothing is hashed or sent any more).
+       * so the hash of the next message includes them. Several effects of one card run in the order queued. After the
+       * end of the game the effect runs at once, as in vanilla (nothing is hashed or sent any more).
        * @param card The card the effect belongs to.
        * @param run function():void, applies the effect.
        */
