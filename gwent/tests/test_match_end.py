@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import build
+from as3_source import function_body
 
 GWENT_DIR = Path(__file__).resolve().parent.parent
 VANILLA = GWENT_DIR / "work" / "vanilla"
@@ -30,22 +31,8 @@ def board(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return target / GWINT
 
 
-def function_body(text: str, signature: str) -> str:
-    """The body of the first function whose declaration contains `signature` (brace matched)."""
-    start = text.index(signature)
-    open_at = text.index("{", start)
-    depth = 0
-    for index in range(open_at, len(text)):
-        if text[index] == "{":
-            depth += 1
-        elif text[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[open_at:index + 1]
-    raise AssertionError(f"unbalanced braces after {signature}")
-
-
 def session() -> str:
+    """The DuelSession source."""
     return (SRC / "DuelSession.as").read_text(encoding="utf-8")
 
 
@@ -119,7 +106,7 @@ def test_the_next_game_starts_fresh_and_keeps_counting() -> None:
 def test_the_flow_resets_through_the_vanilla_path(board: Path) -> None:
     flow = (board / "GwintGameFlowController.as").read_text(encoding="utf-8")
     start = function_body(flow, "public function duelStartNextGame(")
-    for needle in ("this.mcEndGameDialog.hide()", "this.lastRoundWinner = CardManager.PLAYER_INVALID",
+    for needle in ("this.duelHideEndDialog()", "this.lastRoundWinner = CardManager.PLAYER_INVALID",
                    "this.startDuelTimer()", 'this.stateMachine.ChangeState("Reset")'):
         assert needle in start, needle
     result = function_body(flow, "protected function OnEndGameResult(")
@@ -176,3 +163,74 @@ def test_script_match_id_clear_skips_an_empty_id() -> None:
     text = GWENT_DUEL_WS.read_text(encoding="utf-8")
     assert 'if(duelMatchId != "" && matchId != duelMatchId)' in text
     assert 'SetFlashBool("gwint.game.debug.replay", manager.duelDebugReplay)' in text
+
+
+def test_end_timeout_sends_y_before_it_ends() -> None:
+    """Review Important 1: on end_timeout this board sends Y (its E hash) before it ends as no contest, so an opponent
+    that was only held finds the queued E and the Y back to back and ends as no contest too."""
+    update = function_body(session(), "public function update(")
+    expired = update.index("confirmExpired(getTimer(),STUCK_WAIT_MS)")
+    y = update.index("this.send(DESYNC,[DuelCodec.hex8(this._end.endHash)", expired)
+    assert y < update.index('this.abort("end_timeout")', expired)
+    assert update.index("this.dispatch(next)") < expired
+    assert update.index("this.dispatch(next)") < update.index("replayExpired(")
+
+
+def test_a_late_leave_or_quit_of_the_game_before_is_still_taken() -> None:
+    """Review Minor 1: after a replay the opponent's X or QUITGAME of the game before, at the new game's first seq, is
+    applied until a message of its new game was: X ends the draw (opponent_leave), QUITGAME a win by surrender."""
+    text = session()
+    start = function_body(text, "private function startNextGame(")
+    assert start.index("this._prevMatchId = this._matchId") < start.index("this._matchId = DuelMessage.matchIdFor(")
+    assert "this.findPreviousLate(this._lastWindow)" in start
+    found = function_body(text, "private function findPreviousLate(")
+    assert "this._window.nextSeq != this._prevFirstSeq" in found
+    assert "DuelEnd.lateLeave(window,this._prevMatchId,this._prevFirstSeq)" in found
+    late = function_body(text, "private function applyPreviousLate(")
+    assert "this.applySurrender(late,this._gameNumber - 1)" in late
+    assert late.index("late.hash != mine") < late.index('this.finishDraw("opponent_leave",this._gameNumber - 1)')
+    update = function_body(text, "public function update(")
+    assert update.index("this._window.nextSeq == this._prevFirstSeq") < update.index("this._window.peek()")
+    assert "this.findPreviousLate(window)" in function_body(text, "public function onRemoteInput(")
+    route = function_body((SRC / "DuelEnd.as").read_text(encoding="utf-8"), "public static function lateLeave(")
+    assert "m.matchId == prevMatchId && m.seq == seq" in route and "DuelCodec.SURRENDER" in route
+    checks = function_body((SRC / "DuelSelfTest.as").read_text(encoding="utf-8"), "private function checkEnd(")
+    assert "a QUITGAME after the opponent's R of the game before" in checks
+
+
+def test_play_while_the_opponent_end_waits_is_a_desync() -> None:
+    """Review Minor 2: a local move or decision, or a wait for an opponent move or decision, while the opponent's E is
+    the next message means only the opponent's board ended the game."""
+    text = session()
+    send = function_body(text, "public function send(")
+    assert send.index("this.opponentEndQueued()") < send.index("this._outSeq++")
+    assert "type != DESYNC && type != DuelCodec.SURRENDER && type != END" in send
+    wait = function_body(text, "private function dispatchEnd(")
+    assert wait.index("this.opponentPlayExpected()") < wait.index("this._end.confirm()")
+    assert "move after the opponent's end" in wait
+    expected = function_body(text, "private function opponentPlayExpected(")
+    assert "this._remoteDecision != null" in expected and "opponent.waitingForMove" in expected
+    controller = (SRC / "NetOpponentController.as").read_text(encoding="utf-8")
+    assert '_stateMachine.currentState == "WaitingForMove"' in function_body(controller, "public function get waitingForMove(")
+
+
+@needs_vanilla
+def test_the_end_dialog_goes_for_good_and_close_leaves_while_waiting(board: Path) -> None:
+    """Review Minor 3: after a duel Replay and before the next game the end dialog is not visible (vanilla hide only
+    fades it), and the board's close button leaves (X) while this board waits for the opponent's R."""
+    flow = (board / "GwintGameFlowController.as").read_text(encoding="utf-8")
+    hide = function_body(flow, "private function duelHideEndDialog(")
+    assert hide.index("this.mcEndGameDialog.hide()") < hide.index("this.mcEndGameDialog.visible = false")
+    result = function_body(flow, "protected function OnEndGameResult(")
+    assert result.index("this.duelHideEndDialog()") < result.index("DuelSession.active.localReplay()")
+    menu = (board / "GwintGameMenu.as").read_text(encoding="utf-8")
+    quit_game = function_body(menu, "public function tryQuitGame(")
+    assert quit_game.index("DuelSession.active.waitingForReplay") < quit_game.index("DuelSession.active.localLeave()")
+    assert quit_game.index("DuelSession.active.localLeave()") < quit_game.index('"OnConfirmSurrender"')
+    assert "this.handleCloseClick(null)" in function_body(menu, "public function duelDebugPressClose(")
+
+
+def test_one_draw_route() -> None:
+    """Review Minor 7: finishGame settles only a confirmed win or loss; draws go through localReplay and localLeave."""
+    finish = function_body(session(), "public function finishGame(")
+    assert "winner == CardManager.PLAYER_INVALID" in finish and "localLeave" not in finish

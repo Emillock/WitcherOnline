@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import build
+from as3_source import function_body
 
 GWENT_DIR = Path(__file__).resolve().parent.parent
 VANILLA = GWENT_DIR / "work" / "vanilla"
@@ -27,21 +28,6 @@ def board(tmp_path_factory: pytest.TempPathFactory) -> Path:
     shutil.copytree(VANILLA / "red", target / "red")
     build.apply_patches(target, PATCHES)
     return target / GWINT
-
-
-def function_body(text: str, signature: str) -> str:
-    """The body of the first function whose declaration contains `signature` (brace matched)."""
-    start = text.index(signature)
-    open_at = text.index("{", start)
-    depth = 0
-    for index in range(open_at, len(text)):
-        if text[index] == "{":
-            depth += 1
-        elif text[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[open_at:index + 1]
-    raise AssertionError(f"unbalanced braces after {signature}")
 
 
 def session_source() -> str:

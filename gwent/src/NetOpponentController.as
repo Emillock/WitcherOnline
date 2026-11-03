@@ -54,6 +54,14 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * True while it is the opponent's turn and no move is queued: this board waits for the opponent's next move.
+       */
+      public function get waitingForMove() : Boolean
+      {
+         return _stateMachine.currentState == "WaitingForMove" && this._moves.length == 0;
+      }
+
+      /**
        * Queues the opponent's next move (DuelSession, in seq order).
        * @param move A message of type P, C, G, L or S.
        */

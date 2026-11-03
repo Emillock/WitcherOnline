@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameFlowController.as b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
-index 9ffd03a..102fb71 100644
+index 9ffd03a..1b4d874 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 @@ -1,6 +1,8 @@
@@ -315,7 +315,7 @@ index 9ffd03a..102fb71 100644
        {
 -         if(this._mulliganDecided && (!this.mcTutorials.visible || this.mcTutorials.isPaused))
 +         if(DuelSession.active != null && this._mulliganDecided)
-+         {
+          {
 +            if(this.mcChoiceDialog.isShown())
 +            {
 +               this.mcChoiceDialog.hideDialog();
@@ -327,7 +327,7 @@ index 9ffd03a..102fb71 100644
 +            }
 +         }
 +         if(this._mulliganDecided && (DuelSession.active == null || DuelSession.active.mulligan.roundMayStart(this._mulliganDecided)) && (!this.mcTutorials.visible || this.mcTutorials.isPaused))
-          {
++         {
 +            if(DuelSession.active != null)
 +            {
 +               DuelSession.active.mulligan.close();
@@ -496,7 +496,7 @@ index 9ffd03a..102fb71 100644
           this.cardManager.logRoundResults();
           this.log("#AI#--- game winner was: " + gameWinner);
           this.log("#AI#--- current round was: " + this.currentRound);
-@@ -836,8 +1199,37 @@ package red.game.witcher3.menus.gwint
+@@ -836,8 +1199,47 @@ package red.game.witcher3.menus.gwint
           {
              GwintGameMenu.mSingleton.playSound("gui_gwint_battle_draw");
           }
@@ -509,6 +509,16 @@ index 9ffd03a..102fb71 100644
 +         }
           this.mcEndGameDialog.show(gameWinner,this.OnEndGameResult);
        }
++
++      /**
++       * Duel: the end screen goes for good. Vanilla hide() only fades it out and leaves it visible, so the board's close
++       * button would still reach it (GwintGameMenu.handleCloseClick) instead of the surrender or the leave.
++       */
++      private function duelHideEndDialog() : void
++      {
++         this.mcEndGameDialog.hide();
++         this.mcEndGameDialog.visible = false;
++      }
 +
 +      /**
 +       * Duel: the opponent confirmed the result (DuelSession): the vanilla end screen opens.
@@ -525,7 +535,7 @@ index 9ffd03a..102fb71 100644
 +       */
 +      public function duelStartNextGame() : void
 +      {
-+         this.mcEndGameDialog.hide();
++         this.duelHideEndDialog();
 +         this.lastRoundWinner = CardManager.PLAYER_INVALID;
 +         this.duelGameWinner = -1;
 +         this.startDuelTimer();
@@ -534,7 +544,7 @@ index 9ffd03a..102fb71 100644
        
        protected function state_update_ShowingFinalResult() : void
        {
-@@ -845,6 +1237,23 @@ package red.game.witcher3.menus.gwint
+@@ -845,6 +1247,27 @@ package red.game.witcher3.menus.gwint
        
        protected function OnEndGameResult(result:int) : void
        {
@@ -549,9 +559,13 @@ index 9ffd03a..102fb71 100644
 +               // closing the end screen of a draw: X, a draw without money
 +               DuelSession.active.localLeave();
 +            }
-+            else if(DuelSession.active.localReplay())
++            else
 +            {
-+               this.mcMessageQueue.PushMessage(DUEL_REPLAY_WAIT_TEXT);
++               this.duelHideEndDialog();
++               if(DuelSession.active.localReplay())
++               {
++                  this.mcMessageQueue.PushMessage(DUEL_REPLAY_WAIT_TEXT);
++               }
 +            }
 +            return;
 +         }

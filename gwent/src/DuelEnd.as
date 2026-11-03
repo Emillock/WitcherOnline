@@ -144,6 +144,29 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * The opponent's late X, or its QUITGAME, of the game before a replay: after its R it left or surrendered while
+       * this board had both R and started the next game, so its window still carries that game's message with the seq
+       * the new game's window expects first.
+       * @param window The opponent's window.
+       * @param prevMatchId The match id of the game before.
+       * @param seq The seq the new game's window expects first.
+       * @return That message, or null.
+       */
+      public static function lateLeave(window:String, prevMatchId:String, seq:int) : DuelMessage
+      {
+         var tokens:Array = window != null ? window.split(DuelWindow.SEPARATOR) : [];
+         for(var i:int = 0; i < tokens.length; i++)
+         {
+            var m:DuelMessage = DuelCodec.decode(tokens[i]);
+            if(m != null && m.version == DuelCodec.PROTOCOL_VERSION && m.matchId == prevMatchId && m.seq == seq && (m.type == DuelSession.LEAVE && m.args.length == 0 || m.type == DuelCodec.SURRENDER))
+            {
+               return m;
+            }
+         }
+         return null;
+      }
+
+      /**
        * True when this board waited longer than limitMs for the opponent's E.
        * @param nowMs getTimer().
        * @param limitMs The stuck-wait limit.

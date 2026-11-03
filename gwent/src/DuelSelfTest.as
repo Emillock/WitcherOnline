@@ -323,7 +323,8 @@ package red.game.witcher3.menus.gwint
        * The end of a game (spec 9.8, R43, DuelEnd) on synthetic E, R and X: the opponent's E waits until this board sent
        * its own, then confirms only with the same winner; nothing is settled before that (a Y in the wait goes to the
        * desync path, a move after the end is a desync, and no E within the limit expires); R and X count only after a
-       * confirmed draw, one R each; the replay wait expires without the opponent's R.
+       * confirmed draw, one R each; the replay wait expires without the opponent's R; after a replay the opponent's
+       * late X or QUITGAME of the game before is found at the new game's first seq (DuelEnd.lateLeave), nothing else.
        */
       private function checkEnd() : void
       {
@@ -363,6 +364,13 @@ package red.game.witcher3.menus.gwint
          this.expect(!waiting.replayExpired(5000 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS) && waiting.replayExpired(5001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: no R within the stuck-wait limit after this board's R expires");
          waiting.replayReceived = true;
          this.expect(!waiting.replayExpired(5001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: the replay wait ends with the opponent's R");
+         var oldR:String = "1.1g0.16.R._.00000007";
+         var quit:DuelMessage = DuelEnd.lateLeave([oldR,"1.1g0.17.QUITGAME.1.00000009","1.1g1.18.M._.00000001"].join("~"),"1g0",17);
+         this.expect(quit != null && quit.type == DuelCodec.SURRENDER && quit.args[0] == "1","end: a QUITGAME after the opponent's R of the game before is taken at the new game's first seq");
+         var left:DuelMessage = DuelEnd.lateLeave([oldR,"1.1g0.17.X._.00000007"].join("~"),"1g0",17);
+         this.expect(left != null && left.type == DuelSession.LEAVE,"end: an X after the opponent's R of the game before is taken at the new game's first seq");
+         this.expect(DuelEnd.lateLeave("1.1g0.17.X._.00000007","1g0",18) == null && DuelEnd.lateLeave("1.1g1.17.X._.00000007","1g0",17) == null,"end: a late X of another seq or match is not taken");
+         this.expect(DuelEnd.lateLeave("1.1g0.17.S._.00000007~none","1g0",17) == null && DuelEnd.lateLeave(null,"1g0",17) == null,"end: only X and QUITGAME are taken late");
       }
 
       /**
