@@ -1,17 +1,31 @@
 diff --git a/red/game/witcher3/menus/gwint/CardInstance.as b/red/game/witcher3/menus/gwint/CardInstance.as
-index b1187d8..232259d 100644
+index b1187d8..ac99650 100644
 --- a/red/game/witcher3/menus/gwint/CardInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardInstance.as
-@@ -1354,7 +1354,7 @@ package red.game.witcher3.menus.gwint
+@@ -29,6 +29,9 @@ package red.game.witcher3.menus.gwint
+       
+       public var playSummonedFX:Boolean = false;
+       
++      /** Duel: the resurrect targets of this medic's open NUR decision. */
++      private var _duelNurseTargets:Vector.<CardInstance>;
++      
+       public var BanishInsteadOfGraveyard:Boolean = false;
+       
+       public var InstancePositioning:Boolean = false;
+@@ -1354,7 +1357,11 @@ package red.game.witcher3.menus.gwint
              {
                 if(cardManagerRef.cardEffectManager.randomResEnabled && !this.templateRef.isType(CardTemplate.CardType_Hero))
                 {
 -                  this.handleNurseChoice(copyList[Math.min(Math.floor(Math.random() * copyList.length),copyList.length - 1)].instanceId);
 +                  this.handleNurseChoice(copyList[DuelSession.randomInt(this.owningPlayer,copyList.length,"random_medic")].instanceId);
++               }
++               else if(DuelSession.active != null)
++               {
++                  this.duelDecideNurse(copyList);
                 }
                 else if(gameFlowRef.playerControllers[this.listsPlayer] is AIPlayerController)
                 {
-@@ -1535,6 +1535,11 @@ package red.game.witcher3.menus.gwint
+@@ -1535,6 +1542,11 @@ package red.game.witcher3.menus.gwint
        protected function onNurseEffectEnded(cardInstance:CardInstance = null) : void
        {
           var cardManagerRef:CardManager = CardManager.getInstance();
@@ -23,10 +37,61 @@ index b1187d8..232259d 100644
           if(cardInstance)
           {
              cardInstance.recalculatePowerPotential(cardManagerRef);
-@@ -1542,6 +1547,73 @@ package red.game.witcher3.menus.gwint
+@@ -1542,6 +1554,124 @@ package red.game.witcher3.menus.gwint
           }
        }
        
++      /**
++       * Duel medic pick (spec 9.6, decision NUR): the seat whose row the medic is on decides which graveyard card it
++       * brings back (the local player through the vanilla dialog, the opponent through its D), in place of the AI pick
++       * or the dialog of vanilla.
++       * @param targets The resurrect targets (GetRessurectionTargets, graveyard order, the same on both boards).
++       */
++      private function duelDecideNurse(targets:Vector.<CardInstance>) : void
++      {
++         this._duelNurseTargets = targets;
++         DuelSession.active.decide("NUR",DuelSession.active.seatOf(this.listsPlayer),DuelSession.active.ids.toNet(this.instanceId),this.duelShowNurseChoice,this.duelApplyNurseChoice,this.duelAutoNurseChoice);
++      }
++
++      /** The vanilla medic dialog, answered through DuelSession.answer. */
++      private function duelShowNurseChoice() : void
++      {
++         GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(this._duelNurseTargets,this.duelNursePicked,null,"[[gwint_choose_card_to_ressurect]]");
++      }
++
++      private function duelNursePicked(instanceId:int) : void
++      {
++         DuelSession.active.answer("NUR",DuelSession.active.netName(instanceId));
++      }
++
++      /**
++       * Brings back the chosen card (the vanilla handleNurseChoice).
++       * @return False if the choice is not one of the targets (a desync).
++       */
++      private function duelApplyNurseChoice(choice:String) : Boolean
++      {
++         var card:CardInstance = DuelSession.active.cardOfArg(choice);
++         if(card == null || this._duelNurseTargets == null || this._duelNurseTargets.indexOf(card) < 0)
++         {
++            return false;
++         }
++         this._duelNurseTargets = null;
++         this.handleNurseChoice(card.instanceId);
++         return true;
++      }
++
++      /** Autoplay's medic pick: the vanilla AI's (getHigherOrLowerValueCardFromTargetGraveyard), else the first. */
++      private function duelAutoNurseChoice() : String
++      {
++         var pick:CardAndComboPoints = CardManager.getInstance().getHigherOrLowerValueCardFromTargetGraveyard(this.listsPlayer,true,true,false);
++         var card:CardInstance = this._duelNurseTargets[0];
++         if(pick != null && pick.cardInstance != null && this._duelNurseTargets.indexOf(pick.cardInstance) >= 0)
++         {
++            card = pick.cardInstance;
++         }
++         return DuelSession.active.netName(card.instanceId);
++      }
++
 +      /**
 +       * Duel medic placement (spec 7.3): the row vanilla gets from recalculatePowerPotential, worked out the same way
 +       * but seat-relative (the side of the graveyard the card comes from, where vanilla counts PLAYER_1's rows for an

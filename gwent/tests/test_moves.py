@@ -71,13 +71,6 @@ def test_a_pass_sends_s(board: Path) -> None:
     assert 'send("S"' in body
 
 
-@needs_vanilla
-def test_autoplay_skips_moves_that_need_a_decision(board: Path) -> None:
-    text = (board / "HumanPlayerController.as").read_text(encoding="utf-8")
-    assert "duelNeedsDecision(" in text
-    assert "DUEL AUTOPLAY skip " in text
-
-
 def test_opponent_applies_moves_through_applying_card() -> None:
     text = (SRC / "NetOpponentController.as").read_text(encoding="utf-8")
     for state in ("Idle", "WaitingForMove", "ShowingMove", "ApplyingCard", "ChoosingMove"):

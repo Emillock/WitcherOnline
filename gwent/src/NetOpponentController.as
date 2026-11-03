@@ -16,8 +16,8 @@ package red.game.witcher3.menus.gwint
     * Before a move is applied DuelSession compares the hashes (checkApply). The move names its cards by net id; a net id
     * that is not known here, a card that is not in this seat's hand, or a leader that cannot be used is a desync. Its
     * DUEL DESYNC line then shows two equal hashes (the hash check had passed); DUEL MISMATCH names the cause.
-    * S (pass) marks the seat done. Moves that ask a choice (medic, leader dialogs) are Task 12; this task's autoplay
-    * never sends them.
+    * S (pass) marks the seat done. A choice inside the opponent's move (medic, leader dialogs) is a decision
+    * (DuelSession.decide): ApplyingCard holds until the opponent's D has been applied.
     */
    public class NetOpponentController extends BasePlayerController
    {
@@ -73,11 +73,12 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * Also waits while a dialog or the local player's card zoom is open (the human controller does the same).
+       * Also waits while a dialog or the local player's card zoom is open (the human controller does the same), and
+       * while a decision is open (DuelSession.decisionOpen: the opponent's choice inside its move has not arrived).
        */
       override protected function cardEffectApplying() : Boolean
       {
-         return Boolean(super.cardEffectApplying()) || gameFlowControllerRef.mcChoiceDialog.isShown();
+         return Boolean(super.cardEffectApplying()) || gameFlowControllerRef.mcChoiceDialog.isShown() || DuelSession.active != null && DuelSession.active.decisionOpen;
       }
 
       /**

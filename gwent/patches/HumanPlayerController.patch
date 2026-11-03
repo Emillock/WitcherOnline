@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
-index bea2665..ddf7df1 100644
+index bea2665..810f7be 100644
 --- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
 +++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
 @@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
@@ -24,7 +24,7 @@ index bea2665..ddf7df1 100644
        public function HumanPlayerController()
        {
           super();
-@@ -94,19 +102,209 @@ package red.game.witcher3.menus.gwint
+@@ -94,19 +102,142 @@ package red.game.witcher3.menus.gwint
        {
           if(CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID).length == 0 && !CardManager.getInstance().getCardLeader(playerID).canBeUsed)
           {
@@ -78,15 +78,14 @@ index bea2665..ddf7df1 100644
 +      
 +      /**
 +       * Duel autoplay (gwint.game.debug.autoplay, test bots): on the local turn, after a short pause, plays the move
-+       * the vanilla AI evaluation picks for PLAYER_1 through commitTransaction, or passes. A move that would open a
-+       * choice (duelNeedsDecision; synced from Task 12) is skipped (DUEL AUTOPLAY skip <card> <why>): the best other
-+       * hand card without a choice is played instead, or the turn is passed when there is none.
++       * the vanilla AI evaluation picks for PLAYER_1 through commitTransaction, or passes. A move that opens a choice
++       * (medic, leader) is played like any other; DuelSession autoplay answers the decision.
 +       * @return True while autoplay handles the turn (ChoosingCard then does nothing else this update).
 +       */
 +      private function duelAutoplayTick() : Boolean
 +      {
 +         var move:CardTransaction = null;
-+         if(DuelSession.active == null || DuelSession.active.ended || !GwintGameMenu.mSingleton.duelDebugAutoplay || _transactionCard != null || this._currentZoomedHolder != null || this.mcChoiceDialog.isShown())
++         if(DuelSession.active == null || DuelSession.active.ended || DuelSession.active.decisionOpen || !GwintGameMenu.mSingleton.duelDebugAutoplay || _transactionCard != null || this._currentZoomedHolder != null || this.mcChoiceDialog.isShown())
 +         {
 +            return false;
 +         }
@@ -108,11 +107,6 @@ index bea2665..ddf7df1 100644
 +            this._duelAutoAI.opponentID = opponentID;
 +         }
 +         move = this._duelAutoAI.duelSuggestMove();
-+         if(move != null && move.sourceCardInstanceRef != null && this.duelNeedsDecision(move) != null)
-+         {
-+            DuelSession.active.log("DUEL AUTOPLAY skip " + this.duelCardName(move.sourceCardInstanceRef) + " " + this.duelNeedsDecision(move));
-+            move = this.duelBestMoveWithoutDecision();
-+         }
 +         if(move == null || move.sourceCardInstanceRef == null || !this.duelPlayable(move))
 +         {
 +            DuelSession.active.log("DUEL AUTOPLAY pass");
@@ -123,44 +117,6 @@ index bea2665..ddf7df1 100644
 +         startCardTransaction(move.sourceCardInstanceRef.instanceId);
 +         this.commitTransaction(this.duelCopyTransaction(move));
 +         return true;
-+      }
-+
-+      /**
-+       * Whether a move would open a choice dialog that duels do not sync yet (Task 12): a medic with something to
-+       * resurrect (unless the random medic of Invader of the North decides, which never applies to heroes), and the
-+       * leaders that resurrect (unless random), pick a weather card, bin and pick, or show the opponent's hand.
-+       * @param transaction The move.
-+       * @return "medic", "leader", or null when the move needs no choice.
-+       */
-+      private function duelNeedsDecision(transaction:CardTransaction) : String
-+      {
-+         var manager:CardManager = CardManager.getInstance();
-+         var source:CardInstance = transaction.sourceCardInstanceRef;
-+         var randomRes:Boolean = manager.cardEffectManager.randomResEnabled;
-+         if(source is CardLeaderInstance)
-+         {
-+            switch(source.templateRef.getFirstEffect())
-+            {
-+               case CardTemplate.CardEffect_View_3_Enemy:
-+               case CardTemplate.CardEffect_Bin2_Pick1:
-+               case CardTemplate.CardEffect_Pick_Weather:
-+                  return "leader";
-+               case CardTemplate.CardEffect_Resurect:
-+               case CardTemplate.CardEffect_Resurect_Enemy:
-+                  return randomRes ? null : "leader";
-+            }
-+            return null;
-+         }
-+         if(source.templateRef.hasEffect(CardTemplate.CardEffect_Nurse))
-+         {
-+            var targets:Vector.<CardInstance> = new Vector.<CardInstance>();
-+            manager.GetRessurectionTargets(playerID,targets,false);
-+            if(targets.length > 0 && (!randomRes || source.templateRef.isType(CardTemplate.CardType_Hero)))
-+            {
-+               return "medic";
-+            }
-+         }
-+         return null;
 +      }
 +
 +      /**
@@ -179,29 +135,6 @@ index bea2665..ddf7df1 100644
 +            return false;
 +         }
 +         return transaction.targetSlotID != CardManager.CARD_LIST_LOC_INVALID || transaction.targetCardInstanceRef != null || source.templateRef.isType(CardTemplate.CardType_Global_Effect);
-+      }
-+
-+      /**
-+       * The hand card whose AI evaluation (from the duelSuggestMove just made) gains the most among those that need no
-+       * choice, or null.
-+       */
-+      private function duelBestMoveWithoutDecision() : CardTransaction
-+      {
-+         var hand:Vector.<CardInstance> = CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID);
-+         var best:CardTransaction = null;
-+         for(var i:int = 0; i < hand.length; i++)
-+         {
-+            var option:CardTransaction = hand[i].getOptimalTransaction();
-+            if(option == null || option.sourceCardInstanceRef != hand[i] || !this.duelPlayable(option) || this.duelNeedsDecision(option) != null)
-+            {
-+               continue;
-+            }
-+            if(best == null || option.powerChangeResult > best.powerChangeResult)
-+            {
-+               best = option;
-+            }
-+         }
-+         return best;
 +      }
 +
 +      /** A copy of an AI transaction (the card's own evaluation object changes when the AI evaluates again). */
@@ -235,7 +168,7 @@ index bea2665..ddf7df1 100644
              currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
              _turnOver = true;
              if(_transactionCard != null)
-@@ -208,6 +406,10 @@ package red.game.witcher3.menus.gwint
+@@ -208,6 +339,10 @@ package red.game.witcher3.menus.gwint
           var isCardEffect:Boolean = false;
           var isGlobalEffect:Boolean = false;
           this.on_state_about_to_update();
@@ -246,7 +179,7 @@ index bea2665..ddf7df1 100644
           if(_transactionCard)
           {
              cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
-@@ -313,7 +515,7 @@ package red.game.witcher3.menus.gwint
+@@ -313,18 +448,19 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction = new CardTransaction();
              _decidedCardTransaction.targetPlayerID = playerID;
              _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
@@ -255,7 +188,12 @@ index bea2665..ddf7df1 100644
           }
        }
        
-@@ -325,6 +527,7 @@ package red.game.witcher3.menus.gwint
+       override protected function cardEffectApplying() : Boolean
+       {
+-         return Boolean(super.cardEffectApplying()) || this.mcChoiceDialog.visible;
++         return Boolean(super.cardEffectApplying()) || this.mcChoiceDialog.visible || DuelSession.active != null && DuelSession.active.decisionOpen;
+       }
+       
        override protected function state_begin_ApplyingCard() : void
        {
           super.state_begin_ApplyingCard();
@@ -263,7 +201,7 @@ index bea2665..ddf7df1 100644
           _boardRenderer.activateAllHolders(true);
           if(Boolean(this._handHolder) && _boardRenderer.getSelectedCardHolder() != this._handHolder)
           {
-@@ -450,7 +653,7 @@ package red.game.witcher3.menus.gwint
+@@ -450,7 +586,7 @@ package red.game.witcher3.menus.gwint
                       _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
                       _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
                       _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -272,7 +210,7 @@ index bea2665..ddf7df1 100644
                    }
              }
           }
-@@ -468,7 +671,7 @@ package red.game.witcher3.menus.gwint
+@@ -468,7 +604,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
              _decidedCardTransaction.targetCardInstanceRef = null;
              _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -281,7 +219,7 @@ index bea2665..ddf7df1 100644
           }
        }
        
-@@ -522,6 +725,10 @@ package red.game.witcher3.menus.gwint
+@@ -522,6 +658,10 @@ package red.game.witcher3.menus.gwint
        
        private function cancelCardTransaction(restoreSelection:Boolean = false) : void
        {

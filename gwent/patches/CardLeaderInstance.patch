@@ -1,8 +1,160 @@
 diff --git a/red/game/witcher3/menus/gwint/CardLeaderInstance.as b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
-index 05341cb..e0ad378 100644
+index 05341cb..4492733 100644
 --- a/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
-@@ -608,7 +608,7 @@ package red.game.witcher3.menus.gwint
+@@ -15,6 +15,18 @@ package red.game.witcher3.menus.gwint
+       
+       protected var numPickedSoFar:int;
+       
++      /** Duel: the open leader decision (LRES, LWEA, LBIN, LPICK) and its options. */
++      private var _duelChoiceKind:String;
++      
++      private var _duelChoiceCards:Vector.<CardInstance>;
++      
++      private var _duelChoiceTemplates:Vector.<int>;
++      
++      private var _duelChoiceText:String;
++      
++      /** Duel: the graveyard an LRES decision resurrects from. */
++      private var _duelResTarget:int = -1;
++      
+       public function CardLeaderInstance()
+       {
+          super();
+@@ -446,7 +458,7 @@ package red.game.witcher3.menus.gwint
+                throw new Error("GFX [ERROR] - tried to pick Rain but did not have any");
+                break;
+             case CardTemplate.CardEffect_View_3_Enemy:
+-               if(!isAI)
++               if(!isAI && this.duelShowsEnemyHand())
+                {
+                   this.ShowEnemyHand(3);
+                }
+@@ -528,6 +540,123 @@ package red.game.witcher3.menus.gwint
+          }
+       }
+       
++      /**
++       * Whether this board shows the opponent's cards for View_3_Enemy: always outside a duel; in a duel only on the
++       * board of the leader's owner. The display changes no state, so nothing is sent or hashed (local only); on the
++       * other board vanilla would show the local player its own cards.
++       */
++      private function duelShowsEnemyHand() : Boolean
++      {
++         return DuelSession.active == null || owningPlayer == CardManager.PLAYER_1;
++      }
++
++      /**
++       * A leader choice in a duel (spec 9.6): the leader's owner decides (the local player through the vanilla dialog,
++       * the opponent through its D); both boards then run the vanilla handler with the same choice.
++       * @param kind LRES, LWEA, LBIN or LPICK.
++       * @param cards The card options (LRES, LBIN), or null.
++       * @param templates The template options (LWEA, LPICK), or null.
++       * @param text The vanilla dialog text.
++       */
++      private function duelDecide(kind:String, cards:Vector.<CardInstance>, templates:Vector.<int>, text:String) : void
++      {
++         this._duelChoiceKind = kind;
++         this._duelChoiceCards = cards;
++         this._duelChoiceTemplates = templates;
++         this._duelChoiceText = text;
++         DuelSession.active.decide(kind,DuelSession.active.seatOf(owningPlayer),DuelSession.active.ids.toNet(instanceId),this.duelShowChoice,this.duelApplyChoice,this.duelAutoChoice);
++      }
++
++      /** The vanilla dialog for the open leader choice, answered through DuelSession.answer. */
++      private function duelShowChoice() : void
++      {
++         if(this._duelChoiceCards != null)
++         {
++            GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(this._duelChoiceCards,this.duelChoicePicked,null,this._duelChoiceText);
++         }
++         else
++         {
++            GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardTemplates(this._duelChoiceTemplates,this.duelChoicePicked,null,this._duelChoiceText);
++         }
++      }
++
++      private function duelChoicePicked(id:int) : void
++      {
++         DuelSession.active.answer(this._duelChoiceKind,this._duelChoiceCards != null ? DuelSession.active.netName(id) : "t" + id);
++      }
++
++      /**
++       * Runs the vanilla handler of the open leader choice.
++       * @return False if the choice is not one of the options (a desync).
++       */
++      private function duelApplyChoice(choice:String) : Boolean
++      {
++         var kind:String = this._duelChoiceKind;
++         var cards:Vector.<CardInstance> = this._duelChoiceCards;
++         var templates:Vector.<int> = this._duelChoiceTemplates;
++         var card:CardInstance = null;
++         var templateId:int = -1;
++         if(cards != null)
++         {
++            card = DuelSession.active.cardOfArg(choice);
++            if(card == null || cards.indexOf(card) < 0)
++            {
++               return false;
++            }
++         }
++         else
++         {
++            templateId = choice != null && choice.length > 1 && choice.charAt(0) == "t" ? int(choice.substr(1)) : -1;
++            if(templates == null || "t" + templateId != choice || templates.indexOf(templateId) < 0)
++            {
++               return false;
++            }
++         }
++         this._duelChoiceKind = null;
++         this._duelChoiceCards = null;
++         this._duelChoiceTemplates = null;
++         switch(kind)
++         {
++            case "LRES":
++               this.handleResurrectChoice(card.instanceId);
++               break;
++            case "LBIN":
++               this.handleBinChoice(card.instanceId);
++               break;
++            case "LWEA":
++               this.handleCardDrawChoice_Weather(templateId);
++               break;
++            case "LPICK":
++               this.handlePickChoice(templateId);
++               break;
++            default:
++               return false;
++         }
++         return true;
++      }
++
++      /**
++       * Autoplay's leader choice: the vanilla AI's where it has one (resurrect: getHigherOrLowerValueCardFromTargetGraveyard;
++       * weather: the first weather card), else the first option (bin, pick: the vanilla AI has no such choice).
++       */
++      private function duelAutoChoice() : String
++      {
++         if(this._duelChoiceCards == null)
++         {
++            return "t" + this._duelChoiceTemplates[0];
++         }
++         var card:CardInstance = this._duelChoiceCards[0];
++         if(this._duelChoiceKind == "LRES")
++         {
++            var pick:CardAndComboPoints = CardManager.getInstance().getHigherOrLowerValueCardFromTargetGraveyard(this._duelResTarget,true,true,false,this._duelResTarget != owningPlayer);
++            if(pick != null && pick.cardInstance != null && this._duelChoiceCards.indexOf(pick.cardInstance) >= 0)
++            {
++               card = pick.cardInstance;
++            }
++         }
++         return DuelSession.active.netName(card.instanceId);
++      }
++
+       protected function clearWeather() : void
+       {
+          var cardFXManager:CardFXManager = CardFXManager.getInstance();
+@@ -608,13 +737,18 @@ package red.game.witcher3.menus.gwint
           {
              if(cardManagerRef.cardEffectManager.randomResEnabled)
              {
@@ -11,3 +163,50 @@ index 05341cb..e0ad378 100644
                 cardManagerRef.addCardInstanceToList(cardsInGraveyard[randomIndex],CardManager.CARD_LIST_LOC_HAND,owningPlayer);
              }
              else if(cardsInGraveyard.length == 1)
+             {
+                cardManagerRef.addCardInstanceToList(cardsInGraveyard[0],CardManager.CARD_LIST_LOC_HAND,owningPlayer);
+             }
++            else if(DuelSession.active != null)
++            {
++               this._duelResTarget = targetPlayer;
++               this.duelDecide("LRES",cardsInGraveyard,null,"[[gwint_choose_card_to_ressurect]]");
++            }
+             else
+             {
+                GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(cardsInGraveyard,this.handleResurrectChoice,null,"[[gwint_choose_card_to_ressurect]]");
+@@ -650,6 +784,11 @@ package red.game.witcher3.menus.gwint
+             {
+                throw new Error("GFX [ERROR] - tried to pick weather card when there was none");
+             }
++            if(DuelSession.active != null)
++            {
++               this.duelDecide("LWEA",null,templateList,"[[gwint_pick_card_to_draw]]");
++               return;
++            }
+             GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardTemplates(templateList,this.handleCardDrawChoice_Weather,null,"[[gwint_pick_card_to_draw]]");
+          }
+       }
+@@ -691,6 +830,11 @@ package red.game.witcher3.menus.gwint
+          {
+             throw new Error("GFX [ERROR] - Tried to bin a card when there are none left in the hand");
+          }
++         if(DuelSession.active != null)
++         {
++            this.duelDecide("LBIN",cardsInHand,null,"[[gwint_choose_card_to_dump]]");
++            return;
++         }
+          GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(cardsInHand,this.handleBinChoice,null,"[[gwint_choose_card_to_dump]]");
+       }
+       
+@@ -724,6 +868,11 @@ package red.game.witcher3.menus.gwint
+          {
+             throw new Error("GFX [ERROR] - Tried to pick a card when there are none left in the deck");
+          }
++         if(DuelSession.active != null)
++         {
++            this.duelDecide("LPICK",null,templateList,"[[gwint_pick_card_to_draw]]");
++            return;
++         }
+          GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardTemplates(templateList,this.handlePickChoice,null,"[[gwint_pick_card_to_draw]]");
+       }
+       

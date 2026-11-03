@@ -91,4 +91,10 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     assert "ALWAYS_PASS" not in human and "sendMove(" in human
     assert "ShowingMove" in (gwint / "NetOpponentController.as").read_text()
     assert "DUEL DESYNC seq=" in (gwint / "DuelSession.as").read_text()
+    assert "DUEL DECIDE " in (gwint / "DuelSession.as").read_text()
+    assert "duelDecideNurse" in (gwint / "CardInstance.as").read_text()
+    assert "duelDecide" in (gwint / "CardLeaderInstance.as").read_text()
+    flow = (gwint / "GwintGameFlowController.as").read_text()
+    assert "duelScoiataelToss" in flow and "duelApplyRemoteRedraw" in flow
+    assert "duelCoinChosen" in menu
     assert "function onQuitConfirmed" in menu and "stopDuelTimer" in menu

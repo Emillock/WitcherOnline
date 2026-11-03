@@ -35,6 +35,43 @@ package red.game.witcher3.menus.gwint
     * went out of sync and was cancelled" and ends as no contest (reason desync); the receiver of Y does the same,
     * without sending anything. gwint.game.debug.corruptAt=<seq> (test) adds 1 to one card's power right before this
     * client sends that seq, so the opponent's check fails.
+    *
+    * Decisions (spec 8.2, 9.6): rules code that would open the choice dialog (or pick for the AI) calls decide(kind,
+    * seat, asker, showLocal, apply, autoChoice). The seat that decides is the local seat: the dialog is shown (once no
+    * card moves and no card FX plays, so both boards hash the same settled state), the player's answer is sent as D
+    * (kind, asker net id or "perk" or "coin", choice) and then applied. The other seat: the board holds (decisionOpen)
+    * until the opponent's D arrives, checks its hash, then applies the same choice. Choice: a net id (NUR, LRES, LBIN,
+    * MUL), t<templateId> (LWEA, LPICK) or 1/0 (COIN: 1 = the Scoia'tael seat starts). A D of another kind or asker, a
+    * choice that is not one of the options, or any other message while a decision is awaited is a desync.
+    * Mulligan (spec 9.4): both seats mulligan at once. Each local redraw is sent as D MUL,perk,<netId> before it
+    * applies, the dialog close as M; the opponent's are applied to PLAYER_2 as they arrive (once this board has drawn
+    * its hands), and round 1 starts when both seats are done. Net ids stay equal whatever order the two seats' redraws
+    * arrive in, because each seat has its own id counter (DuelIds) and each seat's redraws come in its own seq order.
+    * D MUL, M and D COIN carry a SCOPE_SEAT hash (the other seat may be mid-mulligan, spec 8.4); every other D carries
+    * SCOPE_FULL. Autoplay (test bots) answers a decision after AUTOPLAY_DELAY_MS with the vanilla AI choice where the
+    * vanilla AI has one, else the first option (autoChoice), redraws up to 2 cards at the mulligan with
+    * gwint.game.debug.mulligan, and closes the opponent-cards display.
+    *
+    * Choice dialog callers (W3ChoiceDialog.showDialog*) in the decompiled vanilla 5.01 board, file:line in that output
+    * (red/game/witcher3/menus/gwint, or red/game/witcher3/controls for W3ChoiceDialog), with the decision kind:
+    * - CardInstance.as:1367 NUR: the medic's resurrect pick (CardInstance.duelDecideNurse; the random medic of
+    *   Invader of the North stays a seeded draw, Task 10).
+    * - CardLeaderInstance.as:590 local: ShowEnemyHand (View_3_Enemy), shows the opponent's cards; it changes no state,
+    *   so it is shown on the leader owner's board only and nothing is sent or hashed (duelShowsEnemyHand).
+    * - CardLeaderInstance.as:620 LRES: Resurect and Resurect_Enemy with more than one target (one target and the
+    *   random pick need no decision).
+    * - CardLeaderInstance.as:653 LWEA: Pick_Weather with more than one weather card in the deck.
+    * - CardLeaderInstance.as:694 LBIN: Bin2_Pick1, each of the two cards to discard (two D LBIN).
+    * - CardLeaderInstance.as:727 LPICK: Bin2_Pick1, the card to take from the deck.
+    * - GwintGameFlowController.as:327 MUL: the mulligan (each redraw a D MUL, the close an M).
+    * - HumanPlayerController.as:747 local: card zoom of a hand or row, whose pick only starts a transaction; the move
+    *   is sent at the commit points like any other.
+    * - HumanPlayerController.as:751 local: card zoom without a pick (display only).
+    * - W3ChoiceDialog.as:86 local: showDialogCardInstances hands its list to showDialog (the dialog itself).
+    * - W3ChoiceDialog.as:97 local: showDialogCardTemplates hands its list to showDialog (the dialog itself).
+    * The other decision of the spec is not a dialog: COIN, the Scoia'tael choice of who starts
+    * (GwintGameFlowController.state_begin_CoinToss raises COIN_TOSS_POPUP_NEEDED for the script's popup, whose answer
+    * comes back through GwintGameMenu.setFirstTurn).
     */
    public class DuelSession
    {
@@ -53,6 +90,24 @@ package red.game.witcher3.menus.gwint
 
       /** Target seat argument of P for a slot that belongs to no side (the weather slot). */
       public static const NO_SEAT:String = "N";
+
+      /** The decision message type: args = kind, asker, choice. */
+      public static const DECISION:String = "D";
+
+      /** The mulligan done message type (no args). */
+      public static const MULLIGAN_DONE:String = "M";
+
+      /** Decision kind of a mulligan redraw. */
+      public static const MULLIGAN:String = "MUL";
+
+      /** Decision kind of the Scoia'tael choice of who starts. */
+      public static const COIN:String = "COIN";
+
+      /** Asker of a decision the rules ask without a card (the mulligan). */
+      public static const ASKER_PERK:String = "perk";
+
+      /** Asker of the coin decision. */
+      public static const ASKER_COIN:String = "coin";
 
       private static const MOVE_TYPES:Array = ["P","C","G","L","S"];
 
@@ -97,6 +152,12 @@ package red.game.witcher3.menus.gwint
       private var _sentHashes:Object;
 
       private var _lastAppliedHash:uint;
+
+      /** The decision the local seat makes now: kind, asker, scope, showFn, applyFn, autoFn, shown (or null). */
+      private var _localDecision:Object;
+
+      /** The decision the opponent makes now: kind, asker, scope, applyFn (or null). */
+      private var _remoteDecision:Object;
 
       /**
        * Starts a duel game (use start(), which also makes it the active one).
@@ -295,13 +356,157 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * A seat's mulligan redraws so far (part of the SCOPE_SEAT hash; counted from Task 12, 0 until then).
+       * A seat's mulligan redraws so far (part of the SCOPE_SEAT hash).
        * @param seat DuelIds.SEAT_A or SEAT_B.
        * @return The count.
        */
       public function mulligans(seat:int) : int
       {
          return seat == DuelIds.SEAT_A || seat == DuelIds.SEAT_B ? int(this._mulligans[seat]) : 0;
+      }
+
+      /**
+       * Counts one applied mulligan redraw of a seat (after the redraw, so D MUL hashes the count before it).
+       * @param seat DuelIds.SEAT_A or SEAT_B.
+       */
+      public function countMulligan(seat:int) : void
+      {
+         if(seat == DuelIds.SEAT_A || seat == DuelIds.SEAT_B)
+         {
+            this._mulligans[seat] = int(this._mulligans[seat]) + 1;
+         }
+      }
+
+      /**
+       * Sends a local mulligan redraw (D MUL,perk,<netId>, SCOPE_SEAT) before it applies.
+       * @param card The PLAYER_1 hand card the player gives back.
+       * @return False if the duel has ended or the card has no net id (then nothing may be redrawn).
+       */
+      public function sendRedraw(card:CardInstance) : Boolean
+      {
+         var netId:int = card != null ? this._ids.toNet(card.instanceId) : -1;
+         if(this._ended || netId < 0)
+         {
+            return false;
+         }
+         this.send(DECISION,[MULLIGAN,ASKER_PERK,DuelIds.format(netId)],DuelStateHash.SCOPE_SEAT);
+         return true;
+      }
+
+      /**
+       * Sends the local mulligan done (M, SCOPE_SEAT: after the last redraw).
+       */
+      public function sendMulliganDone() : void
+      {
+         this.send(MULLIGAN_DONE,[],DuelStateHash.SCOPE_SEAT);
+      }
+
+      /**
+       * Who makes a choice the rules ask for (spec 9.6). The local seat: showLocal() shows the choice once the board
+       * has settled (no card moves, no card FX), and the UI hands the player's pick to answer(kind, choice), which
+       * sends D and then calls apply(choice). The opponent's seat: the board holds (decisionOpen) until the opponent's
+       * D of this kind and asker arrives, then its hash is checked and apply(choice) runs with the same choice.
+       * @param kind A decision kind (NUR, LRES, LWEA, LBIN, LPICK, COIN; MUL goes through sendRedraw).
+       * @param seat The seat that decides.
+       * @param askerNetId The net id of the card that asks, or -1 (then the asker is "coin" for COIN, else "perk").
+       * @param showLocal function():void, shows the choice to the local player.
+       * @param apply function(choice:String):Boolean, applies a choice; false if it is not one of the options (a
+       * desync).
+       * @param autoChoice function():String, the choice duel autoplay makes (null: autoplay never answers).
+       */
+      public function decide(kind:String, seat:int, askerNetId:int, showLocal:Function, apply:Function, autoChoice:Function = null) : void
+      {
+         if(this._ended)
+         {
+            return;
+         }
+         var asker:String = askerNetId >= 0 ? DuelIds.format(askerNetId) : (kind == COIN ? ASKER_COIN : ASKER_PERK);
+         if(this._localDecision != null || this._remoteDecision != null)
+         {
+            this.localDesync("decision " + kind + " while another is open");
+            return;
+         }
+         var decision:Object = {"kind":kind,"asker":asker,"scope":scopeOf(kind),"showFn":showLocal,"applyFn":apply,"autoFn":autoChoice,"shown":false};
+         if(seat == this.localSeat)
+         {
+            this.log("DUEL DECIDE " + kind + " asker=" + asker + " by=local");
+            this._localDecision = decision;
+         }
+         else if(seat == DuelIds.SEAT_B - this.localSeat)
+         {
+            this.log("DUEL DECIDE " + kind + " asker=" + asker + " by=opponent");
+            this._remoteDecision = decision;
+         }
+         else
+         {
+            this.localDesync("decision " + kind + " without a seat");
+         }
+      }
+
+      /**
+       * The local player's answer to the open local decision (called by the choice UI): sends D, then applies it.
+       * Ignored unless a decision of this kind is open and already shown (a second click, a stale dialog).
+       * @param kind The decision kind the UI was shown for.
+       * @param choice The choice as it goes on the wire (net id, t<templateId>, 1/0).
+       */
+      public function answer(kind:String, choice:String) : void
+      {
+         var decision:Object = this._localDecision;
+         if(this._ended || decision == null || decision.kind != kind || !decision.shown || choice == null)
+         {
+            return;
+         }
+         this._localDecision = null;
+         this.send(DECISION,[kind,decision.asker,choice],decision.scope);
+         var apply:Function = decision.applyFn;
+         if(!apply(choice))
+         {
+            this.localDesync("choice " + kind + " " + choice);
+         }
+      }
+
+      /**
+       * True while a decision is open (local or the opponent's): the controllers and the game flow hold until it is
+       * applied.
+       */
+      public function get decisionOpen() : Boolean
+      {
+         return this._localDecision != null || this._remoteDecision != null;
+      }
+
+      /**
+       * The local card instance of a net id argument ("A17").
+       * @param arg A net id as written on the wire.
+       * @return The card, or null if the argument is malformed or the net id unknown here.
+       */
+      public function cardOfArg(arg:String) : CardInstance
+      {
+         var netId:int = arg != null ? DuelIds.parse(arg) : -1;
+         var instanceId:int = netId >= 0 ? this._ids.toLocal(netId) : -1;
+         return instanceId >= 0 ? CardManager.getInstance().getCardInstance(instanceId) : null;
+      }
+
+      /**
+       * The net id of a local instance as written on the wire ("A17").
+       * @param instanceId A local card instance id.
+       * @return The net id text, or "none" when the instance has no net id (no option matches it).
+       */
+      public function netName(instanceId:int) : String
+      {
+         var netId:int = this._ids.toNet(instanceId);
+         return netId >= 0 ? DuelIds.format(netId) : "none";
+      }
+
+      /** The hash scope of a decision kind (spec 8.4): the seat's own state for the mulligan and the coin. */
+      private function scopeOf(kind:String) : int
+      {
+         return kind == COIN || kind == MULLIGAN ? DuelStateHash.SCOPE_SEAT : DuelStateHash.SCOPE_FULL;
+      }
+
+      /** No card moves and no card FX plays: both boards hash a decision point in this state. */
+      private function settled() : Boolean
+      {
+         return !CardTweenManager.getInstance().isAnyCardMoving() && !CardFXManager.getInstance().isPlayingAnyCardFX();
       }
 
       /**
@@ -443,6 +648,12 @@ package red.game.witcher3.menus.gwint
          if(next != null)
          {
             this.dispatch(next);
+         }
+         if(!this._ended && this._localDecision != null && !this._localDecision.shown && this.settled())
+         {
+            this._localDecision.shown = true;
+            var show:Function = this._localDecision.showFn;
+            show();
          }
          if(!this._ended && GwintGameMenu.mSingleton.duelDebugAutoplay)
          {
@@ -627,6 +838,22 @@ package red.game.witcher3.menus.gwint
             }
             return;
          }
+         if(this._remoteDecision != null && next.type != DECISION)
+         {
+            this._window.pop();
+            this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,"expected decision " + this._remoteDecision.kind);
+            return;
+         }
+         if(next.type == MULLIGAN_DONE || next.type == DECISION && next.args.length > 0 && next.args[0] == MULLIGAN)
+         {
+            this.dispatchMulligan(next);
+            return;
+         }
+         if(next.type == DECISION)
+         {
+            this.dispatchDecision(next);
+            return;
+         }
          if(MOVE_TYPES.indexOf(next.type) >= 0)
          {
             var opponent:NetOpponentController = GwintGameFlowController.getInstance().playerControllers[CardManager.PLAYER_2] as NetOpponentController;
@@ -638,6 +865,75 @@ package red.game.witcher3.menus.gwint
          }
          this._window.pop();
          this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,"unsupported " + next.type);
+      }
+
+      /**
+       * The opponent's mulligan (D MUL or M, spec 9.4): waits until this board has drawn its hands, then checks the
+       * opponent seat's hash (SCOPE_SEAT) and applies the redraw to PLAYER_2, or marks its mulligan done. A redraw of a
+       * card that is not in its hand, a third redraw, or anything after its M or after round 1 started is a desync.
+       */
+      private function dispatchMulligan(next:DuelMessage) : void
+      {
+         var flow:GwintGameFlowController = GwintGameFlowController.getInstance();
+         if(flow.duelMulliganPhase == GwintGameFlowController.DUEL_MULLIGAN_NOT_YET)
+         {
+            return;
+         }
+         this._window.pop();
+         if(!this.checkApply(next,DuelStateHash.SCOPE_SEAT))
+         {
+            return;
+         }
+         var applied:Boolean;
+         if(next.type == MULLIGAN_DONE)
+         {
+            applied = next.args.length == 0 && flow.duelApplyRemoteMulliganDone();
+         }
+         else
+         {
+            applied = next.args.length == 3 && next.args[1] == ASKER_PERK && flow.duelApplyRemoteRedraw(this.cardOfArg(next.args[2]));
+         }
+         if(!applied)
+         {
+            this.desync(next.seq,this._lastAppliedHash,next.hash,"mulligan " + next.args.join(","));
+         }
+      }
+
+      /**
+       * The opponent's answer to the decision this board waits for (spec 9.6): taken once the board has settled (so
+       * the hash is that of the decision point), checked, then applied. A D while this board waits for its own
+       * player's answer, a D of another kind or asker, and a choice that is not one of the options are desyncs; a D
+       * before this board reached the decision point waits in the window.
+       */
+      private function dispatchDecision(next:DuelMessage) : void
+      {
+         if(this._localDecision != null)
+         {
+            this._window.pop();
+            this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,"decision while local " + this._localDecision.kind);
+            return;
+         }
+         var pending:Object = this._remoteDecision;
+         if(pending == null || !this.settled())
+         {
+            return;
+         }
+         this._window.pop();
+         if(!this.checkApply(next,pending.scope))
+         {
+            return;
+         }
+         if(next.args.length != 3 || next.args[0] != pending.kind || next.args[1] != pending.asker)
+         {
+            this.desync(next.seq,this._lastAppliedHash,next.hash,"decision " + next.args.join(",") + " for " + pending.kind + "," + pending.asker);
+            return;
+         }
+         this._remoteDecision = null;
+         var apply:Function = pending.applyFn;
+         if(!apply(next.args[2]))
+         {
+            this.desync(next.seq,this._lastAppliedHash,next.hash,"choice " + next.args.join(","));
+         }
       }
 
       /**
@@ -852,13 +1148,21 @@ package red.game.witcher3.menus.gwint
          var flow:GwintGameFlowController = GwintGameFlowController.getInstance();
          var menu:GwintGameMenu = GwintGameMenu.mSingleton;
          var what:String = "";
-         if(flow.stateMachine.currentState == "Mulligan" && !flow.duelMulliganDecided && menu.mcChoiceDialog.isShown())
+         if(this._localDecision != null)
+         {
+            what = this._localDecision.shown && this._localDecision.autoFn != null ? "decide" : "";
+         }
+         else if(flow.stateMachine.currentState == "Mulligan" && !flow.duelMulliganDecided && menu.mcChoiceDialog.isShown())
          {
             what = "mulligan";
          }
          else if(menu.mcEndGameDialog != null && menu.mcEndGameDialog.visible)
          {
             what = "end";
+         }
+         else if(menu.mcChoiceDialog.isShown() && flow.stateMachine.currentState != "Mulligan")
+         {
+            what = "dialog";
          }
          if(what != this._autoSeenWhat)
          {
@@ -871,10 +1175,23 @@ package red.game.witcher3.menus.gwint
             return;
          }
          this._autoSeenMs = getTimer();
-         if(what == "mulligan")
+         if(what == "decide")
+         {
+            var auto:Function = this._localDecision.autoFn;
+            var kind:String = this._localDecision.kind;
+            var choice:String = auto();
+            this.log("DUEL AUTOPLAY decide " + kind + " " + choice);
+            this.answer(kind,choice);
+         }
+         else if(what == "mulligan")
          {
             this.log("DUEL AUTOPLAY mulligan " + (menu.duelDebugMulligan ? "redraw" : "decline"));
             flow.duelAutoMulligan(menu.duelDebugMulligan);
+         }
+         else if(what == "dialog")
+         {
+            this.log("DUEL AUTOPLAY close dialog");
+            menu.mcChoiceDialog.hideDialog();
          }
          else
          {
