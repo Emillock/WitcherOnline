@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameMenu.as b/red/game/witcher3/menus/gwint/GwintGameMenu.as
-index d420f42..54ee838 100644
+index d420f42..5a165d9 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameMenu.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameMenu.as
 @@ -3,7 +3,9 @@ package red.game.witcher3.menus.gwint
@@ -12,7 +12,7 @@ index d420f42..54ee838 100644
     import red.core.constants.KeyCode;
     import red.core.events.GameEvent;
     import red.core.events.GestureEventEx;
-@@ -57,6 +59,32 @@ package red.game.witcher3.menus.gwint
+@@ -57,6 +59,35 @@ package red.game.witcher3.menus.gwint
        
        public var mcBoardRenderer:GwintBoardRenderer;
        
@@ -31,8 +31,11 @@ index d420f42..54ee838 100644
 +      /** Test switch gwint.game.debug.corruptAt: the outbound seq whose state the board corrupts (0: off; Task 11). */
 +      public var duelDebugCorruptAt:int = 0;
 +      
-+      /** Test switch gwint.game.debug.forceDraw: the match ends as a draw (Task 14). */
++      /** Test switch gwint.game.debug.forceDraw: game 0 of the duel ends as a draw (DuelSession.finalWinner). */
 +      public var duelDebugForceDraw:Boolean = false;
++
++      /** Test switch gwint.game.debug.replay: on a draw, duel autoplay presses Replay instead of closing. */
++      public var duelDebugReplay:Boolean = false;
 +      
 +      /** Test switch gwint.game.debug.breakTemplates: the local card table hash in Hello is off by one. */
 +      public var duelDebugBreakTemplates:Boolean = false;
@@ -45,7 +48,7 @@ index d420f42..54ee838 100644
        public function GwintGameMenu()
        {
           super();
-@@ -139,6 +167,18 @@ package red.game.witcher3.menus.gwint
+@@ -139,6 +170,19 @@ package red.game.witcher3.menus.gwint
           stage.addEventListener(GestureEventEx.GESTURE_PRESS,this.handleGestureOrMouseClick,false,2,true);
           this.setupSkipButton();
           this.mcChoiceDialog.visible = false;
@@ -59,12 +62,13 @@ index d420f42..54ee838 100644
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.leaderFirst",[this.setDuelDebugLeaderFirst]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.corruptAt",[this.setDuelDebugCorruptAt]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.forceDraw",[this.setDuelDebugForceDraw]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.replay",[this.setDuelDebugReplay]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.breakTemplates",[this.setDuelDebugBreakTemplates]));
 +         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.selfTest",[this.setDuelSelfTest]));
           dispatchEvent(new GameEvent(GameEvent.CALL,"OnConfigUI"));
           dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.spawnCardInstance",[this.onSpawnCardInstance]));
           dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.addCardToDeck",[this.onAddCardToDeck]));
-@@ -348,8 +388,252 @@ package red.game.witcher3.menus.gwint
+@@ -348,8 +392,265 @@ package red.game.witcher3.menus.gwint
           _cardManager.cardValues = cardValues as GwintCardValues;
        }
        
@@ -192,12 +196,21 @@ index d420f42..54ee838 100644
 +      }
 +      
 +      /**
-+       * Flash value gwint.game.debug.forceDraw (test bots only, used from Task 14).
-+       * @param enabled Whether the match ends as a draw.
++       * Flash value gwint.game.debug.forceDraw (test bots only).
++       * @param enabled Whether game 0 of the duel ends as a draw.
 +       */
 +      public function setDuelDebugForceDraw(enabled:Boolean) : void
 +      {
 +         this.duelDebugForceDraw = enabled;
++      }
++
++      /**
++       * Flash value gwint.game.debug.replay (test bots only).
++       * @param enabled Whether duel autoplay presses Replay on a draw (else it closes the end screen).
++       */
++      public function setDuelDebugReplay(enabled:Boolean) : void
++      {
++         this.duelDebugReplay = enabled;
 +      }
 +      
 +      /**
@@ -241,16 +254,20 @@ index d420f42..54ee838 100644
 +      }
 +      
 +      /**
-+       * The duel game ended with a result: OnMatchResult as vanilla, then OnMultiplayerDraw for a draw (after
-+       * OnMatchResult, which clears the script's draw flag), then the menu closes.
++       * The duel ended with a result, then the menu closes: a win or loss calls OnMatchResult as vanilla (the script
++       * settles the bet), a draw that is not replayed calls OnMultiplayerDraw instead (R13: no money moves; a replayed
++       * draw never comes here).
 +       * @param result win, loss or draw.
 +       */
 +      public function duelFinish(result:String) : void
 +      {
-+         dispatchEvent(new GameEvent(GameEvent.CALL,"OnMatchResult",[result == "win"]));
 +         if(result == "draw")
 +         {
 +            dispatchEvent(new GameEvent(GameEvent.CALL,"OnMultiplayerDraw"));
++         }
++         else
++         {
++            dispatchEvent(new GameEvent(GameEvent.CALL,"OnMatchResult",[result == "win"]));
 +         }
 +         closeMenu();
 +      }
@@ -317,7 +334,7 @@ index d420f42..54ee838 100644
           if(turnAIOn)
           {
              this.gameFlowController.turnOnAI(CardManager.PLAYER_1);
-@@ -367,6 +651,12 @@ package red.game.witcher3.menus.gwint
+@@ -367,6 +668,12 @@ package red.game.witcher3.menus.gwint
        
        public function setFirstTurn(playerFirst:Boolean) : void
        {
@@ -330,7 +347,7 @@ index d420f42..54ee838 100644
           if(playerFirst)
           {
              this.mcMessageQueue.PushMessage("[[gwint_player_will_go_first_message]]");
-@@ -448,9 +738,28 @@ package red.game.witcher3.menus.gwint
+@@ -448,9 +755,28 @@ package red.game.witcher3.menus.gwint
           return null;
        }
        
@@ -359,7 +376,7 @@ index d420f42..54ee838 100644
           if(params.length < 3)
           {
              throw Error;
-@@ -464,6 +773,10 @@ package red.game.witcher3.menus.gwint
+@@ -464,6 +790,10 @@ package red.game.witcher3.menus.gwint
        
        private function onAddCardToDeck(params:Array) : *
        {
@@ -370,7 +387,7 @@ index d420f42..54ee838 100644
           if(params.length < 2)
           {
              throw Error;
-@@ -477,6 +790,10 @@ package red.game.witcher3.menus.gwint
+@@ -477,6 +807,10 @@ package red.game.witcher3.menus.gwint
        private function onKillCard(params:Array) : *
        {
           var card:* = undefined;

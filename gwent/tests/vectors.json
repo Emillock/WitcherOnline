@@ -336,7 +336,9 @@
    ["1.1a2b3c4dg2.15.QUITGAME.0.00000001", 1, "1a2b3c4dg2", 15, "QUITGAME", "0", 1],
    ["1.1a2b3c4dg2.13.Y.deadbeef,12.80000000", 1, "1a2b3c4dg2", 13, "Y", "deadbeef,12", 2147483648],
    ["1.1a2b3c4dg2.14.R._.01020304", 1, "1a2b3c4dg2", 14, "R", "", 16909060],
-   ["1.1a2b3c4dg2.999999999.X._.cafebabe", 1, "1a2b3c4dg2", 999999999, "X", "", 3405691582]
+   ["1.1a2b3c4dg2.999999999.X._.cafebabe", 1, "1a2b3c4dg2", 999999999, "X", "", 3405691582],
+   ["1.1a2b3c4dg2.16.E.A.2468ace0", 1, "1a2b3c4dg2", 16, "E", "A", 610839776],
+   ["1.1a2b3c4dg3.17.E.N.13579bdf", 1, "1a2b3c4dg3", 17, "E", "N", 324508639]
   ],
   "malformed": [
    "",
@@ -367,13 +369,15 @@
    "1.1a2b3c4dg2.1.S._.00000000~1.1a2b3c4dg2.2.S._.00000000",
    "1.1a2b3c4dg2.1.QUITGAME._.00000000",
    "1.1a2b3c4dg2.1.QUITGAME.2.00000000",
-   "1.1a2b3c4dg2.1.QUITGAME.1,0.00000000"
+   "1.1a2b3c4dg2.1.QUITGAME.1,0.00000000",
+   "1.1a2b3c4dg2.1.e.A.00000000"
   ]
  },
  "window": [
   {
    "name": "dedupe_and_gap",
    "matchId": "1a2b3c4dg2",
+   "firstSeq": 1,
    "ingest": [
     "none",
     "1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13",
@@ -387,6 +391,7 @@
   {
    "name": "queued_dedupe_out_of_order",
    "matchId": "1a2b3c4dg2",
+   "firstSeq": 1,
    "ingest": [
     "1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13",
     "1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13",
@@ -398,6 +403,7 @@
   {
    "name": "late_window_other_match",
    "matchId": "1a2b3c4dg2",
+   "firstSeq": 1,
    "ingest": [
     "1.ffffffffg9.1.P.A17,3,B.9e3779b1~1.ffffffffg9.2.M._.3c6ef362~1.ffffffffg9.3.S._.daa66d13~1.ffffffffg9.4.P.A17,3,B.78dde6c4",
     "1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1",
@@ -410,6 +416,7 @@
   {
    "name": "skips_ahead",
    "matchId": "1a2b3c4dg2",
+   "firstSeq": 1,
    "ingest": [
     "1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4",
     "1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4~1.1a2b3c4dg2.5.M._.17156075",
@@ -421,6 +428,7 @@
   {
    "name": "sliding_window",
    "matchId": "1a2b3c4dg2",
+   "firstSeq": 1,
    "ingest": [
     "1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362",
     "1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4",
@@ -431,8 +439,22 @@
    "gap": [0, 0, 0, 0]
   },
   {
+   "name": "replayed_game_goes_on_counting",
+   "matchId": "1a2b3c4dg3",
+   "firstSeq": 40,
+   "ingest": [
+    "1.1a2b3c4dg2.38.M._.7c3c1046~1.1a2b3c4dg2.39.S._.1a7389f7~1.1a2b3c4dg2.40.P.A17,3,B.b8ab03a8",
+    "1.1a2b3c4dg3.36.S._.3fcd1ce4~1.1a2b3c4dg3.37.P.A17,3,B.de049695~1.1a2b3c4dg3.38.M._.7c3c1046~1.1a2b3c4dg3.39.S._.1a7389f7~1.1a2b3c4dg3.40.P.A17,3,B.b8ab03a8",
+    "1.1a2b3c4dg3.41.M._.56e27d59~1.1a2b3c4dg3.42.S._.f519f70a~1.1a2b3c4dg3.43.P.A17,3,B.935170bb",
+    "1.1a2b3c4dg3.45.S._.cfc0641d~1.1a2b3c4dg3.46.P.A17,3,B.6df7ddce"
+   ],
+   "pops": ["", "40", "41,42,43", ""],
+   "gap": [0, 0, 0, 1]
+  },
+  {
    "name": "garbage_and_other_version",
    "matchId": "1a2b3c4dg2",
+   "firstSeq": 1,
    "ingest": [
     "",
     "none~junk~1.abc.x.P._.0~2.1a2b3c4dg2.1.P.A17,3,B.9e3779b1",

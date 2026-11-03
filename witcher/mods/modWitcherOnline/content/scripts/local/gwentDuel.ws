@@ -154,12 +154,17 @@ var duelDebugMulligan : bool;
 @addField(CR4GwintManager)
 var duelDebugLeaderFirst : bool;
 
-// The outbound sequence number the board corrupts (0: off).
+// The outbound sequence number the board corrupts (0: off; -1: the end of game message).
 @addField(CR4GwintManager)
 var duelDebugCorruptAt : int;
 
+// Game 0 of the duel ends as a draw whatever the score.
 @addField(CR4GwintManager)
 var duelDebugForceDraw : bool;
+
+// On a draw, autoplay presses Replay instead of closing the end screen.
+@addField(CR4GwintManager)
+var duelDebugReplay : bool;
 
 @addField(CR4GwintManager)
 var duelDebugBreakTemplates : bool;
@@ -251,6 +256,7 @@ function OnConfigUI()
     m_flashValueStorage.SetFlashBool("gwint.game.debug.leaderFirst", manager.duelDebugLeaderFirst);
     m_flashValueStorage.SetFlashInt("gwint.game.debug.corruptAt", manager.duelDebugCorruptAt);
     m_flashValueStorage.SetFlashBool("gwint.game.debug.forceDraw", manager.duelDebugForceDraw);
+    m_flashValueStorage.SetFlashBool("gwint.game.debug.replay", manager.duelDebugReplay);
     m_flashValueStorage.SetFlashBool("gwint.game.debug.breakTemplates", manager.duelDebugBreakTemplates);
     m_flashValueStorage.SetFlashBool("gwint.game.debug.selfTest", manager.duelSelfTest);
 }

@@ -103,6 +103,37 @@ def test_logdiff_unapplied_tail_is_fine(tmp_path: Path) -> None:
     assert duel_logdiff.main([path_a, path_b]) == 0
 
 
+def test_logdiff_skips_the_hash_of_a_surrender(tmp_path: Path, capsys) -> None:
+    """QUITGAME carries the quitter's hash at the menu action, not at a logical point (R26): the receiver's own hash
+    may differ and that is no divergence. The token itself must still be the one that was sent."""
+    quit_a = f"1.{MATCH}.3.QUITGAME.1.55556666"
+    log_a, log_b = mirrored_logs()
+    log_a += f"12:00:09.000 GwentDuel: DUEL SEND {quit_a}\n"
+    log_b += f"12:00:09.000 GwentDuel: DUEL APPLY {quit_a} mine=77778888\n"
+    path_a, path_b = write_pair(tmp_path, log_a, log_b)
+    assert duel_logdiff.main([path_a, path_b]) == 0, capsys.readouterr().out
+    changed = quit_a.replace(".QUITGAME.1.", ".QUITGAME.0.")
+    path_a, path_b = write_pair(tmp_path, log_a, log_b.replace(f"DUEL APPLY {quit_a}", f"DUEL APPLY {changed}"))
+    assert duel_logdiff.main([path_a, path_b]) == 1
+    assert "DIVERGED at seq=3:" in capsys.readouterr().out
+
+
+def test_logdiff_follows_a_replayed_game(tmp_path: Path) -> None:
+    """After a replay the match id changes and the seqs keep counting (spec 9.8): game 1's messages and rounds are
+    compared like game 0's."""
+    hello = f"1.{MATCH}.1.H.1a2b3c4d,0000beef,0000cafe.0badf00d"
+    end_a, end_b = f"1.{MATCH}.2.E.N.aaaa0002", f"1.{MATCH}.2.E.N.aaaa0002"
+    replay_a, replay_b = f"1.{MATCH}.3.R._.aaaa0002", f"1.{MATCH}.3.R._.aaaa0002"
+    next_a, next_b = "1.3039g1.4.M._.00001234", "1.3039g1.4.M._.00004321"
+    rounds = [(1, "0,0", "aaaa0001"), (1, "0,0", "bbbb0001")]
+    log_a = log_lines([hello, end_a, replay_a, next_a],
+                      [(hello, "0badf00d"), (end_b, "aaaa0002"), (replay_b, "aaaa0002"), (next_b, "00004321")], rounds, "A")
+    log_b = log_lines([hello, end_b, replay_b, next_b],
+                      [(hello, "0badf00d"), (end_a, "aaaa0002"), (replay_a, "aaaa0002"), (next_a, "00001234")], rounds, "B")
+    path_a, path_b = write_pair(tmp_path, log_a, log_b)
+    assert duel_logdiff.main([path_a, path_b]) == 0
+
+
 def test_logdiff_round_missing(tmp_path: Path, capsys) -> None:
     """A round one side logged and the other did not is a divergence at that round."""
     log_a, log_b = mirrored_logs()

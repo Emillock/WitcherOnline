@@ -20,7 +20,10 @@ package red.game.witcher3.menus.gwint
     * field carries the protocol version. A message of another protocol version never gets through DuelWindow (it drops
     * other versions), so before Hello onRemoteInput looks at the first field of every raw token (version).
     * Surrender (QUITGAME, arg 1 = the quitter settles, 0 = it quit during the Hello wait) is handled whenever it is the
-    * next message, before or after Hello.
+    * next message, before or after Hello, and ends the game as a win (or no contest) on the receiver. R41: if both
+    * players surrender before either sees the other's QUITGAME, each settles its own loss; the opponent's QUITGAME
+    * that arrives after the local surrender is logged (DUEL IGNORED) and ignored. R42: a surrender that crosses a Y
+    * stays as is: the quitter pays its loss, the other side ends as no contest (desync) with no money.
     *
     * Moves (spec 5, 9.5): HumanPlayerController sends P, C, G or L (sendMove) at its commit points and S when it passes,
     * before the move applies; NetOpponentController applies the opponent's moves. Move arguments:
@@ -59,6 +62,16 @@ package red.game.witcher3.menus.gwint
     * the round start perks (Northern Realms draw, Skellige round 3) together in seat order at the first perk message
     * (GwintGameFlowController.duelRunRoundStartPerks), the Monsters round-end loop in seat order
     * (CardManager.duelClearOrder).
+    * Match end (spec 9.8, R43, DuelEnd): at the end of a game (gameOver, the board settled) each board sends E (the
+    * winner as it sees it: A, B, or N for a draw; SCOPE_FULL hash of the final state) and waits. Neither seat settles
+    * until the opponent's E arrives with the same winner and the same hash as its own E: only then the end screen
+    * opens (and its close settles a win or loss). A Y in that wait ends as no contest (desync), no E within
+    * STUCK_WAIT_MS as no contest (end_timeout), so a desync on the last message of a match pays neither side.
+    * gwint.game.debug.forceDraw (test) makes game 0 a draw. A confirmed draw: Replay sends R ("Waiting for your
+    * opponent"); once both seats sent R the next game starts (startNextGame: game number n+1, new DuelRandom(seed, n+1),
+    * fresh net ids, match id and DuelWindow, outbound seq numbers keep counting, the window goes on from the seq after
+    * the opponent's R). Closing the end screen sends X; X, or no R within STUCK_WAIT_MS after the local R (then this
+    * board sends X), ends the match as a draw that moves no money (OnMultiplayerDraw, R13).
     *
     * Choice dialog callers (W3ChoiceDialog.showDialog*) in the decompiled vanilla 5.01 board, file:line in that output
     * (red/game/witcher3/menus/gwint, or red/game/witcher3/controls for W3ChoiceDialog), with the decision kind:
@@ -84,8 +97,14 @@ package red.game.witcher3.menus.gwint
    public class DuelSession
    {
 
+      /**
+       * The stuck-wait limit (spec 10, Normal mode): how long the board waits for an opponent message it needs before
+       * it gives up (the Hello, the end of game confirmation, the opponent's replay).
+       */
+      public static const STUCK_WAIT_MS:int = 120000;
+
       /** How long the board waits for the opponent's Hello before the duel ends as no contest (hello_timeout). */
-      public static const HELLO_TIMEOUT_MS:int = 120000;
+      public static const HELLO_TIMEOUT_MS:int = STUCK_WAIT_MS;
 
       /** Autoplay: how long the mulligan dialog or the end screen stays up before the bot answers it. */
       public static const AUTOPLAY_DELAY_MS:int = 1500;
@@ -104,6 +123,18 @@ package red.game.witcher3.menus.gwint
 
       /** The mulligan done message type (no args). */
       public static const MULLIGAN_DONE:String = "M";
+
+      /** The end of game message type: args = the winner as the sender sees it (A, B, or N for a draw). */
+      public static const END:String = "E";
+
+      /** The replay message type (no args): the sender pressed Replay on a drawn game. */
+      public static const REPLAY:String = "R";
+
+      /** The leave message type (no args): the sender closed the end screen of a drawn game. */
+      public static const LEAVE:String = "X";
+
+      /** gwint.game.debug.corruptAt value that corrupts the state right before this board's E (test). */
+      public static const CORRUPT_END:int = -1;
 
       /** Decision kind of a mulligan redraw. */
       public static const MULLIGAN:String = "MUL";
@@ -172,6 +203,21 @@ package red.game.witcher3.menus.gwint
       /** Rule effects waiting for the board to settle (deferEffect, spec 7.4). */
       private var _deferred:DuelDeferred;
 
+      /** The end of this game: confirmation, replay, leave. */
+      private var _end:DuelEnd;
+
+      /** function():void that opens the end screen once the result is confirmed (GwintGameFlowController). */
+      private var _showResult:Function;
+
+      /** The opponent's last window, ingested again into a replayed game's new DuelWindow. */
+      private var _lastWindow:String;
+
+      /** This game ended by the local player's surrender. */
+      private var _quitLocally:Boolean;
+
+      /** The opponent's QUITGAME after the local surrender was logged (R41). */
+      private var _lateQuitLogged:Boolean;
+
       /**
        * Starts a duel game (use start(), which also makes it the active one).
        * @param seed The match seed from the script.
@@ -190,6 +236,7 @@ package red.game.witcher3.menus.gwint
          this._mulligans = [0,0];
          this._mulligan = new DuelMulligan();
          this._deferred = new DuelDeferred();
+         this._end = new DuelEnd();
          this._recent = [];
          this._sentHashes = {};
          this._startMs = getTimer();
@@ -614,7 +661,8 @@ package red.game.witcher3.menus.gwint
             return;
          }
          this._outSeq++;
-         if(GwintGameMenu.mSingleton.duelDebugCorruptAt == this._outSeq)
+         var corruptAt:int = GwintGameMenu.mSingleton.duelDebugCorruptAt;
+         if(corruptAt == this._outSeq || corruptAt == CORRUPT_END && type == END)
          {
             this.corrupt(this._outSeq);
          }
@@ -631,12 +679,13 @@ package red.game.witcher3.menus.gwint
        * with the same branch order as BasePlayerController.state_begin_ApplyingCard: leader (L), play to a slot (P),
        * play onto a card (C), global effect (G).
        * @param transaction The decided move of PLAYER_1.
-       * @return False if the duel has ended (nothing may be played any more) or the move has no message (a desync).
+       * @return False if the duel or this game has ended (nothing may be played any more) or the move has no message
+       * (a desync).
        */
       public function sendMove(transaction:CardTransaction) : Boolean
       {
          var source:CardInstance = transaction != null ? transaction.sourceCardInstanceRef : null;
-         if(this._ended)
+         if(this._ended || this._end.over)
          {
             return false;
          }
@@ -695,10 +744,19 @@ package red.game.witcher3.menus.gwint
        */
       public function onRemoteInput(window:String) : void
       {
-         if(window == null || this._ended)
+         if(window == null)
          {
             return;
          }
+         if(this._ended)
+         {
+            if(this._quitLocally)
+            {
+               this.logLateQuit(window);
+            }
+            return;
+         }
+         this._lastWindow = window;
          if(!this._helloDone && this.hasHelloOfOtherVersion(window))
          {
             this.abort("version");
@@ -708,8 +766,8 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * One step of the duel, every 20 ms: Hello, the Hello wait limit, lost messages, the next inbound message,
-       * autoplay.
+       * One step of the duel, every 20 ms: Hello, the Hello wait limit, the end of game waits, lost messages, the next
+       * inbound message, autoplay.
        */
       public function update() : void
       {
@@ -729,6 +787,17 @@ package red.game.witcher3.menus.gwint
          }
          if(!this._helloSent)
          {
+            return;
+         }
+         if(this._end.confirmExpired(getTimer(),STUCK_WAIT_MS))
+         {
+            this.abort("end_timeout");
+            return;
+         }
+         if(this._end.replayExpired(getTimer(),STUCK_WAIT_MS))
+         {
+            this.send(LEAVE,[],DuelStateHash.SCOPE_FULL);
+            this.finishDraw("replay_timeout");
             return;
          }
          if(this._window.gap)
@@ -762,7 +831,12 @@ package red.game.witcher3.menus.gwint
        */
       public function logApply(message:DuelMessage, scope:int) : uint
       {
-         var mine:uint = DuelStateHash.compute(scope,this.seatOf(CardManager.PLAYER_2));
+         return this.logApplyHash(message,DuelStateHash.compute(scope,this.seatOf(CardManager.PLAYER_2)));
+      }
+
+      /** Logs DUEL APPLY for a message with the hash this client compares it with (mine). */
+      private function logApplyHash(message:DuelMessage, mine:uint) : uint
+      {
          var token:String = DuelCodec.encode(message);
          this.remember("applied " + token);
          this.log("DUEL APPLY " + token + " mine=" + DuelCodec.hex8(mine));
@@ -839,10 +913,106 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * The game ended with a result: logs DUEL END and hands the result to the script (the menu then closes).
+       * The player closed the end screen of a confirmed win or loss: logs DUEL END and hands the result to the script,
+       * which settles the bet (the menu then closes). Ignored before the opponent's E confirmed the result (R43); a
+       * draw goes to localLeave.
        * @param winner The local player index that won, PLAYER_INVALID for a draw.
        */
       public function finishGame(winner:int) : void
+      {
+         if(this._ended || this._end.phase != DuelEnd.CONFIRMED)
+         {
+            return;
+         }
+         if(winner == CardManager.PLAYER_INVALID)
+         {
+            this.localLeave();
+            return;
+         }
+         this._ended = true;
+         this._deferred.clear();
+         var result:String = winner == CardManager.PLAYER_1 ? "win" : "loss";
+         this.log("DUEL END result=" + result + " reason=match game=" + this._gameNumber);
+         GwintGameMenu.mSingleton.duelFinish(result);
+      }
+
+      /**
+       * The final winner of this game as the end screen shows it: gwint.game.debug.forceDraw (test) makes game 0 a
+       * draw (logged as DUEL FORCEDRAW); otherwise the vanilla result.
+       * @param winner The local player index the vanilla rules made the winner, PLAYER_INVALID for a draw.
+       * @return The winner to show and to send in E.
+       */
+      public function finalWinner(winner:int) : int
+      {
+         if(this._gameNumber != 0 || !GwintGameMenu.mSingleton.duelDebugForceDraw)
+         {
+            return winner;
+         }
+         this.log("DUEL FORCEDRAW game=0 winner=" + (winner == CardManager.PLAYER_INVALID ? DuelEnd.DRAW : seatName(this.seatOf(winner))));
+         return CardManager.PLAYER_INVALID;
+      }
+
+      /**
+       * The game is over on this board (GwintGameFlowController.state_begin_ShowingFinalResult, once the board has
+       * settled): sends E with the winner and the hash of the final state, then waits for the opponent's E (R43). The
+       * end screen opens (showResult) only when it agrees.
+       * @param winner The local player index that won, PLAYER_INVALID for a draw (after finalWinner).
+       * @param showResult function():void, opens the end screen.
+       */
+      public function gameOver(winner:int, showResult:Function) : void
+      {
+         if(this._ended || this._end.over)
+         {
+            return;
+         }
+         var seat:String = winner == CardManager.PLAYER_INVALID ? DuelEnd.DRAW : seatName(this.seatOf(winner));
+         this._showResult = showResult;
+         this.send(END,[seat],DuelStateHash.SCOPE_FULL);
+         this._end.reached(seat,this._outSeq,uint(this._sentHashes[this._outSeq]),getTimer());
+      }
+
+      /**
+       * The local player pressed Replay on the end screen of a confirmed draw: sends R. Once the opponent's R is in
+       * too, the next game starts.
+       * @return True when this board now waits for the opponent's R (the caller shows "Waiting for your opponent").
+       */
+      public function localReplay() : Boolean
+      {
+         if(this._ended || this._end.phase != DuelEnd.CONFIRMED || !this._end.isDraw || this._end.replaySent)
+         {
+            return false;
+         }
+         this.send(REPLAY,[],DuelStateHash.SCOPE_FULL);
+         this._end.replaySent = true;
+         this._end.replayAtMs = getTimer();
+         if(this._end.replayReceived)
+         {
+            this.startNextGame();
+            return false;
+         }
+         return true;
+      }
+
+      /**
+       * The local player closed the end screen of a confirmed draw: sends X and ends the match as a draw that moves no
+       * money.
+       */
+      public function localLeave() : void
+      {
+         if(this._ended || this._end.phase != DuelEnd.CONFIRMED || !this._end.isDraw)
+         {
+            return;
+         }
+         this.send(LEAVE,[],DuelStateHash.SCOPE_FULL);
+         this.finishDraw("leave");
+      }
+
+      /**
+       * Ends the match as a draw without a replay: logs DUEL END result=draw and tells the script (OnMultiplayerDraw:
+       * no money moves on either side); the menu then closes.
+       * @param reason leave (the local player closed the end screen), opponent_leave (X arrived) or replay_timeout.
+       */
+      private function finishDraw(reason:String) : void
       {
          if(this._ended)
          {
@@ -850,9 +1020,39 @@ package red.game.witcher3.menus.gwint
          }
          this._ended = true;
          this._deferred.clear();
-         var result:String = winner == CardManager.PLAYER_1 ? "win" : (winner == CardManager.PLAYER_2 ? "loss" : "draw");
-         this.log("DUEL END result=" + result + " reason=match game=" + this._gameNumber);
-         GwintGameMenu.mSingleton.duelFinish(result);
+         this.log("DUEL END result=draw reason=" + reason + " game=" + this._gameNumber);
+         GwintGameMenu.mSingleton.duelFinish("draw");
+      }
+
+      /**
+       * Both seats sent R: logs DUEL END result=draw reason=replay for this game and starts the next one (spec 9.8):
+       * game number n+1, its random streams, fresh net ids, its match id and a DuelWindow that goes on from the seq
+       * after the opponent's R (the outbound seq keeps counting), the opponent's last window ingested again (its first
+       * messages of the new game may already be in it), then GwintGameFlowController runs the vanilla Reset path.
+       */
+      private function startNextGame() : void
+      {
+         this.log("DUEL END result=draw reason=replay game=" + this._gameNumber);
+         var firstSeq:int = this._window.nextSeq;
+         this._gameNumber++;
+         this._random = new DuelRandom(this._seed,this._gameNumber);
+         this._ids.reset();
+         this._matchId = DuelMessage.matchIdFor(this._seed,this._gameNumber);
+         this._window = new DuelWindow(this._matchId,firstSeq);
+         this._mulligans = [0,0];
+         this._mulligan = new DuelMulligan();
+         this._deferred.clear();
+         this._localDecision = null;
+         this._remoteDecision = null;
+         this._end = new DuelEnd();
+         this._showResult = null;
+         this._autoSeenWhat = "";
+         this.log("DUEL GAME " + this._gameNumber + " match=" + this._matchId + " first=" + firstSeq);
+         if(this._lastWindow != null)
+         {
+            this._window.ingest(this._lastWindow);
+         }
+         GwintGameFlowController.getInstance().duelStartNextGame();
       }
 
       /**
@@ -877,7 +1077,7 @@ package red.game.witcher3.menus.gwint
        * The local player confirmed a surrender (GwintGameMenu.onQuitConfirmed; the script then closes the menu as a
        * forfeit). Sends QUITGAME with "1" when this side settles: its Hello is complete, so it pays the loss as today
        * and the opponent settles a win. Before that it sends "0" and the game ends as no contest on both sides
-       * (OnMultiplayerAbort, nobody pays).
+       * (OnMultiplayerAbort, nobody pays). Nothing is sent once the game ended (an aborted board pays nothing).
        */
       public function surrender() : void
       {
@@ -888,7 +1088,9 @@ package red.game.witcher3.menus.gwint
          var settles:Boolean = this._helloDone;
          this.send(DuelCodec.SURRENDER,[settles ? "1" : "0"],DuelStateHash.SCOPE_FULL);
          this._ended = true;
+         this._quitLocally = true;
          this._deferred.clear();
+         this.logLateQuit(this._lastWindow);
          if(settles)
          {
             this.log("DUEL END result=loss reason=surrender game=" + this._gameNumber);
@@ -932,6 +1134,11 @@ package red.game.witcher3.menus.gwint
             {
                this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,"before hello " + next.type);
             }
+            return;
+         }
+         if(next.type == END || next.type == REPLAY || next.type == LEAVE || this._end.over)
+         {
+            this.dispatchEnd(next);
             return;
          }
          if(this._remoteDecision == null && (next.type == MULLIGAN_DONE || next.type == DECISION && next.args.length > 0 && next.args[0] == MULLIGAN))
@@ -1025,6 +1232,79 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * The opponent's E, R or X, and any message after the end of this game (DuelEnd.route). Each is compared with
+       * the hash of this board's own E (the final state): E confirms the result and opens the end screen, R counts the
+       * opponent's replay (and starts the next game when this board sent R too), X ends the match as a draw. A mismatch,
+       * an E with another winner, and anything out of place are desyncs; an E before this board's own end waits.
+       */
+      private function dispatchEnd(next:DuelMessage) : void
+      {
+         var route:String = this._end.route(next);
+         if(route == DuelEnd.WAIT)
+         {
+            return;
+         }
+         this._window.pop();
+         if(route != DuelEnd.CONFIRM && route != DuelEnd.REPLAY && route != DuelEnd.LEAVE)
+         {
+            this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,route);
+            return;
+         }
+         var mine:uint = this.logApplyHash(next,this._end.endHash);
+         if(next.hash != mine)
+         {
+            this.desync(next.seq,mine,next.hash,"end hash");
+            return;
+         }
+         if(route == DuelEnd.LEAVE)
+         {
+            this.finishDraw("opponent_leave");
+            return;
+         }
+         if(route == DuelEnd.REPLAY)
+         {
+            this._end.replayReceived = true;
+            if(this._end.replaySent)
+            {
+               this.startNextGame();
+            }
+            return;
+         }
+         this._end.confirm();
+         this.log("DUEL CONFIRMED winner=" + this._end.winner + " game=" + this._gameNumber);
+         var show:Function = this._showResult;
+         this._showResult = null;
+         if(show != null)
+         {
+            show();
+         }
+      }
+
+      /**
+       * R41: the opponent's QUITGAME that this board had not applied when its own player surrendered is ignored (each
+       * quitter settles its own loss); it is logged once (DUEL IGNORED).
+       * @param window The opponent's window, or null.
+       */
+      private function logLateQuit(window:String) : void
+      {
+         if(window == null || this._lateQuitLogged)
+         {
+            return;
+         }
+         var tokens:Array = window.split(DuelWindow.SEPARATOR);
+         for(var i:int = 0; i < tokens.length; i++)
+         {
+            var m:DuelMessage = DuelCodec.decode(tokens[i]);
+            if(m != null && m.type == DuelCodec.SURRENDER && m.matchId == this._matchId)
+            {
+               this._lateQuitLogged = true;
+               this.log("DUEL IGNORED " + tokens[i] + " (after the local surrender)");
+               return;
+            }
+         }
+      }
+
+      /**
        * The opponent found a desync (Y: its hash, the seq of our message that failed): this side ends too, with the
        * hash it sent in that message as "mine".
        */
@@ -1062,8 +1342,9 @@ package red.game.witcher3.menus.gwint
 
       /**
        * gwint.game.debug.corruptAt (test): adds 1 to the power of one card of the local player (the hand card with the
-       * lowest net id, else the first card on its rows), so this client's hash no longer matches the opponent's board.
-       * The card's template is changed, so every card of that template on this client counts 1 more.
+       * lowest net id, else the first card on its rows, its graveyard or its leader slot: at the end of a game the rows
+       * are empty), so this client's hash no longer matches the opponent's board. The card's template is changed, so
+       * every card of that template on this client counts 1 more.
        */
       private function corrupt(seq:int) : void
       {
@@ -1078,7 +1359,7 @@ package red.game.witcher3.menus.gwint
                target = hand[i];
             }
          }
-         var rows:Array = [CardManager.CARD_LIST_LOC_SEIGE,CardManager.CARD_LIST_LOC_RANGED,CardManager.CARD_LIST_LOC_MELEE];
+         var rows:Array = [CardManager.CARD_LIST_LOC_SEIGE,CardManager.CARD_LIST_LOC_RANGED,CardManager.CARD_LIST_LOC_MELEE,CardManager.CARD_LIST_LOC_GRAVEYARD,CardManager.CARD_LIST_LOC_LEADER];
          for(i = 0; i < rows.length && target == null; i++)
          {
             var row:Vector.<CardInstance> = manager.getCardInstanceList(rows[i],CardManager.PLAYER_1);
@@ -1245,7 +1526,7 @@ package red.game.witcher3.menus.gwint
          {
             what = "mulligan";
          }
-         else if(menu.mcEndGameDialog != null && menu.mcEndGameDialog.visible)
+         else if(this._end.phase == DuelEnd.CONFIRMED && !this._end.replaySent && menu.mcEndGameDialog != null && menu.mcEndGameDialog.visible)
          {
             what = "end";
          }
@@ -1281,8 +1562,16 @@ package red.game.witcher3.menus.gwint
             this.log("DUEL AUTOPLAY close dialog");
             menu.mcChoiceDialog.hideDialog();
          }
+         else if(this._end.isDraw && menu.duelDebugReplay)
+         {
+            // as the end screen's Replay button does: the result callback, then the dialog hides
+            this.log("DUEL AUTOPLAY replay");
+            flow.EndGame(GwintEndGameDialog.EndGameDialogResult_Restart);
+            menu.mcEndGameDialog.hide();
+         }
          else
          {
+            this.log("DUEL AUTOPLAY close end screen");
             menu.mcEndGameDialog.closeButtonPressedOrTapped(null);
          }
       }

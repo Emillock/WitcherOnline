@@ -79,7 +79,7 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     assert '"gwint.game.debug.selfTest"' in menu and "DuelSelfTest.start" in menu
     assert "DuelProbe" not in menu
     for key in ("seed", "isHost", "isTimed", "opponentLeft", "remoteInput", "debug.autoplay", "debug.mulligan",
-                "debug.leaderFirst", "debug.corruptAt", "debug.forceDraw", "debug.breakTemplates"):
+                "debug.leaderFirst", "debug.corruptAt", "debug.forceDraw", "debug.replay", "debug.breakTemplates"):
         assert f'"gwint.game.{key}"' in menu
     gwint = decompiled / "red" / "game" / "witcher3" / "menus" / "gwint"
     assert "DuelSession.active.update()" in (gwint / "GwintGameFlowController.as").read_text()
@@ -102,3 +102,6 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     assert "DUEL EFFECT " in (gwint / "DuelSession.as").read_text()
     assert "duelCoinChosen" in menu
     assert "function onQuitConfirmed" in menu and "stopDuelTimer" in menu
+    assert "duelShowEndDialog" in flow and "duelStartNextGame" in flow
+    assert "DUEL CONFIRMED winner=" in (gwint / "DuelSession.as").read_text()
+    assert "confirmExpired" in (gwint / "DuelEnd.as").read_text()

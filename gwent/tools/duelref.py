@@ -1,7 +1,8 @@
 """Python reference for the Gwent duel primitives that the AS3 classes must match bit for bit.
 
 Covers the seeded random streams (DuelRandom), the state hash accumulator (hash_words), the message
-codec (encode, decode) and the opponent message window (Window).
+codec (encode, decode) and the opponent message window (Window, which a replayed game starts at the seq
+after the last message of the game before).
 
 usage:
   duelref.py vectors [--out <file>]   write the test vectors replayed by the in-game self-test
@@ -13,7 +14,8 @@ Wire format: six fields joined by ".":  version.matchId.seq.type.args.hash
   seq      positive decimal, 1 to 9 digits, no leading zero
   type     one of TYPES
   args     "_" when empty, else arguments joined by "," (each one of [A-Za-z0-9]+)
-           (QUITGAME: exactly one, "1" if the quitter settles the bet, "0" if not)
+           (QUITGAME: exactly one, "1" if the quitter settles the bet, "0" if not;
+           E, the end of a game: the winner as the sender sees it, A, B or N for a draw)
   hash     exactly 8 lowercase hex digits
 Messages in a window are joined by "~". "none" stands for an empty window.
 """
@@ -31,7 +33,7 @@ STREAM_SHARED = 2
 STREAM_COUNT = 3
 
 PROTOCOL_VERSION = 1
-TYPES = ("H", "P", "C", "G", "L", "S", "D", "M", "QUITGAME", "Y", "R", "X")
+TYPES = ("H", "P", "C", "G", "L", "S", "D", "M", "QUITGAME", "Y", "R", "X", "E")
 # Surrender carries exactly one argument: "1" if the quitter settles the bet (its Hello was complete), "0" if not.
 SURRENDER_TYPE = "QUITGAME"
 WINDOW_SEPARATOR = "~"
@@ -143,9 +145,9 @@ def decode(token: str) -> Message | None:
 class Window:
     """Receiving side of the message window: the opponent's messages, applied strictly in sequence order."""
 
-    def __init__(self, match_id: str) -> None:
+    def __init__(self, match_id: str, first_seq: int = 1) -> None:
         self._match_id = match_id
-        self._next_seq = 1
+        self._next_seq = first_seq
         self._queue: dict[int, Message] = {}
 
     def ingest(self, window: str) -> None:
@@ -244,6 +246,8 @@ def _codec_vectors() -> dict[str, list[Any]]:
         ("1a2b3c4dg2", 13, "Y", ["deadbeef", "12"], 0x80000000),
         ("1a2b3c4dg2", 14, "R", [], 0x01020304),
         ("1a2b3c4dg2", 999999999, "X", [], 0xCAFEBABE),
+        ("1a2b3c4dg2", 16, "E", ["A"], 0x2468ACE0),
+        ("1a2b3c4dg3", 17, "E", ["N"], 0x13579BDF),
     ]
     valid = []
     for match_id, seq, msg_type, args, hash_value in examples:
@@ -280,14 +284,17 @@ def _codec_vectors() -> dict[str, list[Any]]:
         f"1.{ok}.1.QUITGAME._.00000000",
         f"1.{ok}.1.QUITGAME.2.00000000",
         f"1.{ok}.1.QUITGAME.1,0.00000000",
+        f"1.{ok}.1.e.A.00000000",
     ]
     return {"valid": valid, "malformed": malformed}
 
 
 def _window_vectors() -> list[dict[str, Any]]:
-    """Scenarios as parallel per-step lists: window text, popped seqs (csv) after draining, and gap (0 or 1)."""
+    """Scenarios as parallel per-step lists: window text, popped seqs (csv) after draining, and gap (0 or 1); each
+    scenario's window starts at firstSeq (a replayed game's window goes on from the seq after the game before)."""
     mine = "1a2b3c4dg2"
     other = "ffffffffg9"
+    replay = "1a2b3c4dg3"
 
     def window(match_id: str, seqs: Iterable[int], version: int = PROTOCOL_VERSION) -> str:
         types = ("S", "P", "M")
@@ -299,8 +306,9 @@ def _window_vectors() -> list[dict[str, Any]]:
             tokens.append(encode(msg))
         return WINDOW_SEPARATOR.join(tokens)
 
-    def scenario(name: str, steps: list[tuple[str, list[int], int]]) -> dict[str, Any]:
-        return {"name": name, "matchId": mine, "ingest": [s[0] for s in steps],
+    def scenario(name: str, steps: list[tuple[str, list[int], int]], first_seq: int = 1,
+                 match_id: str = mine) -> dict[str, Any]:
+        return {"name": name, "matchId": match_id, "firstSeq": first_seq, "ingest": [s[0] for s in steps],
                 "pops": [",".join(str(p) for p in s[1]) for s in steps], "gap": [s[2] for s in steps]}
 
     return [
@@ -333,6 +341,12 @@ def _window_vectors() -> list[dict[str, Any]]:
             (window(mine, range(2, 6)), [5], 0),
             (window(mine, range(6, 26)), list(range(6, 26)), 0),
         ]),
+        scenario("replayed_game_goes_on_counting", [
+            (window(mine, range(38, 41)), [], 0),
+            (window(replay, range(36, 41)), [40], 0),
+            (window(replay, range(41, 44)), [41, 42, 43], 0),
+            (window(replay, range(45, 47)), [], 1),
+        ], first_seq=40, match_id=replay),
         scenario("garbage_and_other_version", [
             ("", [], 0),
             (WINDOW_SEPARATOR.join([EMPTY_WINDOW, "junk", "1.abc.x.P._.0", window(mine, [1], version=2)]), [], 0),

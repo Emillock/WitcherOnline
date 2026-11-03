@@ -11,8 +11,10 @@ appear as "<time> GwentDuel: DUEL ..."); everything else in it is ignored:
 
 Checks, messages first, then rounds:
   - for each direction (A to B, B to A) and each seq the receiver applied: the receiver applied exactly the token the
-    sender sent with that seq, and the receiver's own hash (mine=) equals the hash in the token. A message the
-    receiver never applied is fine (the match ended first).
+    sender sent with that seq, and the receiver's own hash (mine=) equals the hash in the token, except for QUITGAME
+    (a surrender carries the quitter's hash at the menu action, not at a logical point). A message the receiver never
+    applied is fine (the match ended first). Seqs keep counting across a replayed game, so the games of one match
+    compare as one sequence.
   - the n-th DUEL ROUND line of both logs has the same round number, scores and hash, and both logs have the same
     number of rounds.
 
@@ -28,6 +30,7 @@ from pathlib import Path
 SEND_RE = re.compile(r"DUEL SEND (\S+)")
 APPLY_RE = re.compile(r"DUEL APPLY (\S+) mine=([0-9a-f]{8})")
 ROUND_RE = re.compile(r"DUEL ROUND (\d+) scores=(\S+) hash=([0-9a-f]{8})")
+UNHASHED_TYPES = ("QUITGAME",)
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,12 @@ def token_hash(token: str) -> str:
     return token.split(".")[-1]
 
 
+def token_type(token: str) -> str:
+    """The type field of a wire token, or "" if it has none."""
+    fields = token.split(".")
+    return fields[3] if len(fields) == 6 else ""
+
+
 def parse(text: str) -> DuelLog:
     """Collects the SEND, APPLY and ROUND lines of a log."""
     log = DuelLog(sent={}, applied={}, rounds=[])
@@ -80,7 +89,7 @@ def message_divergences(sender: DuelLog, receiver: DuelLog, names: str) -> list[
             found.append((seq, f"{names}: applied {token} that was never sent"))
         elif sent != token:
             found.append((seq, f"{names}: sent {sent}, applied {token}"))
-        elif token_hash(token) != mine:
+        elif token_type(token) not in UNHASHED_TYPES and token_hash(token) != mine:
             found.append((seq, f"{names}: sender hash {token_hash(token)}, receiver mine={mine} ({token})"))
     return found
 

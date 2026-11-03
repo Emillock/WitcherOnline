@@ -12,7 +12,7 @@ Row shapes:
   HASH             [expected, word1, word2, ...]     words are signed int32 values
   CODEC            [token, version, matchId, seq, type, argsCsv, hash]
   CODEC_MALFORMED  token                             must decode to null
-  WINDOW           [scenarioIndex, name, matchId, ingest, popsCsv, gap]   one row per step
+  WINDOW           [scenarioIndex, name, matchId, ingest, popsCsv, gap, firstSeq]   one row per step
 """
 import argparse
 import json
@@ -47,8 +47,8 @@ DOCS = {
     "HASH": "Rows [expected, word1, word2, ...]: the DuelHash value after addInt of every word.",
     "CODEC": "Rows [token, version, matchId, seq, type, argsCsv, hash]: decode and encode must agree both ways.",
     "CODEC_MALFORMED": "Tokens that DuelCodec.decode must reject (null).",
-    "WINDOW": "Rows [scenarioIndex, name, matchId, ingest, popsCsv, gap]: one window step; a new index starts "
-              "a fresh DuelWindow.",
+    "WINDOW": "Rows [scenarioIndex, name, matchId, ingest, popsCsv, gap, firstSeq]: one window step; a new index "
+              "starts a fresh DuelWindow(matchId, firstSeq).",
 }
 
 
@@ -61,7 +61,7 @@ def rows(data: dict[str, Any]) -> dict[str, list[Any]]:
     for index, scenario in enumerate(data["window"]):
         steps = zip(scenario["ingest"], scenario["pops"], scenario["gap"], strict=True)
         for ingest, pops, gap in steps:
-            window_rows.append([index, scenario["name"], scenario["matchId"], ingest, pops, gap])
+            window_rows.append([index, scenario["name"], scenario["matchId"], ingest, pops, gap, scenario["firstSeq"]])
     return {
         "RANDOM": random_rows,
         "HASH": hash_rows,

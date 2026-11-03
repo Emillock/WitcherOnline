@@ -7,7 +7,8 @@ package red.game.witcher3.menus.gwint
     * In-game self-test of the board-independent duel classes: replays every vector of DuelVectors (generated
     * from the Python reference) through DuelRandom, DuelHash, DuelCodec and DuelWindow, plus hand-written checks
     * of DuelIds, the window cap, the error paths, and the routing of synthetic D and M messages (DuelDecision.route,
-    * DuelMulligan.route), the order of deferred effects and the double scorch guard (DuelDeferred). Runs only when
+    * DuelMulligan.route), the order of deferred effects and the double scorch guard (DuelDeferred), and the end of a
+    * game (DuelEnd.route: confirmation, replay, leave and the stuck-wait timers). Runs only when
     * the script sets gwint.game.debug.selfTest (the w3test bot does, a normal player never), and reports
     * "DUEL SELFTEST pass=n fail=m" and one "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
     */
@@ -52,6 +53,7 @@ package red.game.witcher3.menus.gwint
          test.guard("edges",test.checkEdges);
          test.guard("decisions",test.checkDecisions);
          test.guard("deferred",test.checkDeferred);
+         test.guard("end",test.checkEnd);
          _checks = test._count;
          return test._failures;
       }
@@ -202,7 +204,7 @@ package red.game.witcher3.menus.gwint
             if(int(row[0]) != scenario)
             {
                scenario = int(row[0]);
-               window = new DuelWindow(row[2]);
+               window = new DuelWindow(row[2],int(row[6]));
                step = 0;
             }
             window.ingest(row[3]);
@@ -315,6 +317,52 @@ package red.game.witcher3.menus.gwint
          late.open();
          late.close();
          this.expect(isDesync(late.route(mul)),"mulligan: a redraw after round 1 started is a desync");
+      }
+
+      /**
+       * The end of a game (spec 9.8, R43, DuelEnd) on synthetic E, R and X: the opponent's E waits until this board sent
+       * its own, then confirms only with the same winner; nothing is settled before that (a Y in the wait goes to the
+       * desync path, a move after the end is a desync, and no E within the limit expires); R and X count only after a
+       * confirmed draw, one R each; the replay wait expires without the opponent's R.
+       */
+      private function checkEnd() : void
+      {
+         var endA:DuelMessage = new DuelMessage(1,"0g0",30,DuelSession.END,["A"],7);
+         var replay:DuelMessage = new DuelMessage(1,"0g0",31,DuelSession.REPLAY,[],7);
+         var leave:DuelMessage = new DuelMessage(1,"0g0",31,DuelSession.LEAVE,[],7);
+         var move:DuelMessage = new DuelMessage(1,"0g0",31,"S",[],7);
+         var won:DuelEnd = new DuelEnd();
+         this.expect(won.route(endA) == DuelEnd.WAIT && !won.over,"end: the opponent's E waits until this board ends the game");
+         this.expect(isDesync(won.route(replay)) && isDesync(won.route(leave)),"end: R and X during the game are desyncs");
+         won.reached("A",29,7,1000);
+         this.expect(won.over && won.phase == DuelEnd.CONFIRMING,"end: after its own E this board waits for the opponent's");
+         this.expect(isDesync(won.route(move)),"end: a move after the end is a desync");
+         this.expect(isDesync(won.route(new DuelMessage(1,"0g0",30,DuelSession.END,["B"],7))),"end: an E with another winner is a desync");
+         this.expect(isDesync(won.route(new DuelMessage(1,"0g0",30,DuelSession.END,[],7))),"end: an E without a winner is a desync");
+         this.expect(isDesync(won.route(replay)),"end: R before the result is confirmed is a desync");
+         this.expect(!won.confirmExpired(1000 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: the wait for E lasts the stuck-wait limit");
+         this.expect(won.confirmExpired(1001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: no E within the stuck-wait limit expires");
+         this.expect(won.route(endA) == DuelEnd.CONFIRM,"end: the opponent's E with the same winner confirms");
+         won.confirm();
+         this.expect(!won.confirmExpired(1001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: a confirmed result no longer expires");
+         this.expect(isDesync(won.route(endA)),"end: a second E is a desync");
+         this.expect(isDesync(won.route(replay)) && isDesync(won.route(leave)),"end: R and X after a confirmed win are desyncs");
+         var draw:DuelEnd = new DuelEnd();
+         draw.reached(DuelEnd.DRAW,29,7,1000);
+         this.expect(draw.route(new DuelMessage(1,"0g0",30,DuelSession.END,[DuelEnd.DRAW],7)) == DuelEnd.CONFIRM,"end: a draw confirms with the opponent's draw");
+         draw.confirm();
+         this.expect(draw.isDraw && draw.route(replay) == DuelEnd.REPLAY && draw.route(leave) == DuelEnd.LEAVE,"end: after a confirmed draw R replays and X leaves");
+         this.expect(isDesync(draw.route(new DuelMessage(1,"0g0",31,DuelSession.REPLAY,["1"],7))),"end: R with arguments is a desync");
+         draw.replayReceived = true;
+         this.expect(isDesync(draw.route(replay)),"end: a second R is a desync");
+         var waiting:DuelEnd = new DuelEnd();
+         waiting.reached(DuelEnd.DRAW,29,7,1000);
+         waiting.confirm();
+         waiting.replaySent = true;
+         waiting.replayAtMs = 5000;
+         this.expect(!waiting.replayExpired(5000 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS) && waiting.replayExpired(5001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: no R within the stuck-wait limit after this board's R expires");
+         waiting.replayReceived = true;
+         this.expect(!waiting.replayExpired(5001 + DuelSession.STUCK_WAIT_MS,DuelSession.STUCK_WAIT_MS),"end: the replay wait ends with the opponent's R");
       }
 
       /**
@@ -448,7 +496,8 @@ package red.game.witcher3.menus.gwint
       /** Whether a route() result is the detail of a desync (anything but the routing words). */
       private static function isDesync(route:String) : Boolean
       {
-         return route != DuelDecision.WAIT && route != DuelDecision.APPLY && route != DuelDecision.NOT_MINE && route != DuelMulligan.WAIT && route != DuelMulligan.REDRAW && route != DuelMulligan.DONE;
+         var words:Array = [DuelDecision.WAIT,DuelDecision.APPLY,DuelDecision.NOT_MINE,DuelMulligan.WAIT,DuelMulligan.REDRAW,DuelMulligan.DONE,DuelEnd.WAIT,DuelEnd.CONFIRM,DuelEnd.REPLAY,DuelEnd.LEAVE];
+         return words.indexOf(route) < 0;
       }
 
       /** True if a fresh window queues (reports a gap for) a lone message with this seq. */

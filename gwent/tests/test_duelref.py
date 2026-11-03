@@ -121,6 +121,7 @@ MESSAGES = {
     "Y": ["deadbeef", "12"],
     "R": [],
     "X": [],
+    "E": ["N"],
 }
 
 
@@ -228,6 +229,17 @@ def test_window_ignores_garbage_and_other_version():
     assert drain(window) == [1]
 
 
+def test_window_of_a_replayed_game_goes_on_counting():
+    """A replayed game's window starts at the seq after the last message of the game before (spec 9.8): the
+    sequence numbers keep counting, so nothing below it applies and the old game's messages never do."""
+    old, new = "1a2b3c4dg0", "1a2b3c4dg1"
+    window = Window(new, 31)
+    window.ingest("~".join(make_window_tokens(old, range(25, 31)) + make_window_tokens(new, range(29, 33))))
+    assert drain(window) == [31, 32] and not window.gap
+    window.ingest("~".join(make_window_tokens(new, range(34, 35))))
+    assert window.gap is True
+
+
 def test_vectors_replay_against_reference(vectors):
     assert set(vectors) == {"random", "hash", "codec", "window"}
     for row in vectors["random"]["uint"]:
@@ -252,7 +264,7 @@ def test_vectors_replay_against_reference(vectors):
     for token in vectors["codec"]["malformed"]:
         assert decode(token) is None, token
     for scenario in vectors["window"]:
-        window = Window(scenario["matchId"])
+        window = Window(scenario["matchId"], scenario["firstSeq"])
         steps = zip(scenario["ingest"], scenario["pops"], scenario["gap"])
         for ingest, pops, gap in steps:
             window.ingest(ingest)

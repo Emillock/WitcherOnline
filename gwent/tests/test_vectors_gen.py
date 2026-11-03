@@ -46,7 +46,7 @@ def test_declares_every_array_with_the_vector_counts(generated: str) -> None:
     }
     counts = {name: len(_rows(generated, name)) for name in ARRAYS}
     assert counts == expected
-    assert counts == {"RANDOM": 252, "HASH": 6, "CODEC": 16, "CODEC_MALFORMED": 29, "WINDOW": 23}
+    assert counts == {"RANDOM": 252, "HASH": 6, "CODEC": 18, "CODEC_MALFORMED": 30, "WINDOW": 27}
 
 
 def test_rows_carry_the_vectors_exactly(generated: str) -> None:
@@ -61,7 +61,7 @@ def test_rows_carry_the_vectors_exactly(generated: str) -> None:
     for index, scenario in enumerate(data["window"]):
         for step in range(len(scenario["ingest"])):
             window.append([index, scenario["name"], scenario["matchId"], scenario["ingest"][step],
-                           scenario["pops"][step], scenario["gap"][step]])
+                           scenario["pops"][step], scenario["gap"][step], scenario["firstSeq"]])
     assert _rows(generated, "WINDOW") == window
 
 

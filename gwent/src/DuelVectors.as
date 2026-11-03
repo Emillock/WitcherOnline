@@ -298,7 +298,9 @@ package red.game.witcher3.menus.gwint
             ["1.1a2b3c4dg2.15.QUITGAME.0.00000001",1,"1a2b3c4dg2",15,"QUITGAME","0",1],
             ["1.1a2b3c4dg2.13.Y.deadbeef,12.80000000",1,"1a2b3c4dg2",13,"Y","deadbeef,12",2147483648],
             ["1.1a2b3c4dg2.14.R._.01020304",1,"1a2b3c4dg2",14,"R","",16909060],
-            ["1.1a2b3c4dg2.999999999.X._.cafebabe",1,"1a2b3c4dg2",999999999,"X","",3405691582]
+            ["1.1a2b3c4dg2.999999999.X._.cafebabe",1,"1a2b3c4dg2",999999999,"X","",3405691582],
+            ["1.1a2b3c4dg2.16.E.A.2468ace0",1,"1a2b3c4dg2",16,"E","A",610839776],
+            ["1.1a2b3c4dg3.17.E.N.13579bdf",1,"1a2b3c4dg3",17,"E","N",324508639]
          ];
       }
 
@@ -334,37 +336,42 @@ package red.game.witcher3.menus.gwint
             "1.1a2b3c4dg2.1.S._.00000000~1.1a2b3c4dg2.2.S._.00000000",
             "1.1a2b3c4dg2.1.QUITGAME._.00000000",
             "1.1a2b3c4dg2.1.QUITGAME.2.00000000",
-            "1.1a2b3c4dg2.1.QUITGAME.1,0.00000000"
+            "1.1a2b3c4dg2.1.QUITGAME.1,0.00000000",
+            "1.1a2b3c4dg2.1.e.A.00000000"
          ];
       }
 
-      /** Rows [scenarioIndex, name, matchId, ingest, popsCsv, gap]: one window step; a new index starts a fresh DuelWindow. */
+      /** Rows [scenarioIndex, name, matchId, ingest, popsCsv, gap, firstSeq]: one window step; a new index starts a fresh DuelWindow(matchId, firstSeq). */
       public static function get WINDOW() : Array
       {
          return [
-            [0,"dedupe_and_gap","1a2b3c4dg2","none","",0],
-            [0,"dedupe_and_gap","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","1,2,3",0],
-            [0,"dedupe_and_gap","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","",0],
-            [0,"dedupe_and_gap","1a2b3c4dg2","1.1a2b3c4dg2.5.M._.17156075~1.1a2b3c4dg2.6.S._.b54cda26~1.1a2b3c4dg2.7.P.A17,3,B.538453d7","",1],
-            [0,"dedupe_and_gap","1a2b3c4dg2","1.ffffffffg9.4.P.A17,3,B.78dde6c4~1.ffffffffg9.5.M._.17156075","",1],
-            [1,"queued_dedupe_out_of_order","1a2b3c4dg2","1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","",1],
-            [1,"queued_dedupe_out_of_order","1a2b3c4dg2","1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","",1],
-            [1,"queued_dedupe_out_of_order","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","1,2,3",0],
-            [2,"late_window_other_match","1a2b3c4dg2","1.ffffffffg9.1.P.A17,3,B.9e3779b1~1.ffffffffg9.2.M._.3c6ef362~1.ffffffffg9.3.S._.daa66d13~1.ffffffffg9.4.P.A17,3,B.78dde6c4","",0],
-            [2,"late_window_other_match","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1","1",0],
-            [2,"late_window_other_match","1a2b3c4dg2","1.ffffffffg9.2.M._.3c6ef362~1.ffffffffg9.3.S._.daa66d13~1.ffffffffg9.4.P.A17,3,B.78dde6c4~1.ffffffffg9.5.M._.17156075","",0],
-            [2,"late_window_other_match","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362","2",0],
-            [3,"skips_ahead","1a2b3c4dg2","1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4","",1],
-            [3,"skips_ahead","1a2b3c4dg2","1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4~1.1a2b3c4dg2.5.M._.17156075","",1],
-            [3,"skips_ahead","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4~1.1a2b3c4dg2.5.M._.17156075","1,2,3,4,5",0],
-            [4,"sliding_window","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362","1,2",0],
-            [4,"sliding_window","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4","3,4",0],
-            [4,"sliding_window","1a2b3c4dg2","1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4~1.1a2b3c4dg2.5.M._.17156075","5",0],
-            [4,"sliding_window","1a2b3c4dg2","1.1a2b3c4dg2.6.S._.b54cda26~1.1a2b3c4dg2.7.P.A17,3,B.538453d7~1.1a2b3c4dg2.8.M._.f1bbcd88~1.1a2b3c4dg2.9.S._.8ff34739~1.1a2b3c4dg2.10.P.A17,3,B.2e2ac0ea~1.1a2b3c4dg2.11.M._.cc623a9b~1.1a2b3c4dg2.12.S._.6a99b44c~1.1a2b3c4dg2.13.P.A17,3,B.08d12dfd~1.1a2b3c4dg2.14.M._.a708a7ae~1.1a2b3c4dg2.15.S._.4540215f~1.1a2b3c4dg2.16.P.A17,3,B.e3779b10~1.1a2b3c4dg2.17.M._.81af14c1~1.1a2b3c4dg2.18.S._.1fe68e72~1.1a2b3c4dg2.19.P.A17,3,B.be1e0823~1.1a2b3c4dg2.20.M._.5c5581d4~1.1a2b3c4dg2.21.S._.fa8cfb85~1.1a2b3c4dg2.22.P.A17,3,B.98c47536~1.1a2b3c4dg2.23.M._.36fbeee7~1.1a2b3c4dg2.24.S._.d5336898~1.1a2b3c4dg2.25.P.A17,3,B.736ae249","6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25",0],
-            [5,"garbage_and_other_version","1a2b3c4dg2","","",0],
-            [5,"garbage_and_other_version","1a2b3c4dg2","none~junk~1.abc.x.P._.0~2.1a2b3c4dg2.1.P.A17,3,B.9e3779b1","",0],
-            [5,"garbage_and_other_version","1a2b3c4dg2","junk~1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~~2.1a2b3c4dg2.2.M._.3c6ef362","1",0],
-            [5,"garbage_and_other_version","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.2.M._.3c6ef362","2",0]
+            [0,"dedupe_and_gap","1a2b3c4dg2","none","",0,1],
+            [0,"dedupe_and_gap","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","1,2,3",0,1],
+            [0,"dedupe_and_gap","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","",0,1],
+            [0,"dedupe_and_gap","1a2b3c4dg2","1.1a2b3c4dg2.5.M._.17156075~1.1a2b3c4dg2.6.S._.b54cda26~1.1a2b3c4dg2.7.P.A17,3,B.538453d7","",1,1],
+            [0,"dedupe_and_gap","1a2b3c4dg2","1.ffffffffg9.4.P.A17,3,B.78dde6c4~1.ffffffffg9.5.M._.17156075","",1,1],
+            [1,"queued_dedupe_out_of_order","1a2b3c4dg2","1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","",1,1],
+            [1,"queued_dedupe_out_of_order","1a2b3c4dg2","1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","",1,1],
+            [1,"queued_dedupe_out_of_order","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13","1,2,3",0,1],
+            [2,"late_window_other_match","1a2b3c4dg2","1.ffffffffg9.1.P.A17,3,B.9e3779b1~1.ffffffffg9.2.M._.3c6ef362~1.ffffffffg9.3.S._.daa66d13~1.ffffffffg9.4.P.A17,3,B.78dde6c4","",0,1],
+            [2,"late_window_other_match","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1","1",0,1],
+            [2,"late_window_other_match","1a2b3c4dg2","1.ffffffffg9.2.M._.3c6ef362~1.ffffffffg9.3.S._.daa66d13~1.ffffffffg9.4.P.A17,3,B.78dde6c4~1.ffffffffg9.5.M._.17156075","",0,1],
+            [2,"late_window_other_match","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362","2",0,1],
+            [3,"skips_ahead","1a2b3c4dg2","1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4","",1,1],
+            [3,"skips_ahead","1a2b3c4dg2","1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4~1.1a2b3c4dg2.5.M._.17156075","",1,1],
+            [3,"skips_ahead","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4~1.1a2b3c4dg2.5.M._.17156075","1,2,3,4,5",0,1],
+            [4,"sliding_window","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362","1,2",0,1],
+            [4,"sliding_window","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4","3,4",0,1],
+            [4,"sliding_window","1a2b3c4dg2","1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.3.S._.daa66d13~1.1a2b3c4dg2.4.P.A17,3,B.78dde6c4~1.1a2b3c4dg2.5.M._.17156075","5",0,1],
+            [4,"sliding_window","1a2b3c4dg2","1.1a2b3c4dg2.6.S._.b54cda26~1.1a2b3c4dg2.7.P.A17,3,B.538453d7~1.1a2b3c4dg2.8.M._.f1bbcd88~1.1a2b3c4dg2.9.S._.8ff34739~1.1a2b3c4dg2.10.P.A17,3,B.2e2ac0ea~1.1a2b3c4dg2.11.M._.cc623a9b~1.1a2b3c4dg2.12.S._.6a99b44c~1.1a2b3c4dg2.13.P.A17,3,B.08d12dfd~1.1a2b3c4dg2.14.M._.a708a7ae~1.1a2b3c4dg2.15.S._.4540215f~1.1a2b3c4dg2.16.P.A17,3,B.e3779b10~1.1a2b3c4dg2.17.M._.81af14c1~1.1a2b3c4dg2.18.S._.1fe68e72~1.1a2b3c4dg2.19.P.A17,3,B.be1e0823~1.1a2b3c4dg2.20.M._.5c5581d4~1.1a2b3c4dg2.21.S._.fa8cfb85~1.1a2b3c4dg2.22.P.A17,3,B.98c47536~1.1a2b3c4dg2.23.M._.36fbeee7~1.1a2b3c4dg2.24.S._.d5336898~1.1a2b3c4dg2.25.P.A17,3,B.736ae249","6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25",0,1],
+            [5,"replayed_game_goes_on_counting","1a2b3c4dg3","1.1a2b3c4dg2.38.M._.7c3c1046~1.1a2b3c4dg2.39.S._.1a7389f7~1.1a2b3c4dg2.40.P.A17,3,B.b8ab03a8","",0,40],
+            [5,"replayed_game_goes_on_counting","1a2b3c4dg3","1.1a2b3c4dg3.36.S._.3fcd1ce4~1.1a2b3c4dg3.37.P.A17,3,B.de049695~1.1a2b3c4dg3.38.M._.7c3c1046~1.1a2b3c4dg3.39.S._.1a7389f7~1.1a2b3c4dg3.40.P.A17,3,B.b8ab03a8","40",0,40],
+            [5,"replayed_game_goes_on_counting","1a2b3c4dg3","1.1a2b3c4dg3.41.M._.56e27d59~1.1a2b3c4dg3.42.S._.f519f70a~1.1a2b3c4dg3.43.P.A17,3,B.935170bb","41,42,43",0,40],
+            [5,"replayed_game_goes_on_counting","1a2b3c4dg3","1.1a2b3c4dg3.45.S._.cfc0641d~1.1a2b3c4dg3.46.P.A17,3,B.6df7ddce","",1,40],
+            [6,"garbage_and_other_version","1a2b3c4dg2","","",0,1],
+            [6,"garbage_and_other_version","1a2b3c4dg2","none~junk~1.abc.x.P._.0~2.1a2b3c4dg2.1.P.A17,3,B.9e3779b1","",0,1],
+            [6,"garbage_and_other_version","1a2b3c4dg2","junk~1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~~2.1a2b3c4dg2.2.M._.3c6ef362","1",0,1],
+            [6,"garbage_and_other_version","1a2b3c4dg2","1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.1.P.A17,3,B.9e3779b1~1.1a2b3c4dg2.2.M._.3c6ef362~1.1a2b3c4dg2.2.M._.3c6ef362","2",0,1]
          ];
       }
    }

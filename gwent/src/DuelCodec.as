@@ -8,7 +8,8 @@ package red.game.witcher3.menus.gwint
     *   seq      decimal, 1 to 9 digits, no leading zero
     *   type     one of TYPES
     *   args     "_" when empty, else arguments of [A-Za-z0-9]+ joined by ","
-    *            (QUITGAME: exactly one, "1" if the quitter settles the bet, "0" if not)
+    *            (QUITGAME: exactly one, "1" if the quitter settles the bet, "0" if not;
+    *            E, the end of a game: the winner as the sender sees it, A, B or N for a draw, checked by DuelEnd)
     *   hash     exactly 8 lowercase hex digits
     * Tokens never contain spaces or "~" (the window separator). Parsing is done by hand, character by
     * character, so it does not depend on RegExp support in the player.
@@ -20,7 +21,7 @@ package red.game.witcher3.menus.gwint
       public static const PROTOCOL_VERSION:int = 1;
 
       /** Every message type (spec 8.2). */
-      public static const TYPES:Array = ["H","P","C","G","L","S","D","M","QUITGAME","Y","R","X"];
+      public static const TYPES:Array = ["H","P","C","G","L","S","D","M","QUITGAME","Y","R","X","E"];
 
       /** The surrender type; its one argument is "1" when the quitter settles the bet (its Hello was complete). */
       public static const SURRENDER:String = "QUITGAME";

@@ -31,14 +31,16 @@ package red.game.witcher3.menus.gwint
       private var _queued:int;
 
       /**
-       * Starts an empty window that expects seq 1.
+       * Starts an empty window that expects seq firstSeq.
        * @param matchId The match id this window accepts.
+       * @param firstSeq The first seq it applies: 1 for the first game of a duel; a replayed game goes on from the
+       * seq after the last message of the game before (sequence numbers keep counting across replays, spec 9.8).
        */
-      public function DuelWindow(matchId:String)
+      public function DuelWindow(matchId:String, firstSeq:int = 1)
       {
          super();
          this._matchId = matchId;
-         this._nextSeq = 1;
+         this._nextSeq = firstSeq;
          this._queue = new Dictionary();
          this._queued = 0;
       }
