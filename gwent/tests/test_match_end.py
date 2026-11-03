@@ -67,7 +67,7 @@ def test_a_desync_or_no_confirmation_pays_nobody() -> None:
     assert dispatch.index("next.type == DESYNC") < dispatch.index("this.dispatchEnd(next)")
     kind_of = function_body((SRC / "DuelWait.as").read_text(encoding="utf-8"), "public static function kindOf(")
     assert "endPhase == DuelEnd.CONFIRMING" in kind_of and "return END" in kind_of
-    assert 'this.abort("stuck_wait",STUCK_TEXT)' in function_body(text, "private function stuckWait(")
+    assert 'this.abort("stuck_wait",STUCK_TEXT)' in function_body(text, "private function opponentGone(")
 
 
 def test_a_corrupt_end_message_is_the_test_of_the_last_message() -> None:
@@ -84,8 +84,10 @@ def test_draws_replay_together_or_end_without_money() -> None:
     leave = function_body(text, "public function localLeave(")
     assert leave.index("send(LEAVE,") < leave.index('finishDraw("leave")')
     assert 'finishDraw("opponent_leave")' in function_body(text, "private function dispatchEnd(")
-    # R47: no R within the stuck-wait limit after the local R goes through the one rule (Y, then no contest)
+    # R51: no R within the stuck-wait limit after the local R sends X and ends as a draw (one rule, its own verdict)
     assert "this.waitingForReplay" in function_body(text, "private function waitingFor(")
+    gone = function_body(text, "private function opponentGone(")
+    assert gone.index("this.send(LEAVE,") < gone.index('this.finishDraw("replay_timeout")')
     assert 'duelFinish("draw")' in function_body(text, "private function finishDraw(")
 
 
@@ -170,9 +172,9 @@ def test_end_timeout_sends_y_before_it_ends() -> None:
     """Review Important 1 (now R47): when the wait for E expires this board sends Y (its E hash) before it ends as no
     contest, so an opponent that was only held finds the queued E and the Y back to back and ends as no contest too."""
     text = session()
-    stuck = function_body(text, "private function stuckWait(")
-    assert "kind == DuelWait.END ? this._end.endHash" in stuck
-    assert stuck.index("this.send(DESYNC,") < stuck.index('this.abort("stuck_wait",STUCK_TEXT)')
+    assert "this._end.phase == DuelEnd.CONFIRMING ? this._end.endHash" in function_body(text, "private function sendStuckY(")
+    gone = function_body(text, "private function opponentGone(")
+    assert gone.index("this.sendStuckY(") < gone.index('this.abort("stuck_wait",STUCK_TEXT)')
     update = function_body(text, "public function update(")
     assert update.index("this.dispatch(next)") < update.index("this.opponentGone()")
 

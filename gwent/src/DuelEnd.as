@@ -12,7 +12,7 @@ package red.game.witcher3.menus.gwint
     * end the game as no contest, so a desync on the last message of a match pays neither side. Both seats compare the
     * same two hashes (their own E and the opponent's E), so they always reach the same verdict.
     * A confirmed draw is replayed when both seats sent R (DuelSession then starts the next game); X (a player closed
-    * the end screen) ends it as a draw that moves no money, no R within the stuck-wait limit as no contest.
+    * the end screen) or no R within the stuck-wait limit (R51) ends it as a draw that moves no money.
     */
    public class DuelEnd
    {

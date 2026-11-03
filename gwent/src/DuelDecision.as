@@ -35,7 +35,10 @@ package red.game.witcher3.menus.gwint
       /** function():String, the choice duel autoplay makes, or null. */
       public var autoFn:Function;
 
-      /** function():String, the first option: the answer when the dialog goes away unanswered (R48), or null. */
+      /**
+       * function():String, the first option, or null: the default answer (R48: the Scoia'tael popup closed unanswered
+       * answers "1" this way through the script; Task 16 uses it on a decision timeout).
+       */
       public var firstFn:Function;
 
       /** True once showFn ran (only then does an answer count). */
@@ -61,6 +64,19 @@ package red.game.witcher3.menus.gwint
          this.applyFn = applyFn;
          this.autoFn = autoFn;
          this.firstFn = firstFn;
+      }
+
+      /**
+       * R48, R52: whether this local decision's board dialog went away unanswered. The vanilla decision dialogs have no
+       * decline callback, so this only happens when a card zoom replaced the dialog and closed it: the board then shows
+       * it again (the player only previewed a card). The Scoia'tael popup is the script's and answers a close itself
+       * (gwentDuel.ws), so COIN never counts.
+       * @param dialogShown Whether the board's choice dialog is shown now.
+       * @return True once the dialog was shown for this decision and is no longer up.
+       */
+      public function closedUnanswered(dialogShown:Boolean) : Boolean
+      {
+         return this.shown && this.kind != DuelSession.COIN && !dialogShown;
       }
 
       /**

@@ -77,20 +77,24 @@ package red.game.witcher3.menus.gwint
     * opponent"); once both seats sent R the next game starts (startNextGame: game number n+1, new DuelRandom(seed, n+1),
     * fresh net ids, match id and DuelWindow, outbound seq numbers keep counting, the window goes on from the seq after
     * the opponent's R). Closing the end screen sends X, also while waiting after the local R (the board's close
-    * button, GwintGameMenu.tryQuitGame); X ends the match as a draw that moves no money (OnMultiplayerDraw, R13), no R
-    * within the stuck-wait limit after the local R as no contest (stuck_wait, below). An X or QUITGAME the opponent sent
+    * button, GwintGameMenu.tryQuitGame); X, or no R within the stuck-wait limit after the local R (then this board sends
+    * X, R51), ends the match as a draw that moves no money (OnMultiplayerDraw, R13). An X or QUITGAME the opponent sent
     * after its R in the previous game (a crossing: it left or quit while this board had both R and started the next
     * game) is still taken as long as no message of the opponent's next game was applied (DuelEnd.lateLeave): X ends
     * the draw (opponent_leave), QUITGAME a win by surrender.
-    * Stuck waits and the opponent leaving (spec 10, R47, DuelWait): every wait on an opponent message (the Hello, a
-    * move, a decision, the mulligan, E, R) has one limit, 120 s in Normal mode and turn time + 30 s in Timed mode, and
-    * starts over whenever an opponent message arrives. Past it this board logs DUEL STUCK <kind> limit=<ms>, sends Y
-    * marked "stuck" ("hello" for the Hello wait) and ends as no contest (stuck_wait, hello_timeout); the opponent ends
-    * the same way when that Y arrives, so a paused or slow peer never settles alone. gwint.game.opponentLeft (Witcher
-    * Online's script lost the opponent: its game closed or it disconnected) ends the game as no contest (opponent_left)
-    * without a message, once the opponent messages already in the window have applied (at most DuelWait.LEFT_DRAIN_MS);
-    * a confirmed win or loss stands (its end screen settles it). R48: a decision dialog that goes away without an
-    * answer counts as its first option (the Scoia'tael popup, the script's, does the same in gwentDuel.ws).
+    * Stuck waits and the opponent leaving (spec 10, R47, R50, R51, DuelWait): every wait on an opponent message (the
+    * Hello once this board sent its own, a move, a decision, the mulligan, E, R) has one limit, 120 s in Normal mode and
+    * turn time + 30 s in Timed mode, and starts over whenever an opponent message arrives. Past it this board logs
+    * DUEL STUCK <kind> limit=<ms>, sends Y marked "stuck" ("hello" for the Hello wait) and ends as no contest
+    * (stuck_wait, hello_timeout); the opponent ends the same way when that Y arrives, so a paused or slow peer never
+    * settles alone. The R wait sends X instead and ends as a draw (replay_timeout, R51). gwint.game.opponentLeft
+    * (Witcher Online's script lost the opponent: no packet for 30 s, or a disconnect) ends the game once the opponent
+    * messages already in the window have applied (at most DuelWait.LEFT_DRAIN_MS): as no contest (opponent_left) after
+    * the stuck Y (R50: a present opponent the script took for gone ends as no contest too); through the stuck path
+    * while this board waits for the opponent's E; as a draw (opponent_leave) after a confirmed draw; a confirmed win
+    * or loss stands (its end screen settles it). R48, R52: a board decision dialog that went away unanswered (a card
+    * zoom replaced and closed it) is shown again; the Scoia'tael popup, the script's, counts a close as its first
+    * option (gwentDuel.ws). A Y or QUITGAME of the opponent is taken before this board sent its own Hello too.
     *
     * Choice dialog callers (W3ChoiceDialog.showDialog*) in the decompiled vanilla 5.01 board, file:line in that output
     * (red/game/witcher3/menus/gwint, or red/game/witcher3/controls for W3ChoiceDialog), with the decision kind:
@@ -519,8 +523,8 @@ package red.game.witcher3.menus.gwint
        * @param apply function(choice:String):Boolean, applies a choice; false if it is not one of the options (a
        * desync).
        * @param autoChoice function():String, the choice duel autoplay makes (null: autoplay never answers).
-       * @param firstChoice function():String, the first option as the wire writes it: the answer when the local
-       * dialog goes away without one (R48; null: the dialog is shown again).
+       * @param firstChoice function():String, the first option as the wire writes it: the default answer (Task 16's
+       * decision timeout; a board dialog that went away unanswered is shown again instead, R52).
        *
        * Only one decision is open at a time (R34). A second decide while one is open ends the duel as a local desync
        * rather than queueing it: the vanilla rules ask one choice per step and the next choice only from the handler
@@ -821,7 +825,11 @@ package red.game.witcher3.menus.gwint
             this._helloSent = true;
             this.send("H",[DuelCodec.hex8(this.templateHash()),DuelCodec.hex8(this.deckHash(DuelIds.SEAT_A)),DuelCodec.hex8(this.deckHash(DuelIds.SEAT_B))],DuelStateHash.SCOPE_FULL);
          }
-         if(this._helloSent)
+         if(!this._helloSent)
+         {
+            this.dispatchEarlyEnd();
+         }
+         else
          {
             if(this._prevLate != null && this._window.nextSeq == this._prevFirstSeq)
             {
@@ -850,9 +858,11 @@ package red.game.witcher3.menus.gwint
             var show:Function = this._localDecision.showFn;
             show();
          }
-         else if(this.localDialogClosed())
+         else if(this._localDecision != null && this._localDecision.closedUnanswered(GwintGameMenu.mSingleton.mcChoiceDialog.isShown()))
          {
-            this.answerFirstOption();
+            // R52: a card zoom replaced the dialog and closed it; the player only previewed a card
+            this.log("DUEL DECIDE " + this._localDecision.kind + " closed unanswered: shown again");
+            this._localDecision.shown = false;
          }
          if(!this._ended && GwintGameMenu.mSingleton.duelDebugAutoplay)
          {
@@ -861,33 +871,79 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * The opponent left (gwint.game.opponentLeft) or a wait on it expired (R47, DuelWait): ends this game as no
-       * contest. A wait that expired sends Y first (stuckWait), the opponent leaving sends nothing.
+       * Before this board sent its Hello the window is not dispatched (the Hello wait only counts once it was, so a
+       * slow local start never counts against the opponent), but an opponent's Y (its Hello wait expired) or QUITGAME
+       * anywhere in its last window still ends this game, so a board that never becomes ready cannot wait forever.
+       */
+      private function dispatchEarlyEnd() : void
+      {
+         var tokens:Array = this._lastWindow != null ? this._lastWindow.split(DuelWindow.SEPARATOR) : [];
+         for(var i:int = 0; i < tokens.length; i++)
+         {
+            var m:DuelMessage = DuelCodec.decode(tokens[i]);
+            if(m == null || m.version != DuelCodec.PROTOCOL_VERSION || m.matchId != this._matchId)
+            {
+               continue;
+            }
+            if(m.type == DESYNC)
+            {
+               this.applyDesync(m);
+               return;
+            }
+            if(m.type == DuelCodec.SURRENDER)
+            {
+               this.applySurrender(m,this._gameNumber);
+               return;
+            }
+         }
+      }
+
+      /**
+       * The opponent left (gwint.game.opponentLeft) or a wait on it expired (R47, R50, R51): ends this game on
+       * DuelWait's verdict. Every no contest sends the stuck Y first; the R wait sends X and ends as a draw.
        * @return True when the game ended.
        */
       private function opponentGone() : Boolean
       {
          var now:int = getTimer();
-         if(GwintGameMenu.mSingleton.duelOpponentLeft)
+         if(GwintGameMenu.mSingleton.duelOpponentLeft && this._leftAtMs < 0)
          {
-            if(this._leftAtMs < 0)
-            {
-               this._leftAtMs = now;
-               this.log("DUEL OPPONENT left");
-            }
-            if(DuelWait.leftEnds(this._leftAtMs,now,this._window.peek() != null,this._end.phase == DuelEnd.CONFIRMED && !this._end.isDraw))
-            {
-               this.abort("opponent_left",LEFT_TEXT);
-               return true;
-            }
+            this._leftAtMs = now;
+            this.log("DUEL OPPONENT left");
          }
          var kind:String = this.waitingFor();
-         if(this._wait.tick(kind,this._window.nextSeq,now,DuelWait.limitFor(this._isTimed)))
+         var verdict:String = this._wait.verdict(kind,this._window.nextSeq,now,DuelWait.limitFor(this._isTimed),this._leftAtMs,this._window.peek() != null,this._end.phase,this._end.isDraw);
+         if(verdict == DuelWait.GO_ON)
          {
-            this.stuckWait(kind);
+            return false;
+         }
+         if(verdict == DuelWait.LEFT_DRAW)
+         {
+            this.finishDraw("opponent_leave");
             return true;
          }
-         return false;
+         if(verdict == DuelWait.REPLAY_TIMEOUT)
+         {
+            this.log("DUEL STUCK " + kind + " limit=" + DuelWait.limitFor(this._isTimed));
+            this.send(LEAVE,[],DuelStateHash.SCOPE_FULL);
+            this.finishDraw("replay_timeout");
+            return true;
+         }
+         this.log("DUEL STUCK " + (verdict == DuelWait.LEFT ? "left" : kind) + " limit=" + DuelWait.limitFor(this._isTimed));
+         this.sendStuckY(verdict == DuelWait.HELLO_TIMEOUT);
+         if(verdict == DuelWait.HELLO_TIMEOUT)
+         {
+            this.abort("hello_timeout");
+         }
+         else if(verdict == DuelWait.LEFT)
+         {
+            this.abort("opponent_left",LEFT_TEXT);
+         }
+         else
+         {
+            this.abort("stuck_wait",STUCK_TEXT);
+         }
+         return true;
       }
 
       /** What this board waits for from the opponent now (DuelWait.kindOf). */
@@ -896,56 +952,20 @@ package red.game.witcher3.menus.gwint
          var flow:GwintGameFlowController = GwintGameFlowController.getInstance();
          var opponent:NetOpponentController = flow != null ? flow.playerControllers[CardManager.PLAYER_2] as NetOpponentController : null;
          var mulliganWaiting:Boolean = this._mulligan.phase == DuelMulligan.OPEN && this._mulligan.localSent && !this._mulligan.remoteDone;
-         return DuelWait.kindOf(this._helloDone,this._window.peek() != null,this._end.phase,this.waitingForReplay,this._remoteDecision != null,mulliganWaiting,opponent != null && opponent.waitingForMove);
+         return DuelWait.kindOf(this._helloSent,this._helloDone,this._window.peek() != null,this._end.phase,this.waitingForReplay,this._remoteDecision != null,mulliganWaiting,opponent != null && opponent.waitingForMove);
       }
 
       /**
-       * A wait on the opponent expired (R47): logs DUEL STUCK <kind> limit=<ms>, sends Y marked as a stuck wait (args:
-       * this board's hash, its E hash while it waits for E, "0", and DuelWait.MARK_STUCK or MARK_HELLO), then ends as no
-       * contest. The Y goes out first, so an opponent that was only held (a pause, a card zoom) or slow ends as no
-       * contest too instead of settling alone.
-       * @param kind What the board waited for (DuelWait.kindOf).
+       * Sends the Y of an expired wait or of the opponent leaving (R47, R50), before this board ends as no contest.
+       * Args: this board's hash (its E hash while it waits for the opponent's E), "0", and DuelWait.MARK_STUCK
+       * (MARK_HELLO for the Hello wait). An opponent that was only held (a pause, a card zoom), slow, or wrongly taken
+       * for gone then ends as no contest too instead of settling alone.
+       * @param hello The Hello wait expired.
        */
-      private function stuckWait(kind:String) : void
+      private function sendStuckY(hello:Boolean) : void
       {
-         var hello:Boolean = kind == DuelWait.HELLO;
-         var mine:uint = kind == DuelWait.END ? this._end.endHash : DuelStateHash.compute(DuelStateHash.SCOPE_FULL,0);
-         this.log("DUEL STUCK " + kind + " limit=" + DuelWait.limitFor(this._isTimed));
+         var mine:uint = this._end.phase == DuelEnd.CONFIRMING ? this._end.endHash : DuelStateHash.compute(DuelStateHash.SCOPE_FULL,0);
          this.send(DESYNC,[DuelCodec.hex8(mine),"0",hello ? DuelWait.MARK_HELLO : DuelWait.MARK_STUCK],DuelStateHash.SCOPE_FULL);
-         if(hello)
-         {
-            this.abort("hello_timeout");
-            return;
-         }
-         this.abort("stuck_wait",STUCK_TEXT);
-      }
-
-      /**
-       * R48: the dialog of the open local decision went away without an answer (closed). The Scoia'tael popup is the
-       * script's and answers the same way there (gwentDuel.ws), so COIN is left out.
-       */
-      private function localDialogClosed() : Boolean
-      {
-         var decision:DuelDecision = this._localDecision;
-         return decision != null && decision.shown && decision.kind != COIN && !GwintGameMenu.mSingleton.mcChoiceDialog.isShown();
-      }
-
-      /**
-       * R48: answers the open local decision with its first option (logged as DUEL DECIDE <kind> closed first=<choice>),
-       * or shows it again when the rules gave no first option.
-       */
-      private function answerFirstOption() : void
-      {
-         var decision:DuelDecision = this._localDecision;
-         var first:Function = decision.firstFn;
-         if(first == null)
-         {
-            decision.shown = false;
-            return;
-         }
-         var choice:String = first();
-         this.log("DUEL DECIDE " + decision.kind + " closed first=" + choice);
-         this.answer(decision.kind,choice);
       }
 
       /**

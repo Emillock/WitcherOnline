@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/CardLeaderInstance.as b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
-index 05341cb..b9a1aa8 100644
+index 05341cb..d25ce2e 100644
 --- a/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 @@ -15,6 +15,18 @@ package red.game.witcher3.menus.gwint
@@ -133,7 +133,7 @@ index 05341cb..b9a1aa8 100644
 +         return true;
 +      }
 +
-+      /** The first option of the open leader choice: the answer when the dialog goes away unanswered (R48). */
++      /** The first option of the open leader choice: the decision's default answer (DuelDecision.firstFn). */
 +      private function duelFirstChoice() : String
 +      {
 +         if(this._duelChoiceCards == null)

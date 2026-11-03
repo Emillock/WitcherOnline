@@ -25,10 +25,18 @@ function WO_GwentBoardOpenSeconds() : float
 
 // How long the opponent's packets may stop during a duel before the client takes it as gone (its game closed or it
 // lost its connection; r_MultiplayerClient.gwentOpponentSilent). Witcher Online drops a silent player after 5 s and
-// the server after about 6 s; the opponent's packets come about 60 times a second.
+// the server after about 6 s; the opponent's packets come about 60 times a second. R50: well above both, so a relay
+// hiccup does not end a duel; still far under the board's own 120 s stuck-wait limit.
 function WO_GwentOpponentSilentSeconds() : float
 {
-    return 10.0;
+    return 30.0;
+}
+
+// A gap longer than this between two calls of r_MultiplayerClient.gwentGameLoop is a stall on this side (a hitch):
+// the opponent's packets may not have been read meanwhile, so the silence clock starts again (R50).
+function WO_GwentLoopStallSeconds() : float
+{
+    return 3.0;
 }
 
 // Real milliseconds since startMs (theGame.GetLocalTimeAsMilliseconds, which runs on while a menu pauses the game,

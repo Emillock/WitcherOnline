@@ -200,6 +200,8 @@ statemachine class r_MultiplayerClient
     // the opponent's last movement sequence seen during the duel, and when it last changed (GetLocalTimeAsMilliseconds)
     private var gwentOpponentSeq : int;
     private var gwentOpponentSeenMs : int;
+    // the last gwentGameLoop call with the duel board up (GetLocalTimeAsMilliseconds)
+    private var gwentLoopMs : int;
 
     // party
     private var inParty : bool;
@@ -1868,12 +1870,14 @@ statemachine class r_MultiplayerClient
             }
             return;
         }
-        if(!gwentBoardSeen)
+        if(!gwentBoardSeen || WO_GwentMsSince(gwentLoopMs) > (int)(WO_GwentLoopStallSeconds() * 1000.0))
         {
+            // the duel board is up for the first time, or this side stalled: the silence clock starts (again) now
             gwentBoardSeen = true;
             gwentOpponentSeq = -1;
             gwentOpponentSeenMs = theGame.GetLocalTimeAsMilliseconds();
         }
+        gwentLoopMs = theGame.GetLocalTimeAsMilliseconds();
 
         if(!gwentOpponent || gwentOpponentSilent())
         {
@@ -1904,7 +1908,7 @@ statemachine class r_MultiplayerClient
     // 5 s without an update) counts engine time, which stands still while the Gwent board pauses the game, so it never
     // removes a player during a duel; the opponent's packets still raise its movement sequence (about 60 a second, also
     // while its own board is up), so a sequence that does not change for WO_GwentOpponentSilentSeconds() of real time
-    // means its game closed or it lost its connection.
+    // means its game closed or it lost its connection (a stall on this side restarts the clock, gwentGameLoop).
     private function gwentOpponentSilent() : bool
     {
         if(!gwentOpponent)

@@ -9,8 +9,8 @@ package red.game.witcher3.menus.gwint
     * of DuelIds, the window cap, the error paths, and the routing of synthetic D and M messages (DuelDecision.route,
     * DuelMulligan.route), the order of deferred effects and the double scorch guard (DuelDeferred), the end of a
     * game (DuelEnd.route: confirmation, replay, leave), and the stuck-wait rule and the opponent leaving (DuelWait:
-    * every wait kind, its limit, what resets it, the marked Y). Runs only when
-    * the script sets gwint.game.debug.selfTest (the w3test bot does, a normal player never), and reports
+    * every wait kind, its limit, what resets it, each verdict, the marked Y; DuelDecision.closedUnanswered). Runs
+    * only when the script sets gwint.game.debug.selfTest (the w3test bot does, a normal player never), and reports
     * "DUEL SELFTEST pass=n fail=m" and one "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
     */
    public class DuelSelfTest
@@ -365,12 +365,14 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * The stuck-wait rule (spec 10, R47, DuelWait) on synthetic board states and times: the limit of each mode; what
-       * the board waits for in each state (the Hello whatever the window holds, nothing while the opponent's next
-       * message is already there, else E, R, a decision, the mulligan, a move); every kind of wait ends only after its
-       * limit; a message applied, another kind of wait or a moment without one starts it over, so a message arriving
-       * resets it; the Y of an expired wait carries its reason to the opponent; the opponent leaving ends the game
-       * once nothing it sent is left to apply (or after LEFT_DRAIN_MS), never a confirmed win or loss.
+       * The stuck-wait rule (spec 10, R47, R50, R51, DuelWait) on synthetic board states and times: the limit of each
+       * mode; what the board waits for in each state (the Hello once this board sent its own, whatever the window holds;
+       * nothing while the opponent's next message is already there; else E, R, a decision, the mulligan, a move);
+       * every kind of wait ends only after its limit; a message applied, another kind of wait or a moment without one
+       * starts it over, so a message arriving resets it; the verdict of each expired wait (the R wait a draw, R51);
+       * the opponent leaving (R50, R51): only once nothing it sent is left to apply (or after LEFT_DRAIN_MS), through
+       * the stuck path while waiting for E, a draw after a confirmed draw, never a confirmed win or loss; the Y of an
+       * expired wait carries its reason to the opponent; a board dialog closed unanswered is shown again (R52).
        */
       private function checkWait() : void
       {
@@ -378,16 +380,17 @@ package red.game.witcher3.menus.gwint
          var timed:int = DuelWait.limitFor(true);
          this.expect(normal == 120000,"wait: 120 s in Normal mode");
          this.expect(timed == DuelWait.TURN_MS + 30000 && DuelWait.TURN_MS == 60000,"wait: turn time + 30 s in Timed mode");
-         this.expect(DuelWait.kindOf(false,false,DuelEnd.PLAYING,false,false,false,false) == DuelWait.HELLO,"wait: the Hello until both agreed");
-         this.expect(DuelWait.kindOf(false,true,DuelEnd.PLAYING,false,false,false,false) == DuelWait.HELLO,"wait: the Hello also with a message in the window");
-         this.expect(DuelWait.kindOf(true,true,DuelEnd.CONFIRMING,true,true,true,true) == DuelWait.NONE,"wait: nothing while the opponent's next message is there");
-         this.expect(DuelWait.kindOf(true,false,DuelEnd.CONFIRMING,false,false,false,true) == DuelWait.END,"wait: the opponent's E after this board's");
-         this.expect(DuelWait.kindOf(true,false,DuelEnd.CONFIRMED,true,false,false,false) == DuelWait.REPLAY,"wait: the opponent's R after this board's");
-         this.expect(DuelWait.kindOf(true,false,DuelEnd.CONFIRMED,false,false,false,false) == DuelWait.NONE,"wait: nothing while the end screen waits for the local player");
-         this.expect(DuelWait.kindOf(true,false,DuelEnd.PLAYING,false,true,false,false) == DuelWait.DECISION,"wait: an opponent decision");
-         this.expect(DuelWait.kindOf(true,false,DuelEnd.PLAYING,false,false,true,false) == DuelWait.MULLIGAN,"wait: the opponent's mulligan");
-         this.expect(DuelWait.kindOf(true,false,DuelEnd.PLAYING,false,false,false,true) == DuelWait.MOVE,"wait: the opponent's move");
-         this.expect(DuelWait.kindOf(true,false,DuelEnd.PLAYING,false,false,false,false) == DuelWait.NONE,"wait: nothing on the local turn");
+         this.expect(DuelWait.kindOf(false,false,false,DuelEnd.PLAYING,false,false,false,false) == DuelWait.NONE,"wait: no Hello wait before this board sent its own");
+         this.expect(DuelWait.kindOf(true,false,false,DuelEnd.PLAYING,false,false,false,false) == DuelWait.HELLO,"wait: the Hello until both agreed");
+         this.expect(DuelWait.kindOf(true,false,true,DuelEnd.PLAYING,false,false,false,false) == DuelWait.HELLO,"wait: the Hello also with a message in the window");
+         this.expect(DuelWait.kindOf(true,true,true,DuelEnd.CONFIRMING,true,true,true,true) == DuelWait.NONE,"wait: nothing while the opponent's next message is there");
+         this.expect(DuelWait.kindOf(true,true,false,DuelEnd.CONFIRMING,false,false,false,true) == DuelWait.END,"wait: the opponent's E after this board's");
+         this.expect(DuelWait.kindOf(true,true,false,DuelEnd.CONFIRMED,true,false,false,false) == DuelWait.REPLAY,"wait: the opponent's R after this board's");
+         this.expect(DuelWait.kindOf(true,true,false,DuelEnd.CONFIRMED,false,false,false,false) == DuelWait.NONE,"wait: nothing while the end screen waits for the local player");
+         this.expect(DuelWait.kindOf(true,true,false,DuelEnd.PLAYING,false,true,false,false) == DuelWait.DECISION,"wait: an opponent decision");
+         this.expect(DuelWait.kindOf(true,true,false,DuelEnd.PLAYING,false,false,true,false) == DuelWait.MULLIGAN,"wait: the opponent's mulligan");
+         this.expect(DuelWait.kindOf(true,true,false,DuelEnd.PLAYING,false,false,false,true) == DuelWait.MOVE,"wait: the opponent's move");
+         this.expect(DuelWait.kindOf(true,true,false,DuelEnd.PLAYING,false,false,false,false) == DuelWait.NONE,"wait: nothing on the local turn");
          var kinds:Array = [DuelWait.HELLO,DuelWait.MOVE,DuelWait.DECISION,DuelWait.MULLIGAN,DuelWait.END,DuelWait.REPLAY];
          for(var k:int = 0; k < kinds.length; k++)
          {
@@ -412,14 +415,38 @@ package red.game.witcher3.menus.gwint
          var other:DuelWait = new DuelWait();
          other.tick(DuelWait.DECISION,7,1000,normal);
          this.expect(!other.tick(DuelWait.MOVE,7,1001 + normal,normal) && other.kind == DuelWait.MOVE,"wait: another kind of wait starts over");
+         this.expect(this.expired(DuelWait.MOVE) == DuelWait.STUCK && this.expired(DuelWait.END) == DuelWait.STUCK,"wait: an expired wait is a stuck wait");
+         this.expect(this.expired(DuelWait.HELLO) == DuelWait.HELLO_TIMEOUT,"wait: an expired Hello wait is hello_timeout");
+         this.expect(this.expired(DuelWait.REPLAY) == DuelWait.REPLAY_TIMEOUT,"wait: an expired R wait ends the confirmed draw (R51)");
+         var going:DuelWait = new DuelWait();
+         this.expect(going.verdict(DuelWait.MOVE,7,1000,normal,-1,false,DuelEnd.PLAYING,false) == DuelWait.GO_ON,"wait: a fresh wait goes on");
+         this.expect(new DuelWait().verdict(DuelWait.MOVE,7,1000,normal,1000,false,DuelEnd.PLAYING,false) == DuelWait.LEFT,"left: ends at once when nothing waits in the window");
+         var drain:DuelWait = new DuelWait();
+         this.expect(drain.verdict(DuelWait.NONE,7,1000 + DuelWait.LEFT_DRAIN_MS,normal,1000,true,DuelEnd.PLAYING,false) == DuelWait.GO_ON,"left: what the opponent sent applies first");
+         this.expect(drain.verdict(DuelWait.NONE,7,1001 + DuelWait.LEFT_DRAIN_MS,normal,1000,true,DuelEnd.PLAYING,false) == DuelWait.LEFT,"left: at most LEFT_DRAIN_MS");
+         this.expect(new DuelWait().verdict(DuelWait.END,7,1000,normal,1000,false,DuelEnd.CONFIRMING,false) == DuelWait.STUCK,"left: while waiting for E through the stuck path (R50)");
+         this.expect(new DuelWait().verdict(DuelWait.REPLAY,7,1000,normal,1000,false,DuelEnd.CONFIRMED,true) == DuelWait.LEFT_DRAW,"left: a confirmed draw ends as a draw (R51)");
+         this.expect(new DuelWait().verdict(DuelWait.NONE,7,1000 + 10 * normal,normal,1000,false,DuelEnd.CONFIRMED,false) == DuelWait.GO_ON,"left: a confirmed win or loss stands");
          this.expect(DuelWait.reasonOfY(["0badf00d","0",DuelWait.MARK_STUCK]) == "stuck_wait","wait: a stuck Y ends the opponent with stuck_wait");
          this.expect(DuelWait.reasonOfY(["0badf00d","0",DuelWait.MARK_HELLO]) == "hello_timeout","wait: a Hello Y ends the opponent with hello_timeout");
          this.expect(DuelWait.reasonOfY(["0badf00d","12"]) == "" && DuelWait.reasonOfY(["0badf00d","0","x"]) == "","wait: any other Y is a desync");
-         this.expect(DuelWait.leftEnds(1000,1000,false,false),"left: ends at once when nothing waits in the window");
-         this.expect(!DuelWait.leftEnds(1000,1000 + DuelWait.LEFT_DRAIN_MS,true,false) && DuelWait.leftEnds(1000,1001 + DuelWait.LEFT_DRAIN_MS,true,false),"left: what the opponent sent applies first, for a while");
-         this.expect(!DuelWait.leftEnds(1000,1000 + 10 * normal,false,true),"left: a confirmed win or loss stands");
          var stuckY:DuelMessage = DuelCodec.decode("1.1g0.9.Y.0badf00d,0,stuck.0badf00d");
          this.expect(stuckY != null && DuelWait.reasonOfY(stuckY.args) == "stuck_wait","wait: the marked Y goes through the codec");
+         var dialog:DuelDecision = new DuelDecision("NUR","A13",DuelStateHash.SCOPE_FULL,null,null,null);
+         this.expect(!dialog.closedUnanswered(false),"decision: a dialog not shown yet is not closed");
+         dialog.shown = true;
+         this.expect(!dialog.closedUnanswered(true) && dialog.closedUnanswered(false),"decision: a shown board dialog that went away is closed unanswered (R52: shown again)");
+         var coin:DuelDecision = new DuelDecision(DuelSession.COIN,DuelSession.ASKER_COIN,DuelStateHash.SCOPE_SEAT,null,null,null);
+         coin.shown = true;
+         this.expect(!coin.closedUnanswered(false),"decision: the coin popup is the script's (it answers a close itself)");
+      }
+
+      /** The verdict of a wait of this kind that just passed the Normal limit, the opponent still there. */
+      private function expired(kind:String) : String
+      {
+         var wait:DuelWait = new DuelWait();
+         wait.verdict(kind,7,1000,DuelWait.NORMAL_MS,-1,false,DuelEnd.PLAYING,false);
+         return wait.verdict(kind,7,1001 + DuelWait.NORMAL_MS,DuelWait.NORMAL_MS,-1,false,DuelEnd.PLAYING,false);
       }
 
       /**
