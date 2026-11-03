@@ -196,12 +196,14 @@ def test_waiting_boards_say_so(board: Path) -> None:
 
 
 def test_second_decide_is_documented() -> None:
-    """R34: a second decide while one is open stays a local desync, and the reason is written down."""
+    """R34: a second decide while one is open stays a local desync, and the reason is written down (Task 13: cards
+    landing together, such as two birna_bran medics of the Skellige round 3 perk, ask one after the other because
+    their effects are deferred)."""
     text = (SRC / "DuelSession.as").read_text(encoding="utf-8")
     decide = function_body(text, "public function decide(")
     assert 'localDesync("decision " + kind + " while another is open")' in decide
     doc = text[text.rindex("/**", 0, text.index("public function decide(")):text.index("public function decide(")]
-    assert "R34" in doc and "No 5.01 case" in doc
+    assert "R34" in doc and "deferEffect" in doc and "birna_bran" in doc
 
 
 def test_decisions_are_typed() -> None:

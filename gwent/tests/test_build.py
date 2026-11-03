@@ -96,5 +96,9 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     assert "duelDecide" in (gwint / "CardLeaderInstance.as").read_text()
     flow = (gwint / "GwintGameFlowController.as").read_text()
     assert "duelScoiataelToss" in flow and "duelApplyRemoteRedraw" in flow
+    assert "duelRunRoundStartPerks" in flow
+    assert "duelRunLanding" in (gwint / "CardInstance.as").read_text()
+    assert "duelClearOrder" in (gwint / "CardManager.as").read_text()
+    assert "DUEL EFFECT " in (gwint / "DuelSession.as").read_text()
     assert "duelCoinChosen" in menu
     assert "function onQuitConfirmed" in menu and "stopDuelTimer" in menu

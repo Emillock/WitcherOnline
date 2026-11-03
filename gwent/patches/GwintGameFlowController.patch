@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameFlowController.as b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
-index 9ffd03a..e98437d 100644
+index 9ffd03a..00312de 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 @@ -1,6 +1,8 @@
@@ -11,7 +11,7 @@ index 9ffd03a..e98437d 100644
     import red.core.constants.KeyCode;
     import red.game.witcher3.constants.GwintInputFeedback;
     import red.game.witcher3.controls.InputFeedbackButton;
-@@ -64,6 +66,19 @@ package red.game.witcher3.menus.gwint
+@@ -64,6 +66,31 @@ package red.game.witcher3.menus.gwint
        
        protected var sawEndGameTutorial:Boolean = false;
        
@@ -27,22 +27,34 @@ index 9ffd03a..e98437d 100644
 +      public static const DUEL_MULLIGAN_WAIT_TEXT:String = "Waiting for your opponent";
 +
 +      private var _duelCoinChooser:int = -1;
++
++      /** Duel round start perk: the Northern Realms draw of the last round's winner. */
++      public static const DUEL_PERK_NORTH:int = 0;
++
++      /** Duel round start perk: the Skellige round 3 resurrect. */
++      public static const DUEL_PERK_SKELLIGE:int = 1;
++
++      /** Duel: the players of this round start's perks, in seat order (duelRunRoundStartPerks). */
++      private var _duelPerkPlayers:Vector.<int> = new Vector.<int>();
++
++      /** Duel: the kinds of this round start's perks (DUEL_PERK_*), in the same order. */
++      private var _duelPerkKinds:Vector.<int> = new Vector.<int>();
 +      
        public function GwintGameFlowController()
        {
           var newController:BasePlayerController = null;
-@@ -109,6 +124,10 @@ package red.game.witcher3.menus.gwint
+@@ -109,6 +136,10 @@ package red.game.witcher3.menus.gwint
        
        protected function shouldDisallowStateChangeFunc() : Boolean
        {
-+         if(DuelSession.active != null && (DuelSession.active.ended || DuelSession.active.decisionOpen))
++         if(DuelSession.active != null && (DuelSession.active.ended || DuelSession.active.decisionOpen || DuelSession.active.effectsPending))
 +         {
 +            return true;
 +         }
           if(Boolean(this.mcTutorials) && Boolean(this.mcTutorials.visible) && !this.mcTutorials.isPaused)
           {
              return true;
-@@ -116,6 +135,205 @@ package red.game.witcher3.menus.gwint
+@@ -116,6 +147,205 @@ package red.game.witcher3.menus.gwint
           return this.mcMessageQueue.ShowingMessage() || CardFXManager.getInstance().isPlayingAnyCardFX() || this.mcChoiceDialog.isShown() || CardTweenManager.getInstance().isAnyCardMoving();
        }
        
@@ -248,7 +260,7 @@ index 9ffd03a..e98437d 100644
        public function turnOnAI(playerIndex:int) : void
        {
           var newController:BasePlayerController = null;
-@@ -154,7 +372,7 @@ package red.game.witcher3.menus.gwint
+@@ -154,7 +384,7 @@ package red.game.witcher3.menus.gwint
        
        protected function state_update_Initializing() : void
        {
@@ -257,7 +269,7 @@ index 9ffd03a..e98437d 100644
           {
              this.stateMachine.ChangeState("Tutorials");
           }
-@@ -276,7 +494,11 @@ package red.game.witcher3.menus.gwint
+@@ -276,7 +506,11 @@ package red.game.witcher3.menus.gwint
           if(player1Faction != player2Faction && !this.mcTutorials.visible && (player1Faction == CardTemplate.FactionId_Scoiatael || player2Faction == CardTemplate.FactionId_Scoiatael))
           {
              GwintGameMenu.mSingleton.playSound("gui_gwint_scoia_tael_ability");
@@ -270,7 +282,7 @@ index 9ffd03a..e98437d 100644
              {
                 this.currentPlayer = CardManager.PLAYER_INVALID;
                 dispatchEvent(new Event(COIN_TOSS_POPUP_NEEDED,false,false));
-@@ -289,7 +511,11 @@ package red.game.witcher3.menus.gwint
+@@ -289,7 +523,11 @@ package red.game.witcher3.menus.gwint
           }
           else
           {
@@ -283,7 +295,7 @@ index 9ffd03a..e98437d 100644
              {
                 this.currentPlayer = CardManager.PLAYER_1;
              }
-@@ -323,6 +549,10 @@ package red.game.witcher3.menus.gwint
+@@ -323,6 +561,10 @@ package red.game.witcher3.menus.gwint
           this._mulliganDecided = false;
           this._mulliganCardsCount = 0;
           this.cardManager.shuffleAndDrawCards();
@@ -294,13 +306,13 @@ index 9ffd03a..e98437d 100644
           cardsInHand = this.cardManager.getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,CardManager.PLAYER_1);
           this.mcChoiceDialog.showDialogCardInstances(cardsInHand,this.handleAcceptMulligan,this.handleDeclineMulligan,"[[gwint_can_choose_card_to_redraw]]");
           this.mcChoiceDialog.appendDialogText(" 0/2");
-@@ -338,8 +568,24 @@ package red.game.witcher3.menus.gwint
+@@ -338,8 +580,24 @@ package red.game.witcher3.menus.gwint
        
        protected function state_update_Mulligan() : void
        {
 -         if(this._mulliganDecided && (!this.mcTutorials.visible || this.mcTutorials.isPaused))
 +         if(DuelSession.active != null && this._mulliganDecided)
-+         {
+          {
 +            if(this.mcChoiceDialog.isShown())
 +            {
 +               this.mcChoiceDialog.hideDialog();
@@ -312,7 +324,7 @@ index 9ffd03a..e98437d 100644
 +            }
 +         }
 +         if(this._mulliganDecided && (DuelSession.active == null || DuelSession.active.mulligan.roundMayStart(this._mulliganDecided)) && (!this.mcTutorials.visible || this.mcTutorials.isPaused))
-          {
++         {
 +            if(DuelSession.active != null)
 +            {
 +               DuelSession.active.mulligan.close();
@@ -320,7 +332,7 @@ index 9ffd03a..e98437d 100644
              this.stateMachine.ChangeState("RoundStart");
              this.mcChoiceDialog.hideDialog();
              this.gameStarted = true;
-@@ -355,6 +601,11 @@ package red.game.witcher3.menus.gwint
+@@ -355,6 +613,11 @@ package red.game.witcher3.menus.gwint
           var selectedCard:CardInstance = this.cardManager.getCardInstance(instanceId);
           if(selectedCard)
           {
@@ -332,7 +344,7 @@ index 9ffd03a..e98437d 100644
              newCard = this.cardManager.mulliganCard(selectedCard);
              this.mcChoiceDialog.replaceCard(selectedCard,newCard);
              ++this._mulliganCardsCount;
-@@ -364,7 +615,15 @@ package red.game.witcher3.menus.gwint
+@@ -364,7 +627,15 @@ package red.game.witcher3.menus.gwint
                 this.mcChoiceDialog.updateDialogText("[[gwint_can_choose_card_to_redraw]]");
                 this.mcChoiceDialog.appendDialogText(" 1/2");
              }
@@ -348,7 +360,7 @@ index 9ffd03a..e98437d 100644
           }
        }
        
-@@ -372,6 +631,7 @@ package red.game.witcher3.menus.gwint
+@@ -372,6 +643,7 @@ package red.game.witcher3.menus.gwint
        {
           this.mcChoiceDialog.hideDialog();
           this._mulliganDecided = true;
@@ -356,7 +368,19 @@ index 9ffd03a..e98437d 100644
           if(this.playerControllers[CardManager.PLAYER_1] is HumanPlayerController)
           {
              (this.playerControllers[CardManager.PLAYER_1] as HumanPlayerController).attachToTutorialCarouselMessage();
-@@ -422,6 +682,10 @@ package red.game.witcher3.menus.gwint
+@@ -391,6 +663,11 @@ package red.game.witcher3.menus.gwint
+          this.mcMessageQueue.PushMessage("[[gwint_round_start]]","round_start");
+          this.allNeutralInRound = true;
+          this.playedCreaturesInRound = false;
++         if(DuelSession.active != null)
++         {
++            this.duelPushRoundStartPerks();
++            return;
++         }
+          if(this.lastRoundWinner != CardManager.PLAYER_INVALID && this.cardManager.playerDeckDefinitions[this.lastRoundWinner].getDeckFaction() == CardTemplate.FactionId_Northern_Kingdom)
+          {
+             this.mcMessageQueue.PushMessage("[[gwint_northern_ability_triggered]]","north_ability",this.onShowNorthAbilityShown,null);
+@@ -422,6 +699,10 @@ package red.game.witcher3.menus.gwint
              }
              if(this.shouldDisallowStateChangeFunc() == false)
              {
@@ -367,7 +391,83 @@ index 9ffd03a..e98437d 100644
                 this.playerControllers[CardManager.PLAYER_1].resetCurrentRoundStatus();
                 this.playerControllers[CardManager.PLAYER_2].resetCurrentRoundStatus();
                 if(this.playerControllers[this.currentPlayer].currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE)
-@@ -723,7 +987,11 @@ package red.game.witcher3.menus.gwint
+@@ -459,6 +740,75 @@ package red.game.witcher3.menus.gwint
+          this.cardManager.ressurectFromGraveyard(CardManager.PLAYER_2,2);
+       }
+       
++      /**
++       * Duel round start perks (spec 7.4): the Northern Realms draw of the last round's winner and the Skellige round 3
++       * resurrect, in seat order (seat A, then seat B) on both boards. Each perk shows its vanilla message and sound in
++       * that order, and all of them run together when the first of these messages shows (duelRunRoundStartPerks): a
++       * player may skip messages, so one callback per message would run them at different moments on the two boards.
++       */
++      private function duelPushRoundStartPerks() : void
++      {
++         var seat:int = 0;
++         var player:int = 0;
++         var faction:int = 0;
++         this._duelPerkPlayers.length = 0;
++         this._duelPerkKinds.length = 0;
++         for(seat = DuelIds.SEAT_A; seat <= DuelIds.SEAT_B; seat++)
++         {
++            player = DuelSession.active.playerOf(seat);
++            faction = this.cardManager.playerDeckDefinitions[player].getDeckFaction();
++            if(player == this.lastRoundWinner && faction == CardTemplate.FactionId_Northern_Kingdom)
++            {
++               this.duelPushPerk(player,DUEL_PERK_NORTH,"[[gwint_northern_ability_triggered]]","north_ability","gui_gwint_northern_realms_ability");
++            }
++            if(this.currentRound == 2 && faction == CardTemplate.FactionId_Skellige)
++            {
++               this.duelPushPerk(player,DUEL_PERK_SKELLIGE,player == CardManager.PLAYER_1 ? "[[gwint_skel_ability_player_triggered]]" : "[[gwint_skel_ability_ai_triggered]]","skel_ability","gui_gwint_skellige_ability");
++            }
++         }
++      }
++      
++      /**
++       * Duel: shows one round start perk's message and sound; the first message carries the callback that runs them all.
++       */
++      private function duelPushPerk(player:int, kind:int, message:String, image:String, sound:String) : void
++      {
++         this.mcMessageQueue.PushMessage(message,image,this._duelPerkPlayers.length == 0 ? this.duelRunRoundStartPerks : null,null);
++         GwintGameMenu.mSingleton.playSound(sound);
++         this._duelPerkPlayers.push(player);
++         this._duelPerkKinds.push(kind);
++      }
++      
++      /**
++       * Duel: runs this round start's perks in seat order (the draw and the resurrects start their card moves; the
++       * landing effects then run in canonical order through DuelSession.deferEffect). Logs DUEL PERK <north|skellige>
++       * seat=<A|B> for each.
++       */
++      private function duelRunRoundStartPerks() : void
++      {
++         var i:int = 0;
++         var player:int = 0;
++         if(DuelSession.active == null || DuelSession.active.ended)
++         {
++            return;
++         }
++         for(i = 0; i < this._duelPerkPlayers.length; i++)
++         {
++            player = this._duelPerkPlayers[i];
++            DuelSession.active.log("DUEL PERK " + (this._duelPerkKinds[i] == DUEL_PERK_NORTH ? "north" : "skellige") + " seat=" + (DuelSession.active.seatOf(player) == DuelIds.SEAT_A ? "A" : "B"));
++            if(this._duelPerkKinds[i] == DUEL_PERK_NORTH)
++            {
++               this.cardManager.drawCard(player);
++            }
++            else
++            {
++               this.cardManager.ressurectFromGraveyard(player,2);
++            }
++         }
++         this._duelPerkPlayers.length = 0;
++         this._duelPerkKinds.length = 0;
++      }
++      
+       protected function state_begin_PlayerTurn() : void
+       {
+          this.log("#AI# starting player turn for player: " + this.currentPlayer);
+@@ -723,7 +1073,11 @@ package red.game.witcher3.menus.gwint
        protected function state_begin_ClearingBoard() : void
        {
           var monsterAbilityTriggered:Boolean = false;
@@ -380,7 +480,7 @@ index 9ffd03a..e98437d 100644
           {
              monsterAbilityTriggered = true;
           }
-@@ -836,6 +1104,7 @@ package red.game.witcher3.menus.gwint
+@@ -836,6 +1190,7 @@ package red.game.witcher3.menus.gwint
           {
              GwintGameMenu.mSingleton.playSound("gui_gwint_battle_draw");
           }
@@ -388,7 +488,7 @@ index 9ffd03a..e98437d 100644
           this.mcEndGameDialog.show(gameWinner,this.OnEndGameResult);
        }
        
-@@ -845,6 +1114,11 @@ package red.game.witcher3.menus.gwint
+@@ -845,6 +1200,11 @@ package red.game.witcher3.menus.gwint
        
        protected function OnEndGameResult(result:int) : void
        {

@@ -7,7 +7,7 @@ package red.game.witcher3.menus.gwint
     * In-game self-test of the board-independent duel classes: replays every vector of DuelVectors (generated
     * from the Python reference) through DuelRandom, DuelHash, DuelCodec and DuelWindow, plus hand-written checks
     * of DuelIds, the window cap, the error paths, and the routing of synthetic D and M messages (DuelDecision.route,
-    * DuelMulligan.route). Runs only when the script sets gwint.game.debug.selfTest
+    * DuelMulligan.route) and the order of deferred effects (DuelDeferred). Runs only when the script sets gwint.game.debug.selfTest
     * (the w3test bot does, a normal player never), and reports "DUEL SELFTEST pass=n fail=m" and one
     * "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
     */
@@ -51,6 +51,7 @@ package red.game.witcher3.menus.gwint
          test.guard("ids",test.checkIds);
          test.guard("edges",test.checkEdges);
          test.guard("decisions",test.checkDecisions);
+         test.guard("deferred",test.checkDeferred);
          _checks = test._count;
          return test._failures;
       }
@@ -314,6 +315,57 @@ package red.game.witcher3.menus.gwint
          late.open();
          late.close();
          this.expect(isDesync(late.route(mul)),"mulligan: a redraw after round 1 started is a desync");
+      }
+
+      /**
+       * The deferral queue of simultaneous effects (spec 7.4, DuelDeferred) on effects queued in a scrambled order: they
+       * run seat A first, then by net id, then in queue order, whatever order they were queued in (two effects of one
+       * card run in the order queued); an effect queued while another runs takes its place in the order; effects
+       * without a seat or net id run last; clear() empties the queue.
+       */
+      private function checkDeferred() : void
+      {
+         var ran:Array = [];
+         var queue:DuelDeferred = new DuelDeferred();
+         var cardA7:Object = new Object();
+         var effect:DuelEffect = null;
+         queue.add(DuelIds.SEAT_B,65536 + 3,new Object(),recorder(ran,"B3"));
+         queue.add(DuelIds.SEAT_A,7,cardA7,recorder(ran,"A7"));
+         queue.add(DuelDeferred.NO_SEAT,DuelDeferred.NO_NET_ID,null,recorder(ran,"none1"));
+         queue.add(DuelIds.SEAT_B,65536 + 1,new Object(),recorder(ran,"B1"));
+         queue.add(DuelIds.SEAT_A,12,new Object(),recorder(ran,"A12"));
+         queue.add(DuelIds.SEAT_A,2,new Object(),function():void
+         {
+            ran.push("A2");
+            queue.add(DuelIds.SEAT_A,1,new Object(),recorder(ran,"A1"));
+         });
+         queue.add(DuelDeferred.NO_SEAT,DuelDeferred.NO_NET_ID,null,recorder(ran,"none2"));
+         queue.add(DuelIds.SEAT_A,7,cardA7,recorder(ran,"A7again"));
+         this.expect(queue.count == 8 && queue.pending,"deferred: eight effects queued (" + queue.count + ")");
+         while(queue.pending)
+         {
+            effect = queue.takeNext();
+            effect.run();
+         }
+         this.expect(ran.join(" ") == "A2 A1 A7 A7again A12 B1 B3 none1 none2","deferred: seat A first, then net id, then queue order (" + ran.join(" ") + ")");
+         this.expect(queue.takeNext() == null && !queue.pending && queue.count == 0,"deferred: an empty queue gives nothing");
+         ran.length = 0;
+         queue.add(DuelIds.SEAT_B,65536 + 1,new Object(),recorder(ran,"B1"));
+         queue.add(DuelIds.SEAT_A,65536 + 9,new Object(),recorder(ran,"A-owned"));
+         queue.takeNext().run();
+         this.expect(ran.join(" ") == "A-owned","deferred: the owner's seat decides before the net id (" + ran.join(" ") + ")");
+         queue.add(DuelIds.SEAT_A,4,new Object(),recorder(ran,"A4"));
+         queue.clear();
+         this.expect(!queue.pending && queue.takeNext() == null,"deferred: clear drops every queued effect");
+      }
+
+      /** An effect that records its name in ran when it runs. */
+      private static function recorder(ran:Array, name:String) : Function
+      {
+         return function():void
+         {
+            ran.push(name);
+         };
       }
 
       /** A synthetic D with these args. */

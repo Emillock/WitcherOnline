@@ -51,6 +51,14 @@ package red.game.witcher3.menus.gwint
     * SCOPE_FULL. Autoplay (test bots) answers a decision after AUTOPLAY_DELAY_MS with the vanilla AI choice where the
     * vanilla AI has one, else the first option (autoChoice), redraws up to 2 cards at the mulligan with
     * gwint.game.debug.mulligan, and closes the opponent-cards display.
+    * Canonical order (spec 7.4): the rule effects of a card that finished moving into a list
+    * (CardInstance.onFinishedMovingIntoHolder), the graveyard move at the end of each scorch FX and the effects of a
+    * card at the end of its morph FX are queued (deferEffect) and run one at a time in seat, then net id
+    * order once the board has settled, never in tween-completion order; the board holds while any is queued
+    * (effectsPending), and the queue is emptied when the game ends. The paired perks run seat A first on both boards:
+    * the round start perks (Northern Realms draw, Skellige round 3) together in seat order at the first perk message
+    * (GwintGameFlowController.duelRunRoundStartPerks), the Monsters round-end loop in seat order
+    * (CardManager.duelClearOrder).
     *
     * Choice dialog callers (W3ChoiceDialog.showDialog*) in the decompiled vanilla 5.01 board, file:line in that output
     * (red/game/witcher3/menus/gwint, or red/game/witcher3/controls for W3ChoiceDialog), with the decision kind:
@@ -161,6 +169,9 @@ package red.game.witcher3.menus.gwint
 
       private var _mulligan:DuelMulligan;
 
+      /** Rule effects waiting for the board to settle (deferEffect, spec 7.4). */
+      private var _deferred:DuelDeferred;
+
       /**
        * Starts a duel game (use start(), which also makes it the active one).
        * @param seed The match seed from the script.
@@ -178,6 +189,7 @@ package red.game.witcher3.menus.gwint
          this._outSeq = 0;
          this._mulligans = [0,0];
          this._mulligan = new DuelMulligan();
+         this._deferred = new DuelDeferred();
          this._recent = [];
          this._sentHashes = {};
          this._startMs = getTimer();
@@ -207,6 +219,10 @@ package red.game.witcher3.menus.gwint
        */
       public static function stop() : void
       {
+         if(_active != null)
+         {
+            _active._deferred.clear();
+         }
          _active = null;
       }
 
@@ -428,10 +444,10 @@ package red.game.witcher3.menus.gwint
        * Only one decision is open at a time (R34). A second decide while one is open ends the duel as a local desync
        * rather than queueing it: the vanilla rules ask one choice per step and the next choice only from the handler
        * of the previous one (two LBIN then LPICK, a medic bringing back a medic), and both boards clear the open
-       * decision before that handler runs. No 5.01 case opens two at once: the only rules code that places two cards
-       * in one step, the Skellige round 3 perk (ressurectFromGraveyard), cannot meet a choice, since Skellige has no
-       * non-hero medic and no resurrect leader, and its picks are seeded draws. A future rule with two choices in one
-       * step would end the match as a desync, never hang it.
+       * decision before that handler runs. Cards that land in one step (the Skellige round 3 perk of both seats, which
+       * can bring back two birna_bran medics, muster, scorch) cannot open two at once either: their effects are deferred
+       * (deferEffect) and run one at a time, the next one only once the open decision has been applied and the board
+       * has settled. A future rule with two choices in one effect would end the match as a desync, never hang it.
        */
       public function decide(kind:String, seat:int, askerNetId:int, showLocal:Function, apply:Function, autoChoice:Function = null) : void
       {
@@ -491,6 +507,62 @@ package red.game.witcher3.menus.gwint
       public function get decisionOpen() : Boolean
       {
          return this._localDecision != null || this._remoteDecision != null;
+      }
+
+      /**
+       * Queues a card's rule effect (spec 7.4) instead of running it when its tween or FX happens to end: the landing
+       * effects of a card that finished moving into a list, the graveyard move at the end of a scorch FX and the
+       * effects of a morphed card at the end of its morph FX (CardInstance). update() runs the
+       * queued effects one at a time in canonical order (seat of the card's owner, seat A first, then net id), each
+       * once no card moves, no card FX plays and no decision is open, so every effect and everything it starts (FX,
+       * scorch, summons, a medic's choice) has settled before the next one runs. Both boards therefore apply the same
+       * effects in the same order whatever the animation timing; while any is queued the board holds (effectsPending),
+       * so the hash of the next message includes them. Several effects of one card run in the order queued. After the end of the game the effect runs at once, as in vanilla (nothing is hashed or sent any more).
+       * @param card The card the effect belongs to.
+       * @param run function():void, applies the effect.
+       */
+      public function deferEffect(card:CardInstance, run:Function) : void
+      {
+         if(run == null)
+         {
+            return;
+         }
+         if(this._ended)
+         {
+            run();
+            return;
+         }
+         var seat:int = card != null ? this.seatOf(card.owningPlayer) : -1;
+         var netId:int = card != null ? this._ids.toNet(card.instanceId) : -1;
+         this._deferred.add(seat >= 0 ? seat : DuelDeferred.NO_SEAT,netId >= 0 ? netId : DuelDeferred.NO_NET_ID,card,run);
+      }
+
+      /**
+       * True while a deferred rule effect waits: the controllers and the game flow hold until it ran.
+       */
+      public function get effectsPending() : Boolean
+      {
+         return this._deferred.pending;
+      }
+
+      /**
+       * Runs the queued effects in canonical order, one per settled point: stops as soon as one starts a card move or
+       * FX, opens a decision, or ends the game. Logs DUEL EFFECT <netId> t<templateId> queued=<n> for each effect that
+       * ran while others were queued (both boards log the same lines).
+       */
+      private function runDeferred() : void
+      {
+         while(!this._ended && this._deferred.pending && !this.decisionOpen && this.settled())
+         {
+            var queued:int = this._deferred.count;
+            var effect:DuelEffect = this._deferred.takeNext();
+            if(queued > 1)
+            {
+               var card:CardInstance = effect.token as CardInstance;
+               this.log("DUEL EFFECT " + (effect.netId != DuelDeferred.NO_NET_ID ? DuelIds.format(effect.netId) : "none") + " t" + (card != null ? card.templateId : -1) + " queued=" + queued);
+            }
+            effect.run();
+         }
       }
 
       /**
@@ -663,6 +735,7 @@ package red.game.witcher3.menus.gwint
             this.desync(this._window.nextSeq,DuelStateHash.compute(DuelStateHash.SCOPE_FULL,0),0,"gap");
             return;
          }
+         this.runDeferred();
          var next:DuelMessage = this._window.peek();
          if(next != null)
          {
@@ -775,6 +848,7 @@ package red.game.witcher3.menus.gwint
             return;
          }
          this._ended = true;
+         this._deferred.clear();
          var result:String = winner == CardManager.PLAYER_1 ? "win" : (winner == CardManager.PLAYER_2 ? "loss" : "draw");
          this.log("DUEL END result=" + result + " reason=match game=" + this._gameNumber);
          GwintGameMenu.mSingleton.duelFinish(result);
@@ -793,6 +867,7 @@ package red.game.witcher3.menus.gwint
             return;
          }
          this._ended = true;
+         this._deferred.clear();
          this.log("DUEL END result=nocontest reason=" + reason + " game=" + this._gameNumber);
          GwintGameMenu.mSingleton.duelAbort(reason,text);
       }
@@ -812,6 +887,7 @@ package red.game.witcher3.menus.gwint
          var settles:Boolean = this._helloDone;
          this.send(DuelCodec.SURRENDER,[settles ? "1" : "0"],DuelStateHash.SCOPE_FULL);
          this._ended = true;
+         this._deferred.clear();
          if(settles)
          {
             this.log("DUEL END result=loss reason=surrender game=" + this._gameNumber);
@@ -1035,6 +1111,7 @@ package red.game.witcher3.menus.gwint
          if(quit.args[0] == "1")
          {
             this._ended = true;
+            this._deferred.clear();
             this.log("DUEL END result=win reason=surrender game=" + this._gameNumber);
             GwintGameMenu.mSingleton.duelFinish("win");
          }

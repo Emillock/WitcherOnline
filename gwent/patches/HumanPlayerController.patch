@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
-index bea2665..700607d 100644
+index bea2665..199efcd 100644
 --- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
 +++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
 @@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
@@ -24,7 +24,7 @@ index bea2665..700607d 100644
        public function HumanPlayerController()
        {
           super();
-@@ -94,19 +102,150 @@ package red.game.witcher3.menus.gwint
+@@ -94,19 +102,152 @@ package red.game.witcher3.menus.gwint
        {
           if(CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID).length == 0 && !CardManager.getInstance().getCardLeader(playerID).canBeUsed)
           {
@@ -79,13 +79,15 @@ index bea2665..700607d 100644
 +      /**
 +       * Duel autoplay (gwint.game.debug.autoplay, test bots): on the local turn, after a short pause, plays the move
 +       * the vanilla AI evaluation picks for PLAYER_1 through commitTransaction, or passes. A move that opens a choice
-+       * (medic, leader) is played like any other; DuelSession autoplay answers the decision.
++       * (medic, leader) is played like any other; DuelSession autoplay answers the decision. Nothing is played while
++       * the board has not settled (cardEffectApplying: card moves, FX, messages, a dialog, an open decision, deferred
++       * effects), so the hash of the move includes everything the previous one started.
 +       * @return True while autoplay handles the turn (ChoosingCard then does nothing else this update).
 +       */
 +      private function duelAutoplayTick() : Boolean
 +      {
 +         var move:CardTransaction = null;
-+         if(DuelSession.active == null || DuelSession.active.ended || DuelSession.active.decisionOpen || !GwintGameMenu.mSingleton.duelDebugAutoplay || _transactionCard != null || this._currentZoomedHolder != null || this.mcChoiceDialog.isShown())
++         if(DuelSession.active == null || DuelSession.active.ended || this.cardEffectApplying() || !GwintGameMenu.mSingleton.duelDebugAutoplay || _transactionCard != null || this._currentZoomedHolder != null || this.mcChoiceDialog.isShown())
 +         {
 +            return false;
 +         }
@@ -176,7 +178,7 @@ index bea2665..700607d 100644
              currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
              _turnOver = true;
              if(_transactionCard != null)
-@@ -208,6 +347,10 @@ package red.game.witcher3.menus.gwint
+@@ -208,6 +349,10 @@ package red.game.witcher3.menus.gwint
           var isCardEffect:Boolean = false;
           var isGlobalEffect:Boolean = false;
           this.on_state_about_to_update();
@@ -187,7 +189,7 @@ index bea2665..700607d 100644
           if(_transactionCard)
           {
              cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
-@@ -313,18 +456,19 @@ package red.game.witcher3.menus.gwint
+@@ -313,18 +458,19 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction = new CardTransaction();
              _decidedCardTransaction.targetPlayerID = playerID;
              _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
@@ -199,7 +201,7 @@ index bea2665..700607d 100644
        override protected function cardEffectApplying() : Boolean
        {
 -         return Boolean(super.cardEffectApplying()) || this.mcChoiceDialog.visible;
-+         return Boolean(super.cardEffectApplying()) || this.mcChoiceDialog.visible || DuelSession.active != null && DuelSession.active.decisionOpen;
++         return Boolean(super.cardEffectApplying()) || this.mcChoiceDialog.visible || DuelSession.active != null && (DuelSession.active.decisionOpen || DuelSession.active.effectsPending);
        }
        
        override protected function state_begin_ApplyingCard() : void
@@ -209,7 +211,16 @@ index bea2665..700607d 100644
           _boardRenderer.activateAllHolders(true);
           if(Boolean(this._handHolder) && _boardRenderer.getSelectedCardHolder() != this._handHolder)
           {
-@@ -450,7 +594,7 @@ package red.game.witcher3.menus.gwint
+@@ -335,7 +481,7 @@ package red.game.witcher3.menus.gwint
+       override protected function state_update_ApplyingCard() : void
+       {
+          this.on_state_about_to_update();
+-         if(!CardTweenManager.getInstance().isAnyCardMoving() && !gameFlowControllerRef.mcMessageQueue.ShowingMessage() && !CardFXManager.getInstance().isPlayingAnyCardFX() && !this.mcChoiceDialog.visible)
++         if(!CardTweenManager.getInstance().isAnyCardMoving() && !gameFlowControllerRef.mcMessageQueue.ShowingMessage() && !CardFXManager.getInstance().isPlayingAnyCardFX() && !this.mcChoiceDialog.visible && (DuelSession.active == null || !DuelSession.active.effectsPending && !DuelSession.active.decisionOpen))
+          {
+             _turnOver = true;
+             _stateMachine.ChangeState("Idle");
+@@ -450,7 +596,7 @@ package red.game.witcher3.menus.gwint
                       _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
                       _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
                       _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -218,7 +229,7 @@ index bea2665..700607d 100644
                    }
              }
           }
-@@ -468,7 +612,7 @@ package red.game.witcher3.menus.gwint
+@@ -468,7 +614,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
              _decidedCardTransaction.targetCardInstanceRef = null;
              _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -227,7 +238,7 @@ index bea2665..700607d 100644
           }
        }
        
-@@ -522,6 +666,10 @@ package red.game.witcher3.menus.gwint
+@@ -522,6 +668,10 @@ package red.game.witcher3.menus.gwint
        
        private function cancelCardTransaction(restoreSelection:Boolean = false) : void
        {

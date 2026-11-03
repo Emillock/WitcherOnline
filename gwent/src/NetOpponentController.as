@@ -76,11 +76,12 @@ package red.game.witcher3.menus.gwint
 
       /**
        * Also waits while a dialog or the local player's card zoom is open (the human controller does the same), and
-       * while a decision is open (DuelSession.decisionOpen: the opponent's choice inside its move has not arrived).
+       * while a decision is open (DuelSession.decisionOpen: the opponent's choice inside its move has not arrived) or a
+       * deferred rule effect waits (DuelSession.effectsPending: the move is applied only once all of them ran).
        */
       override protected function cardEffectApplying() : Boolean
       {
-         return Boolean(super.cardEffectApplying()) || gameFlowControllerRef.mcChoiceDialog.isShown() || DuelSession.active != null && DuelSession.active.decisionOpen;
+         return Boolean(super.cardEffectApplying()) || gameFlowControllerRef.mcChoiceDialog.isShown() || DuelSession.active != null && (DuelSession.active.decisionOpen || DuelSession.active.effectsPending);
       }
 
       /**
