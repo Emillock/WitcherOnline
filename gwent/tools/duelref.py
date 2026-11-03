@@ -13,6 +13,7 @@ Wire format: six fields joined by ".":  version.matchId.seq.type.args.hash
   seq      positive decimal, 1 to 9 digits, no leading zero
   type     one of TYPES
   args     "_" when empty, else arguments joined by "," (each one of [A-Za-z0-9]+)
+           (QUITGAME: exactly one, "1" if the quitter settles the bet, "0" if not)
   hash     exactly 8 lowercase hex digits
 Messages in a window are joined by "~". "none" stands for an empty window.
 """
@@ -31,6 +32,8 @@ STREAM_COUNT = 3
 
 PROTOCOL_VERSION = 1
 TYPES = ("H", "P", "C", "G", "L", "S", "D", "M", "QUITGAME", "Y", "R", "X")
+# Surrender carries exactly one argument: "1" if the quitter settles the bet (its Hello was complete), "0" if not.
+SURRENDER_TYPE = "QUITGAME"
 WINDOW_SEPARATOR = "~"
 EMPTY_WINDOW = "none"
 
@@ -131,6 +134,8 @@ def decode(token: str) -> Message | None:
         arg_list = args.split(",")
         if not all(_ARG_RE.fullmatch(a) for a in arg_list):
             return None
+    if msg_type == SURRENDER_TYPE and arg_list not in (["0"], ["1"]):
+        return None
     return {"version": int(version), "matchId": match_id, "seq": int(seq), "type": msg_type,
             "args": arg_list, "hash": int(hash_hex, 16)}
 
@@ -234,7 +239,8 @@ def _codec_vectors() -> dict[str, list[Any]]:
         ("1a2b3c4dg2", 9, "D", ["COIN", "coin", "1"], 0x9ABCDEF0),
         ("1a2b3c4dg2", 10, "D", ["LRES", "A1", "none"], 7),
         ("1a2b3c4dg2", 11, "M", [], 0x0000FFFF),
-        ("1a2b3c4dg2", 12, "QUITGAME", [], 0x7FFFFFFF),
+        ("1a2b3c4dg2", 12, "QUITGAME", ["1"], 0x7FFFFFFF),
+        ("1a2b3c4dg2", 15, "QUITGAME", ["0"], 0x00000001),
         ("1a2b3c4dg2", 13, "Y", ["deadbeef", "12"], 0x80000000),
         ("1a2b3c4dg2", 14, "R", [], 0x01020304),
         ("1a2b3c4dg2", 999999999, "X", [], 0xCAFEBABE),
@@ -271,6 +277,9 @@ def _codec_vectors() -> dict[str, list[Any]]:
         f"0.{ok}.1.S._.00000000",
         f"1.{ok}.1.S._ .00000000",
         f"1.{ok}.1.S._.00000000~1.{ok}.2.S._.00000000",
+        f"1.{ok}.1.QUITGAME._.00000000",
+        f"1.{ok}.1.QUITGAME.2.00000000",
+        f"1.{ok}.1.QUITGAME.1,0.00000000",
     ]
     return {"valid": valid, "malformed": malformed}
 

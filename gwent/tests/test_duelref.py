@@ -117,7 +117,7 @@ MESSAGES = {
     "S": [],
     "D": ["NUR", "A12", "B3"],
     "M": [],
-    "QUITGAME": [],
+    "QUITGAME": ["1"],
     "Y": ["deadbeef", "12"],
     "R": [],
     "X": [],
@@ -149,6 +149,17 @@ def test_codec_wire_shape():
 
 def test_codec_surrender_contains_quitgame():
     assert "QUITGAME" in encode(message_of("QUITGAME"))
+
+
+def test_codec_surrender_carries_settles_flag():
+    """QUITGAME has exactly one argument: 1 if the quitter settles (its Hello was complete), else 0."""
+    for flag in ("0", "1"):
+        msg = {**message_of("QUITGAME"), "args": [flag]}
+        assert decode(encode(msg)) == msg
+    for args in ("_", "2", "1,0", "11", "A1"):
+        assert decode(f"1.1a2b3c4dg2.5.QUITGAME.{args}.0badf00d") is None, args
+    with pytest.raises(ValueError):
+        encode({**message_of("QUITGAME"), "args": []})
 
 
 def test_codec_rejects_malformed():

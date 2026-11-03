@@ -45,15 +45,13 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * The opponent's turn starts: wait for its next move.
+       * The opponent's turn starts: wait for its next move. When the opponent has nothing left to play (empty hand,
+       * leader not usable) its board still sends S (HumanPlayerController), so this side waits for that S too.
        */
       override public function startTurn() : void
       {
-         if(currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE)
-         {
-            return;
-         }
          super.startTurn();
+         _turnOver = false;
          _stateMachine.ChangeState("WaitingForMove");
       }
 

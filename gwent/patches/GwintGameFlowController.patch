@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameFlowController.as b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
-index 9ffd03a..69547b7 100644
+index 9ffd03a..5ea5a76 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 @@ -1,6 +1,8 @@
@@ -34,7 +34,7 @@ index 9ffd03a..69547b7 100644
           if(Boolean(this.mcTutorials) && Boolean(this.mcTutorials.visible) && !this.mcTutorials.isPaused)
           {
              return true;
-@@ -116,6 +127,69 @@ package red.game.witcher3.menus.gwint
+@@ -116,6 +127,92 @@ package red.game.witcher3.menus.gwint
           return this.mcMessageQueue.ShowingMessage() || CardFXManager.getInstance().isPlayingAnyCardFX() || this.mcChoiceDialog.isShown() || CardTweenManager.getInstance().isAnyCardMoving();
        }
        
@@ -60,6 +60,14 @@ index 9ffd03a..69547b7 100644
 +         opponent.playerID = CardManager.PLAYER_2;
 +         opponent.opponentID = CardManager.PLAYER_1;
 +         this.playerControllers[CardManager.PLAYER_2] = opponent;
++         this.startDuelTimer();
++      }
++      
++      /**
++       * Starts the 20 ms duel tick (DuelSession.update) if it is not running.
++       */
++      public function startDuelTimer() : void
++      {
 +         if(this._duelTimer == null)
 +         {
 +            this._duelTimer = new Timer(20,0);
@@ -68,12 +76,27 @@ index 9ffd03a..69547b7 100644
 +         }
 +      }
 +      
++      /**
++       * Stops the duel tick (the duel ended or the board closes).
++       */
++      public function stopDuelTimer() : void
++      {
++         if(this._duelTimer != null)
++         {
++            this._duelTimer.stop();
++            this._duelTimer.removeEventListener(TimerEvent.TIMER,this.onDuelTick);
++            this._duelTimer = null;
++         }
++      }
++      
 +      private function onDuelTick(event:TimerEvent) : void
 +      {
-+         if(DuelSession.active != null)
++         if(DuelSession.active == null || DuelSession.active.ended)
 +         {
-+            DuelSession.active.update();
++            this.stopDuelTimer();
++            return;
 +         }
++         DuelSession.active.update();
 +      }
 +      
 +      /**
@@ -104,7 +127,7 @@ index 9ffd03a..69547b7 100644
        public function turnOnAI(playerIndex:int) : void
        {
           var newController:BasePlayerController = null;
-@@ -154,7 +228,7 @@ package red.game.witcher3.menus.gwint
+@@ -154,7 +251,7 @@ package red.game.witcher3.menus.gwint
        
        protected function state_update_Initializing() : void
        {
@@ -113,18 +136,20 @@ index 9ffd03a..69547b7 100644
           {
              this.stateMachine.ChangeState("Tutorials");
           }
-@@ -293,6 +367,10 @@ package red.game.witcher3.menus.gwint
-             {
-                this.currentPlayer = CardManager.PLAYER_1;
-             }
-+            else if(DuelSession.active != null)
+@@ -289,7 +386,11 @@ package red.game.witcher3.menus.gwint
+          }
+          else
+          {
+-            if(this.mcTutorials.visible)
++            if(DuelSession.active != null)
 +            {
 +               this.currentPlayer = DuelSession.active.playerOf(DuelSession.active.random.nextInt(DuelRandom.STREAM_SHARED,2));
 +            }
-             else
++            else if(this.mcTutorials.visible)
              {
-                this.currentPlayer = Math.floor(Math.random() * 2);
-@@ -422,6 +500,10 @@ package red.game.witcher3.menus.gwint
+                this.currentPlayer = CardManager.PLAYER_1;
+             }
+@@ -422,6 +523,10 @@ package red.game.witcher3.menus.gwint
              }
              if(this.shouldDisallowStateChangeFunc() == false)
              {
@@ -135,7 +160,7 @@ index 9ffd03a..69547b7 100644
                 this.playerControllers[CardManager.PLAYER_1].resetCurrentRoundStatus();
                 this.playerControllers[CardManager.PLAYER_2].resetCurrentRoundStatus();
                 if(this.playerControllers[this.currentPlayer].currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE)
-@@ -836,6 +918,7 @@ package red.game.witcher3.menus.gwint
+@@ -836,6 +941,7 @@ package red.game.witcher3.menus.gwint
           {
              GwintGameMenu.mSingleton.playSound("gui_gwint_battle_draw");
           }
@@ -143,7 +168,7 @@ index 9ffd03a..69547b7 100644
           this.mcEndGameDialog.show(gameWinner,this.OnEndGameResult);
        }
        
-@@ -845,6 +928,11 @@ package red.game.witcher3.menus.gwint
+@@ -845,6 +951,11 @@ package red.game.witcher3.menus.gwint
        
        protected function OnEndGameResult(result:int) : void
        {

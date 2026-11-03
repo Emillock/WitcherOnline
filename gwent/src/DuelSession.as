@@ -17,8 +17,10 @@ package red.game.witcher3.menus.gwint
     * hash=<hash>, DUEL END result=<win|loss|draw|nocontest> reason=<text> game=<n>.
     *
     * Hello (type H): args = template hash, deck hash of seat A, deck hash of seat B (hex8 each); the envelope's version
-    * field carries the protocol version. A Hello of another protocol version never gets through DuelWindow (it drops
-    * other versions), so onRemoteInput looks for one in the raw window first.
+    * field carries the protocol version. A message of another protocol version never gets through DuelWindow (it drops
+    * other versions), so before Hello onRemoteInput looks at the first field of every raw token (version).
+    * Surrender (QUITGAME, arg 1 = the quitter settles, 0 = it quit during the Hello wait) is handled whenever it is the
+    * next message, before or after Hello.
     */
    public class DuelSession
    {
@@ -376,6 +378,30 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * The local player confirmed a surrender (GwintGameMenu.onQuitConfirmed; the script then closes the menu as a
+       * forfeit). Sends QUITGAME with "1" when this side settles: its Hello is complete, so it pays the loss as today
+       * and the opponent settles a win. Before that it sends "0" and the game ends as no contest on both sides
+       * (OnMultiplayerAbort, nobody pays).
+       */
+      public function surrender() : void
+      {
+         if(this._ended)
+         {
+            return;
+         }
+         var settles:Boolean = this._helloDone;
+         this.send(DuelCodec.SURRENDER,[settles ? "1" : "0"],DuelStateHash.SCOPE_FULL);
+         this._ended = true;
+         if(settles)
+         {
+            this.log("DUEL END result=loss reason=surrender game=" + this._gameNumber);
+            return;
+         }
+         this.log("DUEL END result=nocontest reason=quit game=" + this._gameNumber);
+         GwintGameMenu.mSingleton.duelNotifyAbort("quit");
+      }
+
+      /**
        * Hands one line to the script's duel log (OnDuelLog, then r_MultiplayerClient.duelLog).
        * @param line The line.
        */
@@ -386,6 +412,12 @@ package red.game.witcher3.menus.gwint
 
       private function dispatch(next:DuelMessage) : void
       {
+         if(next.type == DuelCodec.SURRENDER)
+         {
+            this._window.pop();
+            this.applySurrender(next);
+            return;
+         }
          if(!this._helloDone)
          {
             this._window.pop();
@@ -414,6 +446,25 @@ package red.game.witcher3.menus.gwint
          this.abort("unsupported");
       }
 
+      /**
+       * The opponent surrendered (QUITGAME): with argument 1 (its Hello was complete, it settles a loss) this side wins
+       * and settles the win; with 0 (it quit during the Hello wait) the game is no contest and nobody pays.
+       */
+      private function applySurrender(quit:DuelMessage) : void
+      {
+         this.logApply(quit,DuelStateHash.SCOPE_FULL);
+         if(quit.args[0] == "1")
+         {
+            this._ended = true;
+            this.log("DUEL END result=win reason=surrender game=" + this._gameNumber);
+            GwintGameMenu.mSingleton.duelFinish("win");
+         }
+         else
+         {
+            this.abort("quit");
+         }
+      }
+
       private function applyHello(hello:DuelMessage) : void
       {
          this.logApply(hello,DuelStateHash.SCOPE_FULL);
@@ -436,18 +487,39 @@ package red.game.witcher3.menus.gwint
          this.log("DUEL HELLO ok seat=" + (this.localSeat == DuelIds.SEAT_A ? "A" : "B"));
       }
 
+      /**
+       * Whether the window holds a token of another protocol version: its first field is a version number other than
+       * ours, whatever the rest of the token looks like (a future envelope may differ).
+       */
       private function hasHelloOfOtherVersion(window:String) : Boolean
       {
          var tokens:Array = window.split(DuelWindow.SEPARATOR);
          for(var i:int = 0; i < tokens.length; i++)
          {
-            var fields:Array = String(tokens[i]).split(".");
-            if(fields.length == 6 && fields[1] == this._matchId && fields[3] == "H" && fields[0] != String(DuelCodec.PROTOCOL_VERSION))
+            var version:String = String(tokens[i]).split(".")[0];
+            if(isDigits(version) && version != String(DuelCodec.PROTOCOL_VERSION))
             {
                return true;
             }
          }
          return false;
+      }
+
+      private static function isDigits(text:String) : Boolean
+      {
+         if(text == null || text.length == 0)
+         {
+            return false;
+         }
+         for(var i:int = 0; i < text.length; i++)
+         {
+            var code:Number = text.charCodeAt(i);
+            if(code < 48 || code > 57)
+            {
+               return false;
+            }
+         }
+         return true;
       }
 
       private function boardReady() : Boolean

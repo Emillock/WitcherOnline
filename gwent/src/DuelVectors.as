@@ -294,7 +294,8 @@ package red.game.witcher3.menus.gwint
             ["1.1a2b3c4dg2.9.D.COIN,coin,1.9abcdef0",1,"1a2b3c4dg2",9,"D","COIN,coin,1",2596069104],
             ["1.1a2b3c4dg2.10.D.LRES,A1,none.00000007",1,"1a2b3c4dg2",10,"D","LRES,A1,none",7],
             ["1.1a2b3c4dg2.11.M._.0000ffff",1,"1a2b3c4dg2",11,"M","",65535],
-            ["1.1a2b3c4dg2.12.QUITGAME._.7fffffff",1,"1a2b3c4dg2",12,"QUITGAME","",2147483647],
+            ["1.1a2b3c4dg2.12.QUITGAME.1.7fffffff",1,"1a2b3c4dg2",12,"QUITGAME","1",2147483647],
+            ["1.1a2b3c4dg2.15.QUITGAME.0.00000001",1,"1a2b3c4dg2",15,"QUITGAME","0",1],
             ["1.1a2b3c4dg2.13.Y.deadbeef,12.80000000",1,"1a2b3c4dg2",13,"Y","deadbeef,12",2147483648],
             ["1.1a2b3c4dg2.14.R._.01020304",1,"1a2b3c4dg2",14,"R","",16909060],
             ["1.1a2b3c4dg2.999999999.X._.cafebabe",1,"1a2b3c4dg2",999999999,"X","",3405691582]
@@ -330,7 +331,10 @@ package red.game.witcher3.menus.gwint
             "x.1a2b3c4dg2.1.S._.00000000",
             "0.1a2b3c4dg2.1.S._.00000000",
             "1.1a2b3c4dg2.1.S._ .00000000",
-            "1.1a2b3c4dg2.1.S._.00000000~1.1a2b3c4dg2.2.S._.00000000"
+            "1.1a2b3c4dg2.1.S._.00000000~1.1a2b3c4dg2.2.S._.00000000",
+            "1.1a2b3c4dg2.1.QUITGAME._.00000000",
+            "1.1a2b3c4dg2.1.QUITGAME.2.00000000",
+            "1.1a2b3c4dg2.1.QUITGAME.1,0.00000000"
          ];
       }
 

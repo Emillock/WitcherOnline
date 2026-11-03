@@ -267,6 +267,7 @@ function SendDecksInformation()
 {
     var playerDeck : SDeckDefinition;
     var enemyDeck : SDeckDefinition;
+    var dynamicCards : array<SDynamicCard>;
 
     SendDuelValues();
     if(!IsDuel())
@@ -282,6 +283,9 @@ function SendDecksInformation()
 
     m_flashValueStorage.SetFlashObject("gwint.game.player.deck", CreateDeckDefinitionFlash(playerDeck));
     m_flashValueStorage.SetFlashObject("gwint.game.enemy.deck", CreateDeckDefinitionFlash(enemyDeck));
+    // CreateDeckDefinitionFlash adds the dynamic cards of the deck name: none must exist for the duel deck name
+    dynamicCards = gwintManager.GetDynamicCards(WO_GwentDuelDeckName());
+    OnDuelLog("DUEL DYNAMIC cards=" + dynamicCards.Size());
 }
 
 // A deck name no deck definition uses, so GetDynamicCards finds nothing for duel decks.

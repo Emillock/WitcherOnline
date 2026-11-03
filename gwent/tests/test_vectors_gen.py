@@ -46,7 +46,7 @@ def test_declares_every_array_with_the_vector_counts(generated: str) -> None:
     }
     counts = {name: len(_rows(generated, name)) for name in ARRAYS}
     assert counts == expected
-    assert counts == {"RANDOM": 252, "HASH": 6, "CODEC": 15, "CODEC_MALFORMED": 26, "WINDOW": 23}
+    assert counts == {"RANDOM": 252, "HASH": 6, "CODEC": 16, "CODEC_MALFORMED": 29, "WINDOW": 23}
 
 
 def test_rows_carry_the_vectors_exactly(generated: str) -> None:
