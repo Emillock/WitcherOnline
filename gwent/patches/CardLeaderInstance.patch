@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/CardLeaderInstance.as b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
-index 05341cb..4f127ba 100644
+index 05341cb..e0ad378 100644
 --- a/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardLeaderInstance.as
 @@ -608,7 +608,7 @@ package red.game.witcher3.menus.gwint
@@ -7,7 +7,7 @@ index 05341cb..4f127ba 100644
              if(cardManagerRef.cardEffectManager.randomResEnabled)
              {
 -               randomIndex = Math.min(Math.floor(Math.random() * cardsInGraveyard.length),cardsInGraveyard.length - 1);
-+               randomIndex = DuelSession.randomInt(owningPlayer,cardsInGraveyard.length);
++               randomIndex = DuelSession.randomInt(owningPlayer,cardsInGraveyard.length,"leader_res");
                 cardManagerRef.addCardInstanceToList(cardsInGraveyard[randomIndex],CardManager.CARD_LIST_LOC_HAND,owningPlayer);
              }
              else if(cardsInGraveyard.length == 1)

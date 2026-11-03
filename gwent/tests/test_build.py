@@ -87,5 +87,8 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     assert "DuelSession.randomInt(" in (gwint / "GwintDeck.as").read_text()
     assert "duelPlaceResurrected" in (gwint / "CardInstance.as").read_text()
     assert "DuelSession.randomInt(" in (gwint / "CardLeaderInstance.as").read_text()
-    assert "DuelSession.ALWAYS_PASS" in (gwint / "HumanPlayerController.as").read_text()
+    human = (gwint / "HumanPlayerController.as").read_text()
+    assert "ALWAYS_PASS" not in human and "sendMove(" in human
+    assert "ShowingMove" in (gwint / "NetOpponentController.as").read_text()
+    assert "DUEL DESYNC seq=" in (gwint / "DuelSession.as").read_text()
     assert "function onQuitConfirmed" in menu and "stopDuelTimer" in menu

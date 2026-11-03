@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintDeck.as b/red/game/witcher3/menus/gwint/GwintDeck.as
-index 86f26f2..e17f427 100644
+index 86f26f2..d3a76ee 100644
 --- a/red/game/witcher3/menus/gwint/GwintDeck.as
 +++ b/red/game/witcher3/menus/gwint/GwintDeck.as
 @@ -152,7 +152,10 @@ package red.game.witcher3.menus.gwint
@@ -38,7 +38,7 @@ index 86f26f2..e17f427 100644
           if(random)
           {
 -            newIndex = Math.min(Math.floor(Math.random() * this.cardIndicesInDeck.length),this.cardIndicesInDeck.length - 1);
-+            newIndex = DuelSession.randomInt(ownerPlayer,this.cardIndicesInDeck.length);
++            newIndex = DuelSession.randomInt(ownerPlayer,this.cardIndicesInDeck.length,"readd");
              this.cardIndicesInDeck.splice(newIndex,0,templateID);
           }
           else

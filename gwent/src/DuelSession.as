@@ -21,16 +21,21 @@ package red.game.witcher3.menus.gwint
     * other versions), so before Hello onRemoteInput looks at the first field of every raw token (version).
     * Surrender (QUITGAME, arg 1 = the quitter settles, 0 = it quit during the Hello wait) is handled whenever it is the
     * next message, before or after Hello.
+    *
+    * Moves (spec 5, 9.5): HumanPlayerController sends P, C, G or L (sendMove) at its commit points and S when it passes,
+    * before the move applies; NetOpponentController applies the opponent's moves. Move arguments:
+    *   P  netId, slot (a CardManager.CARD_LIST_LOC_* number), target seat (A, B, or N for no side: the weather slot)
+    *   C  netId, target netId          G  netId          L  none (the sender's leader)          S  none
+    * Hash check (spec 8.4): before a message is applied its hash is compared with this client's own hash
+    * (checkApply), except QUITGAME (it carries the sender's hash at the menu action, not at a logical point) and Y.
+    * Desync (spec 10): a mismatch or a move naming an unknown card sends Y (args: this client's hash, the seq that
+    * failed), logs DUEL DESYNC seq=<n> mine=<h> theirs=<h> and the last 20 messages (DUEL RECENT), shows "The match
+    * went out of sync and was cancelled" and ends as no contest (reason desync); the receiver of Y does the same,
+    * without sending anything. gwint.game.debug.corruptAt=<seq> (test) adds 1 to one card's power right before this
+    * client sends that seq, so the opponent's check fails.
     */
    public class DuelSession
    {
-
-      /**
-       * TEMPORARY (Tasks 9 and 10, removed in Task 11): in a duel both seats pass at the start of every turn, so whole
-       * matches run before moves are synced. HumanPlayerController passes (and sends S) and NetOpponentController
-       * applies the opponent's S. Task 11 deletes this constant and its uses.
-       */
-      public static const ALWAYS_PASS:Boolean = true;
 
       /** How long the board waits for the opponent's Hello before the duel ends as no contest (hello_timeout). */
       public static const HELLO_TIMEOUT_MS:int = 120000;
@@ -38,7 +43,18 @@ package red.game.witcher3.menus.gwint
       /** Autoplay: how long the mulligan dialog or the end screen stays up before the bot answers it. */
       public static const AUTOPLAY_DELAY_MS:int = 1500;
 
+      /** What the player sees when the duel went out of sync (spec 10). */
+      public static const DESYNC_TEXT:String = "The match went out of sync and was cancelled";
+
+      /** The desync message type: args = the detector's hash (hex8), the seq that failed. */
+      public static const DESYNC:String = "Y";
+
+      /** Target seat argument of P for a slot that belongs to no side (the weather slot). */
+      public static const NO_SEAT:String = "N";
+
       private static const MOVE_TYPES:Array = ["P","C","G","L","S"];
+
+      private static const RECENT_LIMIT:int = 20;
 
       private static var _active:DuelSession;
 
@@ -74,6 +90,10 @@ package red.game.witcher3.menus.gwint
 
       private var _autoSeenWhat:String = "";
 
+      private var _recent:Array;
+
+      private var _sentHashes:Object;
+
       /**
        * Starts a duel game (use start(), which also makes it the active one).
        * @param seed The match seed from the script.
@@ -90,6 +110,8 @@ package red.game.witcher3.menus.gwint
          this._window = new DuelWindow(this._matchId);
          this._outSeq = 0;
          this._mulligans = [0,0];
+         this._recent = [];
+         this._sentHashes = {};
          this._startMs = getTimer();
       }
 
@@ -200,9 +222,11 @@ package red.game.witcher3.menus.gwint
        * @param ownerPlayer The local player index (CardManager.PLAYER_1 or PLAYER_2) whose deck, graveyard, hand or
        * card the draw belongs to.
        * @param n The number of choices.
+       * @param site A short name of the rules site for the duel log (DUEL DRAW <site> seat=<A|B> n=<n> r=<r>); empty
+       * for the deck shuffle, which draws once per card and is not logged.
        * @return A value from 0 to n - 1 (n - 1, without a draw, when n is below 1, as vanilla would give).
        */
-      public static function randomInt(ownerPlayer:int, n:int) : int
+      public static function randomInt(ownerPlayer:int, n:int, site:String = "") : int
       {
          if(_active == null)
          {
@@ -218,7 +242,12 @@ package red.game.witcher3.menus.gwint
             _active.abort("random_owner");
             return 0;
          }
-         return _active.random.nextInt(seat == DuelIds.SEAT_A ? DuelRandom.STREAM_A : DuelRandom.STREAM_B,n);
+         var drawn:int = _active.random.nextInt(seat == DuelIds.SEAT_A ? DuelRandom.STREAM_A : DuelRandom.STREAM_B,n);
+         if(site != "")
+         {
+            _active.log("DUEL DRAW " + site + " seat=" + seatName(seat) + " n=" + n + " r=" + drawn);
+         }
+         return drawn;
       }
 
       /**
@@ -284,10 +313,75 @@ package red.game.witcher3.menus.gwint
             return;
          }
          this._outSeq++;
+         if(GwintGameMenu.mSingleton.duelDebugCorruptAt == this._outSeq)
+         {
+            this.corrupt(this._outSeq);
+         }
          var message:DuelMessage = new DuelMessage(DuelCodec.PROTOCOL_VERSION,this._matchId,this._outSeq,type,args,DuelStateHash.compute(scope,this.localSeat));
          var token:String = DuelCodec.encode(message);
+         this._sentHashes[this._outSeq] = message.hash;
+         this.remember("sent " + token);
          this.log("DUEL SEND " + token);
          GwintGameMenu.mSingleton.duelSendMessage(token);
+      }
+
+      /**
+       * Sends a local move (spec 5: the three commit points of HumanPlayerController and autoplay) before it applies,
+       * with the same branch order as BasePlayerController.state_begin_ApplyingCard: leader (L), play to a slot (P),
+       * play onto a card (C), global effect (G).
+       * @param transaction The decided move of PLAYER_1.
+       * @return False if the move has no message (the duel then ends as no contest, reason unsupported).
+       */
+      public function sendMove(transaction:CardTransaction) : Boolean
+      {
+         var source:CardInstance = transaction != null ? transaction.sourceCardInstanceRef : null;
+         if(source == null)
+         {
+            this.abort("unsupported");
+            return false;
+         }
+         if(source is CardLeaderInstance)
+         {
+            this.send("L",[],DuelStateHash.SCOPE_FULL);
+            return true;
+         }
+         var netId:String = DuelIds.format(this._ids.toNet(source.instanceId));
+         if(transaction.targetSlotID != CardManager.CARD_LIST_LOC_INVALID)
+         {
+            var seat:int = this.seatOf(transaction.targetPlayerID);
+            this.send("P",[netId,String(transaction.targetSlotID),seat < 0 ? NO_SEAT : seatName(seat)],DuelStateHash.SCOPE_FULL);
+            return true;
+         }
+         if(transaction.targetCardInstanceRef != null)
+         {
+            this.send("C",[netId,DuelIds.format(this._ids.toNet(transaction.targetCardInstanceRef.instanceId))],DuelStateHash.SCOPE_FULL);
+            return true;
+         }
+         if(source.templateRef.isType(CardTemplate.CardType_Global_Effect))
+         {
+            this.send("G",[netId],DuelStateHash.SCOPE_FULL);
+            return true;
+         }
+         this.abort("unsupported");
+         return false;
+      }
+
+      /**
+       * The local player index of a P target seat argument.
+       * @param arg A, B or N.
+       * @return PLAYER_1, PLAYER_2, PLAYER_INVALID for N, or -2 for anything else.
+       */
+      public function targetPlayerOf(arg:String) : int
+      {
+         if(arg == NO_SEAT)
+         {
+            return CardManager.PLAYER_INVALID;
+         }
+         if(arg == "A" || arg == "B")
+         {
+            return this.playerOf(arg == "A" ? DuelIds.SEAT_A : DuelIds.SEAT_B);
+         }
+         return -2;
       }
 
       /**
@@ -357,8 +451,48 @@ package red.game.witcher3.menus.gwint
       public function logApply(message:DuelMessage, scope:int) : uint
       {
          var mine:uint = DuelStateHash.compute(scope,this.seatOf(CardManager.PLAYER_2));
-         this.log("DUEL APPLY " + DuelCodec.encode(message) + " mine=" + DuelCodec.hex8(mine));
+         var token:String = DuelCodec.encode(message);
+         this.remember("applied " + token);
+         this.log("DUEL APPLY " + token + " mine=" + DuelCodec.hex8(mine));
          return mine;
+      }
+
+      /**
+       * The hash check before a message is applied (spec 8.4): logs DUEL APPLY and compares this client's hash with the
+       * hash in the message. QUITGAME is never compared (it carries the sender's hash at the menu action, not at a
+       * logical point). A mismatch is a desync: Y is sent and the duel ends as no contest.
+       * @param message The opponent's message about to be applied.
+       * @param scope The hash scope of that message type.
+       * @return True if the message may be applied, false if the duel just ended.
+       */
+      public function checkApply(message:DuelMessage, scope:int) : Boolean
+      {
+         var mine:uint = this.logApply(message,scope);
+         if(message.type == DuelCodec.SURRENDER || message.hash == mine)
+         {
+            return true;
+         }
+         this.desync(message.seq,mine,message.hash,"hash");
+         return false;
+      }
+
+      /**
+       * This client found that the boards differ (spec 10): sends Y with its hash and the failing seq, then ends as no
+       * contest (endDesync).
+       * @param seq The seq of the opponent's message that failed.
+       * @param mine This client's hash at that point.
+       * @param theirs The hash in the opponent's message.
+       * @param detail What differed, one word or a net id (logged as DUEL MISMATCH).
+       */
+      public function desync(seq:int, mine:uint, theirs:uint, detail:String) : void
+      {
+         if(this._ended)
+         {
+            return;
+         }
+         this.log("DUEL MISMATCH seq=" + seq + " " + detail);
+         this.send(DESYNC,[DuelCodec.hex8(mine),String(seq)],DuelStateHash.SCOPE_FULL);
+         this.endDesync(seq,mine,theirs);
       }
 
       /**
@@ -392,9 +526,10 @@ package red.game.witcher3.menus.gwint
       /**
        * Ends the duel as no contest: logs DUEL END, calls the script's OnMultiplayerAbort (no money moves), shows the
        * reason and closes the menu a moment later.
-       * @param reason One word: version, templates, decks, hello_timeout, gap, unsupported, ...
+       * @param reason One word: version, templates, decks, hello_timeout, gap, unsupported, desync, ...
+       * @param text What the player sees instead of the default "The Gwent duel was cancelled (<reason>)." (null).
        */
-      public function abort(reason:String) : void
+      public function abort(reason:String, text:String = null) : void
       {
          if(this._ended)
          {
@@ -402,7 +537,7 @@ package red.game.witcher3.menus.gwint
          }
          this._ended = true;
          this.log("DUEL END result=nocontest reason=" + reason + " game=" + this._gameNumber);
-         GwintGameMenu.mSingleton.duelAbort(reason);
+         GwintGameMenu.mSingleton.duelAbort(reason,text);
       }
 
       /**
@@ -446,6 +581,12 @@ package red.game.witcher3.menus.gwint
             this.applySurrender(next);
             return;
          }
+         if(next.type == DESYNC)
+         {
+            this._window.pop();
+            this.applyDesync(next);
+            return;
+         }
          if(!this._helloDone)
          {
             this._window.pop();
@@ -472,6 +613,84 @@ package red.game.witcher3.menus.gwint
          this._window.pop();
          this.logApply(next,DuelStateHash.SCOPE_FULL);
          this.abort("unsupported");
+      }
+
+      /**
+       * The opponent found a desync (Y: its hash, the seq of our message that failed): this side ends too, with the
+       * hash it sent in that message as "mine".
+       */
+      private function applyDesync(y:DuelMessage) : void
+      {
+         this.logApply(y,DuelStateHash.SCOPE_FULL);
+         var seq:int = y.args.length == 2 ? int(y.args[1]) : 0;
+         var mine:uint = this._sentHashes[seq] != undefined ? uint(this._sentHashes[seq]) : DuelStateHash.compute(DuelStateHash.SCOPE_FULL,0);
+         var theirs:uint = y.args.length == 2 ? parseHex(y.args[0]) : 0;
+         this.endDesync(seq,mine,theirs);
+      }
+
+      /**
+       * Logs DUEL DESYNC and the last messages, then ends as no contest (reason desync) with the desync text.
+       */
+      private function endDesync(seq:int, mine:uint, theirs:uint) : void
+      {
+         this.log("DUEL DESYNC seq=" + seq + " mine=" + DuelCodec.hex8(mine) + " theirs=" + DuelCodec.hex8(theirs));
+         for(var i:int = 0; i < this._recent.length; i++)
+         {
+            this.log("DUEL RECENT " + (i + 1) + " " + this._recent[i]);
+         }
+         this.abort("desync",DESYNC_TEXT);
+      }
+
+      /** Keeps the last RECENT_LIMIT messages (sent and applied) for the desync log. */
+      private function remember(entry:String) : void
+      {
+         this._recent.push(entry);
+         if(this._recent.length > RECENT_LIMIT)
+         {
+            this._recent.shift();
+         }
+      }
+
+      /**
+       * gwint.game.debug.corruptAt (test): adds 1 to the power of one card of the local player (the hand card with the
+       * lowest net id, else the first card on its rows), so this client's hash no longer matches the opponent's board.
+       * The card's template is changed, so every card of that template on this client counts 1 more.
+       */
+      private function corrupt(seq:int) : void
+      {
+         var manager:CardManager = CardManager.getInstance();
+         var target:CardInstance = null;
+         var hand:Vector.<CardInstance> = manager.getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,CardManager.PLAYER_1);
+         var i:int;
+         for(i = 0; i < hand.length; i++)
+         {
+            if(target == null || this._ids.toNet(hand[i].instanceId) < this._ids.toNet(target.instanceId))
+            {
+               target = hand[i];
+            }
+         }
+         var rows:Array = [CardManager.CARD_LIST_LOC_SEIGE,CardManager.CARD_LIST_LOC_RANGED,CardManager.CARD_LIST_LOC_MELEE];
+         for(i = 0; i < rows.length && target == null; i++)
+         {
+            var row:Vector.<CardInstance> = manager.getCardInstanceList(rows[i],CardManager.PLAYER_1);
+            if(row != null && row.length > 0)
+            {
+               target = row[0];
+            }
+         }
+         if(target == null)
+         {
+            this.log("DUEL CORRUPT seq=" + seq + " card=none");
+            return;
+         }
+         var template:CardTemplate = manager.getCardTemplate(target.templateId);
+         template.power += 1;
+         this.log("DUEL CORRUPT seq=" + seq + " card=" + DuelIds.format(this._ids.toNet(target.instanceId)) + " template=" + target.templateId + " power=" + template.power);
+      }
+
+      private static function seatName(seat:int) : String
+      {
+         return seat == DuelIds.SEAT_A ? "A" : "B";
       }
 
       /**
@@ -511,8 +730,14 @@ package red.game.witcher3.menus.gwint
             this.abort("decks");
             return;
          }
+         var mine:uint = DuelStateHash.compute(DuelStateHash.SCOPE_FULL,0);
+         if(hello.hash != mine)
+         {
+            this.desync(hello.seq,mine,hello.hash,"hello");
+            return;
+         }
          this._helloDone = true;
-         this.log("DUEL HELLO ok seat=" + (this.localSeat == DuelIds.SEAT_A ? "A" : "B"));
+         this.log("DUEL HELLO ok seat=" + seatName(this.localSeat));
       }
 
       /**

@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameMenu.as b/red/game/witcher3/menus/gwint/GwintGameMenu.as
-index d420f42..829f66b 100644
+index d420f42..18e2bb5 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameMenu.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameMenu.as
 @@ -3,7 +3,9 @@ package red.game.witcher3.menus.gwint
@@ -60,7 +60,7 @@ index d420f42..829f66b 100644
           dispatchEvent(new GameEvent(GameEvent.CALL,"OnConfigUI"));
           dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.spawnCardInstance",[this.onSpawnCardInstance]));
           dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.addCardToDeck",[this.onAddCardToDeck]));
-@@ -348,8 +384,240 @@ package red.game.witcher3.menus.gwint
+@@ -348,8 +384,241 @@ package red.game.witcher3.menus.gwint
           _cardManager.cardValues = cardValues as GwintCardValues;
        }
        
@@ -206,16 +206,17 @@ index d420f42..829f66b 100644
 +      /**
 +       * The duel ended as no contest: tells the script (OnMultiplayerAbort, no money moves), shows the reason and
 +       * closes the menu DUEL_CLOSE_DELAY_MS later.
-+       * @param reason The reason (version, templates, decks, hello_timeout, ...).
++       * @param reason The reason (version, templates, decks, hello_timeout, desync, ...).
++       * @param text The message shown instead of "The Gwent duel was cancelled (<reason>)." (null for that one).
 +       */
-+      public function duelAbort(reason:String) : void
++      public function duelAbort(reason:String, text:String = null) : void
 +      {
 +         this.duelNotifyAbort(reason);
 +         if(this.mcChoiceDialog.isShown())
 +         {
 +            this.mcChoiceDialog.hideDialog();
 +         }
-+         this.mcMessageQueue.PushMessage("The Gwent duel was cancelled (" + reason + ").");
++         this.mcMessageQueue.PushMessage(text != null ? text : "The Gwent duel was cancelled (" + reason + ").");
 +         if(this._duelCloseTimer == null)
 +         {
 +            this._duelCloseTimer = new Timer(DUEL_CLOSE_DELAY_MS,1);
@@ -301,7 +302,7 @@ index d420f42..829f66b 100644
           if(turnAIOn)
           {
              this.gameFlowController.turnOnAI(CardManager.PLAYER_1);
-@@ -448,9 +716,28 @@ package red.game.witcher3.menus.gwint
+@@ -448,9 +717,28 @@ package red.game.witcher3.menus.gwint
           return null;
        }
        
@@ -330,7 +331,7 @@ index d420f42..829f66b 100644
           if(params.length < 3)
           {
              throw Error;
-@@ -464,6 +751,10 @@ package red.game.witcher3.menus.gwint
+@@ -464,6 +752,10 @@ package red.game.witcher3.menus.gwint
        
        private function onAddCardToDeck(params:Array) : *
        {
@@ -341,7 +342,7 @@ index d420f42..829f66b 100644
           if(params.length < 2)
           {
              throw Error;
-@@ -477,6 +768,10 @@ package red.game.witcher3.menus.gwint
+@@ -477,6 +769,10 @@ package red.game.witcher3.menus.gwint
        private function onKillCard(params:Array) : *
        {
           var card:* = undefined;

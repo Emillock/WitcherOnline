@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
-index bea2665..7692820 100644
+index bea2665..0990fe3 100644
 --- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
 +++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
 @@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
@@ -21,23 +21,17 @@ index bea2665..7692820 100644
        public function HumanPlayerController()
        {
           super();
-@@ -94,15 +99,82 @@ package red.game.witcher3.menus.gwint
+@@ -94,19 +99,192 @@ package red.game.witcher3.menus.gwint
        {
           if(CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID).length == 0 && !CardManager.getInstance().getCardLeader(playerID).canBeUsed)
           {
 +            if(DuelSession.active != null)
 +            {
++               DuelSession.active.log("DUEL AUTOPASS nothing to play");
 +               DuelSession.active.send("S",[],DuelStateHash.SCOPE_FULL);
 +               _turnOver = true;
 +            }
-+            currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
-+         }
-+         else if(DuelSession.active != null && DuelSession.ALWAYS_PASS)
-+         {
-+            super.startTurn();
-+            DuelSession.active.send("S",[],DuelStateHash.SCOPE_FULL);
              currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
-+            _turnOver = true;
           }
           else
           {
@@ -48,20 +42,25 @@ index bea2665..7692820 100644
        }
        
 +      /**
-+       * Every local move goes through here (the three commit points of spec 5 and duel autoplay): the transaction is
-+       * applied by the vanilla ApplyingCard state.
++       * Every local move goes through here (the three commit points of spec 5 and duel autoplay): in a duel the move is
++       * sent first (DuelSession.sendMove, spec 9.5), then the vanilla ApplyingCard state applies the transaction.
 +       * @param transaction The decided move.
 +       */
 +      protected function commitTransaction(transaction:CardTransaction) : void
 +      {
++         if(DuelSession.active != null && !DuelSession.active.sendMove(transaction))
++         {
++            return;
++         }
 +         _decidedCardTransaction = transaction;
 +         _stateMachine.ChangeState("ApplyingCard");
 +      }
 +      
 +      /**
 +       * Duel autoplay (gwint.game.debug.autoplay, test bots): on the local turn, after a short pause, plays the move
-+       * the vanilla AI evaluation picks for PLAYER_1 through commitTransaction, or passes. The leader is left to a
-+       * player for now (its choice dialogs are synced in Task 12), so a leader pick passes instead.
++       * the vanilla AI evaluation picks for PLAYER_1 through commitTransaction, or passes. A move that would open a
++       * choice (duelNeedsDecision; synced from Task 12) is skipped (DUEL AUTOPLAY skip <card> <why>): the best other
++       * hand card without a choice is played instead, or the turn is passed when there is none.
 +       * @return True while autoplay handles the turn (ChoosingCard then does nothing else this update).
 +       */
 +      private function duelAutoplayTick() : Boolean
@@ -89,22 +88,133 @@ index bea2665..7692820 100644
 +            this._duelAutoAI.opponentID = opponentID;
 +         }
 +         move = this._duelAutoAI.duelSuggestMove();
-+         if(move == null || move.sourceCardInstanceRef == null || move.sourceCardInstanceRef is CardLeaderInstance)
++         if(move != null && move.sourceCardInstanceRef != null && this.duelNeedsDecision(move) != null)
++         {
++            DuelSession.active.log("DUEL AUTOPLAY skip " + this.duelCardName(move.sourceCardInstanceRef) + " " + this.duelNeedsDecision(move));
++            move = this.duelBestMoveWithoutDecision();
++         }
++         if(move == null || move.sourceCardInstanceRef == null || !this.duelPlayable(move))
 +         {
 +            DuelSession.active.log("DUEL AUTOPLAY pass");
 +            this.skipTurn();
 +            return true;
 +         }
-+         DuelSession.active.log("DUEL AUTOPLAY play " + DuelIds.format(DuelSession.active.ids.toNet(move.sourceCardInstanceRef.instanceId)) + " slot=" + move.targetSlotID);
++         DuelSession.active.log("DUEL AUTOPLAY play " + this.duelCardName(move.sourceCardInstanceRef) + " slot=" + move.targetSlotID);
 +         startCardTransaction(move.sourceCardInstanceRef.instanceId);
-+         this.commitTransaction(move);
++         this.commitTransaction(this.duelCopyTransaction(move));
 +         return true;
++      }
++
++      /**
++       * Whether a move would open a choice dialog that duels do not sync yet (Task 12): a medic with something to
++       * resurrect (unless the random medic of Invader of the North decides, which never applies to heroes), and the
++       * leaders that resurrect (unless random), pick a weather card, bin and pick, or show the opponent's hand.
++       * @param transaction The move.
++       * @return "medic", "leader", or null when the move needs no choice.
++       */
++      private function duelNeedsDecision(transaction:CardTransaction) : String
++      {
++         var manager:CardManager = CardManager.getInstance();
++         var source:CardInstance = transaction.sourceCardInstanceRef;
++         var randomRes:Boolean = manager.cardEffectManager.randomResEnabled;
++         if(source is CardLeaderInstance)
++         {
++            switch(source.templateRef.getFirstEffect())
++            {
++               case CardTemplate.CardEffect_View_3_Enemy:
++               case CardTemplate.CardEffect_Bin2_Pick1:
++               case CardTemplate.CardEffect_Pick_Weather:
++                  return "leader";
++               case CardTemplate.CardEffect_Resurect:
++               case CardTemplate.CardEffect_Resurect_Enemy:
++                  return randomRes ? null : "leader";
++            }
++            return null;
++         }
++         if(source.templateRef.hasEffect(CardTemplate.CardEffect_Nurse))
++         {
++            var targets:Vector.<CardInstance> = new Vector.<CardInstance>();
++            manager.GetRessurectionTargets(playerID,targets,false);
++            if(targets.length > 0 && (!randomRes || source.templateRef.isType(CardTemplate.CardType_Hero)))
++            {
++               return "medic";
++            }
++         }
++         return null;
++      }
++
++      /**
++       * Whether autoplay can commit a move as it is: the usable leader, or a card of this player's hand with a slot,
++       * a target card or a global effect.
++       */
++      private function duelPlayable(transaction:CardTransaction) : Boolean
++      {
++         var source:CardInstance = transaction.sourceCardInstanceRef;
++         if(source is CardLeaderInstance)
++         {
++            return (source as CardLeaderInstance).canBeUsed && source.owningPlayer == playerID;
++         }
++         if(source.inList != CardManager.CARD_LIST_LOC_HAND || source.listsPlayer != playerID)
++         {
++            return false;
++         }
++         return transaction.targetSlotID != CardManager.CARD_LIST_LOC_INVALID || transaction.targetCardInstanceRef != null || source.templateRef.isType(CardTemplate.CardType_Global_Effect);
++      }
++
++      /**
++       * The hand card whose AI evaluation (from the duelSuggestMove just made) gains the most among those that need no
++       * choice, or null.
++       */
++      private function duelBestMoveWithoutDecision() : CardTransaction
++      {
++         var hand:Vector.<CardInstance> = CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID);
++         var best:CardTransaction = null;
++         for(var i:int = 0; i < hand.length; i++)
++         {
++            var option:CardTransaction = hand[i].getOptimalTransaction();
++            if(option == null || option.sourceCardInstanceRef != hand[i] || !this.duelPlayable(option) || this.duelNeedsDecision(option) != null)
++            {
++               continue;
++            }
++            if(best == null || option.powerChangeResult > best.powerChangeResult)
++            {
++               best = option;
++            }
++         }
++         return best;
++      }
++
++      /** A copy of an AI transaction (the card's own evaluation object changes when the AI evaluates again). */
++      private function duelCopyTransaction(transaction:CardTransaction) : CardTransaction
++      {
++         var copy:CardTransaction = new CardTransaction();
++         copy.sourceCardInstanceRef = transaction.sourceCardInstanceRef;
++         copy.targetCardInstanceRef = transaction.targetCardInstanceRef;
++         copy.targetSlotID = transaction.targetSlotID;
++         copy.targetPlayerID = transaction.targetPlayerID;
++         copy.powerChangeResult = transaction.powerChangeResult;
++         copy.strategicValue = transaction.strategicValue;
++         return copy;
++      }
++
++      /** "leader" or the card's net id, for the autoplay log. */
++      private function duelCardName(card:CardInstance) : String
++      {
++         return card is CardLeaderInstance ? "leader" : DuelIds.format(DuelSession.active.ids.toNet(card.instanceId));
 +      }
 +      
        override public function skipTurn() : void
        {
           if(_stateMachine.currentState == "ChoosingCard" && this._currentZoomedHolder == null)
-@@ -208,6 +280,10 @@ package red.game.witcher3.menus.gwint
+          {
++            if(DuelSession.active != null)
++            {
++               DuelSession.active.send("S",[],DuelStateHash.SCOPE_FULL);
++            }
+             currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
+             _turnOver = true;
+             if(_transactionCard != null)
+@@ -208,6 +386,10 @@ package red.game.witcher3.menus.gwint
           var isCardEffect:Boolean = false;
           var isGlobalEffect:Boolean = false;
           this.on_state_about_to_update();
@@ -115,7 +225,7 @@ index bea2665..7692820 100644
           if(_transactionCard)
           {
              cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
-@@ -313,7 +389,7 @@ package red.game.witcher3.menus.gwint
+@@ -313,7 +495,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction = new CardTransaction();
              _decidedCardTransaction.targetPlayerID = playerID;
              _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
@@ -124,7 +234,7 @@ index bea2665..7692820 100644
           }
        }
        
-@@ -450,7 +526,7 @@ package red.game.witcher3.menus.gwint
+@@ -450,7 +632,7 @@ package red.game.witcher3.menus.gwint
                       _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
                       _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
                       _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -133,7 +243,7 @@ index bea2665..7692820 100644
                    }
              }
           }
-@@ -468,7 +544,7 @@ package red.game.witcher3.menus.gwint
+@@ -468,7 +650,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
              _decidedCardTransaction.targetCardInstanceRef = null;
              _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;

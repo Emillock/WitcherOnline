@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/CardInstance.as b/red/game/witcher3/menus/gwint/CardInstance.as
-index b1187d8..da51dec 100644
+index b1187d8..232259d 100644
 --- a/red/game/witcher3/menus/gwint/CardInstance.as
 +++ b/red/game/witcher3/menus/gwint/CardInstance.as
 @@ -1354,7 +1354,7 @@ package red.game.witcher3.menus.gwint
@@ -7,7 +7,7 @@ index b1187d8..da51dec 100644
                 if(cardManagerRef.cardEffectManager.randomResEnabled && !this.templateRef.isType(CardTemplate.CardType_Hero))
                 {
 -                  this.handleNurseChoice(copyList[Math.min(Math.floor(Math.random() * copyList.length),copyList.length - 1)].instanceId);
-+                  this.handleNurseChoice(copyList[DuelSession.randomInt(this.owningPlayer,copyList.length)].instanceId);
++                  this.handleNurseChoice(copyList[DuelSession.randomInt(this.owningPlayer,copyList.length,"random_medic")].instanceId);
                 }
                 else if(gameFlowRef.playerControllers[this.listsPlayer] is AIPlayerController)
                 {
@@ -23,7 +23,7 @@ index b1187d8..da51dec 100644
           if(cardInstance)
           {
              cardInstance.recalculatePowerPotential(cardManagerRef);
-@@ -1542,6 +1547,72 @@ package red.game.witcher3.menus.gwint
+@@ -1542,6 +1547,73 @@ package red.game.witcher3.menus.gwint
           }
        }
        
@@ -64,11 +64,12 @@ index b1187d8..da51dec 100644
 +               cardManagerRef.getAllCreaturesNonHero(CardManager.CARD_LIST_LOC_RANGED,side,rowCreatures);
 +               rangedPower += rowCreatures.length;
 +            }
-+            if(rangedPower > meleePower || rangedPower == meleePower && DuelSession.randomInt(this.owningPlayer,2) == 1)
++            if(rangedPower > meleePower || rangedPower == meleePower && DuelSession.randomInt(this.owningPlayer,2,"medic_tie") == 1)
 +            {
 +               targetSlot = CardManager.CARD_LIST_LOC_RANGED;
 +            }
 +         }
++         DuelSession.active.log("DUEL MEDIC place " + DuelIds.format(DuelSession.active.ids.toNet(cardInstance.instanceId)) + " slot=" + targetSlot + " melee=" + meleePower + " ranged=" + rangedPower);
 +         cardManagerRef.addCardInstanceToList(cardInstance,targetSlot,targetPlayer);
 +      }
 +
