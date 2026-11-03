@@ -93,5 +93,43 @@ def test_session_checks_hashes_and_handles_desync() -> None:
     assert "The match went out of sync and was cancelled" in text
     assert 'DESYNC:String = "Y"' in text and "send(DESYNC," in text
     assert "duelDebugCorruptAt" in text
-    check = function_body(text, "function checkApply(")
-    assert "DuelCodec.SURRENDER" in check
+
+
+def test_every_desync_sends_y() -> None:
+    """R29: gap, non-H before Hello, malformed Hello, unsupported messages and moves end through desync (Y)."""
+    text = (SRC / "DuelSession.as").read_text(encoding="utf-8")
+    aborts = re.findall(r'this\.abort\("(\w+)"', text)
+    assert sorted(set(aborts)) == ["decks", "desync", "hello_timeout", "quit", "templates", "version"]
+    assert aborts.count("desync") == 1
+    assert 'abort("desync",DESYNC_TEXT)' in function_body(text, "function endDesync(")
+    assert '"gap")' in function_body(text, "public function update(")
+    assert "localDesync(" in function_body(text, "public function sendMove(")
+
+
+def test_send_move_refuses_after_the_end() -> None:
+    body = function_body((SRC / "DuelSession.as").read_text(encoding="utf-8"), "public function sendMove(")
+    assert body.index("this._ended") < body.index("this.send(")
+
+
+def test_opponent_desync_logs_its_own_hash() -> None:
+    text = (SRC / "NetOpponentController.as").read_text(encoding="utf-8")
+    assert "move.hash,move.hash" not in text
+    assert text.count("session.lastAppliedHash,move.hash") == 3
+
+
+def test_showing_move_waits_for_a_zoom() -> None:
+    body = function_body((SRC / "NetOpponentController.as").read_text(encoding="utf-8"),
+                         "function state_update_ShowingMove(")
+    assert "this.cardEffectApplying()" in body
+
+
+@needs_vanilla
+def test_a_sent_move_is_neither_sent_again_nor_cancelled(board: Path) -> None:
+    text = (board / "HumanPlayerController.as").read_text(encoding="utf-8")
+    commit = function_body(text, "function commitTransaction(")
+    assert commit.index("duelMoveInFlight()") < commit.index("sendMove(") < commit.index("_duelMovePending = true")
+    assert "awaitingNextState" in function_body(text, "function duelMoveInFlight(")
+    assert "duelMoveInFlight()" in function_body(text, "function cancelCardTransaction(")
+    skip = function_body(text, "override public function skipTurn(")
+    assert skip.index("duelMoveInFlight()") < skip.index('send("S"')
+    assert "_duelMovePending = false" in function_body(text, "override protected function state_begin_ApplyingCard(")

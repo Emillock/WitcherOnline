@@ -14,7 +14,8 @@ package red.game.witcher3.menus.gwint
     * has passed; the turn is over as well, and the game flow starts the next turn of this seat).
     *
     * Before a move is applied DuelSession compares the hashes (checkApply). The move names its cards by net id; a net id
-    * that is not known here, a card that is not in this seat's hand, or a leader that cannot be used is a desync.
+    * that is not known here, a card that is not in this seat's hand, or a leader that cannot be used is a desync. Its
+    * DUEL DESYNC line then shows two equal hashes (the hash check had passed); DUEL MISMATCH names the cause.
     * S (pass) marks the seat done. Moves that ask a choice (medic, leader dialogs) are Task 12; this task's autoplay
     * never sends them.
     */
@@ -60,8 +61,9 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * The opponent's turn starts: wait for its next move. When the opponent has nothing left to play (empty hand,
-       * leader not usable) its board still sends S (HumanPlayerController), so this side waits for that S too.
+       * The opponent's turn starts: wait for its next move. Defensive (R28: the vanilla flow never starts the turn of a
+       * seat with nothing left to play): if it did, the opponent's board sends S (HumanPlayerController), so this side
+       * waits for that S too.
        */
       override public function startTurn() : void
       {
@@ -126,9 +128,12 @@ package red.game.witcher3.menus.gwint
          this._showStartMs = getTimer();
       }
 
+      /**
+       * Applies the move once the card has arrived, SHOW_MOVE_MS have passed and no card zoom or dialog is open.
+       */
       protected function state_update_ShowingMove() : void
       {
-         if(!CardTweenManager.getInstance().isAnyCardMoving() && getTimer() - this._showStartMs >= SHOW_MOVE_MS)
+         if(!this.cardEffectApplying() && getTimer() - this._showStartMs >= SHOW_MOVE_MS)
          {
             _stateMachine.ChangeState("ApplyingCard");
          }
@@ -148,7 +153,7 @@ package red.game.witcher3.menus.gwint
             var leader:CardLeaderInstance = manager.getCardLeader(playerID);
             if(move.args.length != 0 || leader == null || !leader.canBeUsed)
             {
-               session.desync(move.seq,move.hash,move.hash,"leader");
+               session.desync(move.seq,session.lastAppliedHash,move.hash,"leader");
                return null;
             }
             transaction.sourceCardInstanceRef = leader;
@@ -157,7 +162,7 @@ package red.game.witcher3.menus.gwint
          var source:CardInstance = move.args.length > 0 ? this.cardOf(move.args[0],session) : null;
          if(source == null || source.inList != CardManager.CARD_LIST_LOC_HAND || source.listsPlayer != playerID)
          {
-            session.desync(move.seq,move.hash,move.hash,"card " + (move.args.length > 0 ? move.args[0] : "none"));
+            session.desync(move.seq,session.lastAppliedHash,move.hash,"card " + (move.args.length > 0 ? move.args[0] : "none"));
             return null;
          }
          transaction.sourceCardInstanceRef = source;
@@ -186,7 +191,7 @@ package red.game.witcher3.menus.gwint
          {
             return transaction;
          }
-         session.desync(move.seq,move.hash,move.hash,"move " + move.type);
+         session.desync(move.seq,session.lastAppliedHash,move.hash,"move " + move.type);
          return null;
       }
 

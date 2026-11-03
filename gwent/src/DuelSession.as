@@ -28,8 +28,10 @@ package red.game.witcher3.menus.gwint
     *   C  netId, target netId          G  netId          L  none (the sender's leader)          S  none
     * Hash check (spec 8.4): before a message is applied its hash is compared with this client's own hash
     * (checkApply), except QUITGAME (it carries the sender's hash at the menu action, not at a logical point) and Y.
-    * Desync (spec 10): a mismatch or a move naming an unknown card sends Y (args: this client's hash, the seq that
-    * failed), logs DUEL DESYNC seq=<n> mine=<h> theirs=<h> and the last 20 messages (DUEL RECENT), shows "The match
+    * Desync (spec 10, R29): a hash mismatch, a move naming an unknown card or with bad arguments, a lost message (gap),
+    * a message other than H before Hello, a malformed Hello, a message type this build does not handle and a local move
+    * that has no message all send Y (args: this client's hash, the seq that failed, 0 when no seq applies), then the
+    * client logs DUEL DESYNC seq=<n> mine=<h> theirs=<h> and the last 20 messages (DUEL RECENT), shows "The match
     * went out of sync and was cancelled" and ends as no contest (reason desync); the receiver of Y does the same,
     * without sending anything. gwint.game.debug.corruptAt=<seq> (test) adds 1 to one card's power right before this
     * client sends that seq, so the opponent's check fails.
@@ -93,6 +95,8 @@ package red.game.witcher3.menus.gwint
       private var _recent:Array;
 
       private var _sentHashes:Object;
+
+      private var _lastAppliedHash:uint;
 
       /**
        * Starts a duel game (use start(), which also makes it the active one).
@@ -330,14 +334,18 @@ package red.game.witcher3.menus.gwint
        * with the same branch order as BasePlayerController.state_begin_ApplyingCard: leader (L), play to a slot (P),
        * play onto a card (C), global effect (G).
        * @param transaction The decided move of PLAYER_1.
-       * @return False if the move has no message (the duel then ends as no contest, reason unsupported).
+       * @return False if the duel has ended (nothing may be played any more) or the move has no message (a desync).
        */
       public function sendMove(transaction:CardTransaction) : Boolean
       {
          var source:CardInstance = transaction != null ? transaction.sourceCardInstanceRef : null;
+         if(this._ended)
+         {
+            return false;
+         }
          if(source == null)
          {
-            this.abort("unsupported");
+            this.localDesync("no move");
             return false;
          }
          if(source is CardLeaderInstance)
@@ -362,7 +370,7 @@ package red.game.witcher3.menus.gwint
             this.send("G",[netId],DuelStateHash.SCOPE_FULL);
             return true;
          }
-         this.abort("unsupported");
+         this.localDesync("move without a message");
          return false;
       }
 
@@ -428,7 +436,7 @@ package red.game.witcher3.menus.gwint
          }
          if(this._window.gap)
          {
-            this.abort("gap");
+            this.desync(this._window.nextSeq,DuelStateHash.compute(DuelStateHash.SCOPE_FULL,0),0,"gap");
             return;
          }
          var next:DuelMessage = this._window.peek();
@@ -454,13 +462,23 @@ package red.game.witcher3.menus.gwint
          var token:String = DuelCodec.encode(message);
          this.remember("applied " + token);
          this.log("DUEL APPLY " + token + " mine=" + DuelCodec.hex8(mine));
+         this._lastAppliedHash = mine;
          return mine;
       }
 
       /**
+       * This client's hash at the last DUEL APPLY (the "mine" of a desync found while the message is applied).
+       */
+      public function get lastAppliedHash() : uint
+      {
+         return this._lastAppliedHash;
+      }
+
+      /**
        * The hash check before a message is applied (spec 8.4): logs DUEL APPLY and compares this client's hash with the
-       * hash in the message. QUITGAME is never compared (it carries the sender's hash at the menu action, not at a
-       * logical point). A mismatch is a desync: Y is sent and the duel ends as no contest.
+       * hash in the message. QUITGAME never comes here (dispatch hands it to applySurrender first: it carries the
+       * sender's hash at the menu action, not at a logical point). A mismatch is a desync: Y is sent and the duel ends
+       * as no contest.
        * @param message The opponent's message about to be applied.
        * @param scope The hash scope of that message type.
        * @return True if the message may be applied, false if the duel just ended.
@@ -468,7 +486,7 @@ package red.game.witcher3.menus.gwint
       public function checkApply(message:DuelMessage, scope:int) : Boolean
       {
          var mine:uint = this.logApply(message,scope);
-         if(message.type == DuelCodec.SURRENDER || message.hash == mine)
+         if(message.hash == mine)
          {
             return true;
          }
@@ -493,6 +511,15 @@ package red.game.witcher3.menus.gwint
          this.log("DUEL MISMATCH seq=" + seq + " " + detail);
          this.send(DESYNC,[DuelCodec.hex8(mine),String(seq)],DuelStateHash.SCOPE_FULL);
          this.endDesync(seq,mine,theirs);
+      }
+
+      /**
+       * A desync this client found in its own move (no opponent message failed): Y with seq 0 and this client's hash.
+       */
+      private function localDesync(detail:String) : void
+      {
+         var mine:uint = DuelStateHash.compute(DuelStateHash.SCOPE_FULL,0);
+         this.desync(0,mine,0,detail);
       }
 
       /**
@@ -596,8 +623,7 @@ package red.game.witcher3.menus.gwint
             }
             else
             {
-               this.logApply(next,DuelStateHash.SCOPE_FULL);
-               this.abort("desync");
+               this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,"before hello " + next.type);
             }
             return;
          }
@@ -611,8 +637,7 @@ package red.game.witcher3.menus.gwint
             return;
          }
          this._window.pop();
-         this.logApply(next,DuelStateHash.SCOPE_FULL);
-         this.abort("unsupported");
+         this.desync(next.seq,this.logApply(next,DuelStateHash.SCOPE_FULL),next.hash,"unsupported " + next.type);
       }
 
       /**
@@ -714,10 +739,10 @@ package red.game.witcher3.menus.gwint
 
       private function applyHello(hello:DuelMessage) : void
       {
-         this.logApply(hello,DuelStateHash.SCOPE_FULL);
+         var mine:uint = this.logApply(hello,DuelStateHash.SCOPE_FULL);
          if(hello.args.length != 3)
          {
-            this.abort("desync");
+            this.desync(hello.seq,mine,hello.hash,"hello args");
             return;
          }
          if(parseHex(hello.args[0]) != this.templateHash())
@@ -730,7 +755,6 @@ package red.game.witcher3.menus.gwint
             this.abort("decks");
             return;
          }
-         var mine:uint = DuelStateHash.compute(DuelStateHash.SCOPE_FULL,0);
          if(hello.hash != mine)
          {
             this.desync(hello.seq,mine,hello.hash,"hello");

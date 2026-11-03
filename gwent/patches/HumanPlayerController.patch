@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
-index bea2665..0990fe3 100644
+index bea2665..ddf7df1 100644
 --- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
 +++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
 @@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
@@ -10,18 +10,21 @@ index bea2665..0990fe3 100644
     import red.core.constants.KeyCode;
     import red.core.events.GestureEventEx;
     import red.game.witcher3.constants.GwintInputFeedback;
-@@ -32,6 +33,10 @@ package red.game.witcher3.menus.gwint
+@@ -32,6 +33,13 @@ package red.game.witcher3.menus.gwint
        
        protected var _cardConfirmation:Boolean;
        
 +      private var _duelAutoAI:AIPlayerController;
 +      
 +      private var _duelAutoTurnMs:int = -1;
++
++      /** Duel: a move was sent and its switch to ApplyingCard is pending (up to one 20 ms tick). */
++      private var _duelMovePending:Boolean = false;
 +      
        public function HumanPlayerController()
        {
           super();
-@@ -94,19 +99,192 @@ package red.game.witcher3.menus.gwint
+@@ -94,19 +102,209 @@ package red.game.witcher3.menus.gwint
        {
           if(CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID).length == 0 && !CardManager.getInstance().getCardLeader(playerID).canBeUsed)
           {
@@ -37,6 +40,7 @@ index bea2665..0990fe3 100644
           {
              super.startTurn();
 +            this._duelAutoTurnMs = -1;
++            this._duelMovePending = false;
              _stateMachine.ChangeState("ChoosingCard");
           }
        }
@@ -44,16 +48,32 @@ index bea2665..0990fe3 100644
 +      /**
 +       * Every local move goes through here (the three commit points of spec 5 and duel autoplay): in a duel the move is
 +       * sent first (DuelSession.sendMove, spec 9.5), then the vanilla ApplyingCard state applies the transaction.
++       * The row and decoy commit points run from input handlers, and the switch to ApplyingCard happens on the next
++       * 20 ms tick of the state machine. In a duel, once a move is sent nothing else is committed, cancelled or passed
++       * until ApplyingCard has taken it (_duelMovePending), so one move is sent once and always applied.
 +       * @param transaction The decided move.
 +       */
 +      protected function commitTransaction(transaction:CardTransaction) : void
 +      {
-+         if(DuelSession.active != null && !DuelSession.active.sendMove(transaction))
++         if(DuelSession.active != null)
 +         {
-+            return;
++            if(this.duelMoveInFlight() || !DuelSession.active.sendMove(transaction))
++            {
++               return;
++            }
++            this._duelMovePending = true;
 +         }
 +         _decidedCardTransaction = transaction;
 +         _stateMachine.ChangeState("ApplyingCard");
++      }
++
++      /**
++       * Duel: whether a sent move or pass still waits for its state switch (then nothing may be committed, cancelled
++       * or passed). Always false outside duels.
++       */
++      private function duelMoveInFlight() : Boolean
++      {
++         return DuelSession.active != null && (this._duelMovePending || _stateMachine.awaitingNextState);
 +      }
 +      
 +      /**
@@ -66,7 +86,7 @@ index bea2665..0990fe3 100644
 +      private function duelAutoplayTick() : Boolean
 +      {
 +         var move:CardTransaction = null;
-+         if(DuelSession.active == null || !GwintGameMenu.mSingleton.duelDebugAutoplay || _transactionCard != null || this._currentZoomedHolder != null || this.mcChoiceDialog.isShown())
++         if(DuelSession.active == null || DuelSession.active.ended || !GwintGameMenu.mSingleton.duelDebugAutoplay || _transactionCard != null || this._currentZoomedHolder != null || this.mcChoiceDialog.isShown())
 +         {
 +            return false;
 +         }
@@ -205,7 +225,8 @@ index bea2665..0990fe3 100644
 +      
        override public function skipTurn() : void
        {
-          if(_stateMachine.currentState == "ChoosingCard" && this._currentZoomedHolder == null)
+-         if(_stateMachine.currentState == "ChoosingCard" && this._currentZoomedHolder == null)
++         if(_stateMachine.currentState == "ChoosingCard" && this._currentZoomedHolder == null && !this.duelMoveInFlight() && (DuelSession.active == null || !DuelSession.active.ended))
           {
 +            if(DuelSession.active != null)
 +            {
@@ -214,7 +235,7 @@ index bea2665..0990fe3 100644
              currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
              _turnOver = true;
              if(_transactionCard != null)
-@@ -208,6 +386,10 @@ package red.game.witcher3.menus.gwint
+@@ -208,6 +406,10 @@ package red.game.witcher3.menus.gwint
           var isCardEffect:Boolean = false;
           var isGlobalEffect:Boolean = false;
           this.on_state_about_to_update();
@@ -225,7 +246,7 @@ index bea2665..0990fe3 100644
           if(_transactionCard)
           {
              cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
-@@ -313,7 +495,7 @@ package red.game.witcher3.menus.gwint
+@@ -313,7 +515,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction = new CardTransaction();
              _decidedCardTransaction.targetPlayerID = playerID;
              _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
@@ -234,7 +255,15 @@ index bea2665..0990fe3 100644
           }
        }
        
-@@ -450,7 +632,7 @@ package red.game.witcher3.menus.gwint
+@@ -325,6 +527,7 @@ package red.game.witcher3.menus.gwint
+       override protected function state_begin_ApplyingCard() : void
+       {
+          super.state_begin_ApplyingCard();
++         this._duelMovePending = false;
+          _boardRenderer.activateAllHolders(true);
+          if(Boolean(this._handHolder) && _boardRenderer.getSelectedCardHolder() != this._handHolder)
+          {
+@@ -450,7 +653,7 @@ package red.game.witcher3.menus.gwint
                       _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
                       _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
                       _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -243,7 +272,7 @@ index bea2665..0990fe3 100644
                    }
              }
           }
-@@ -468,7 +650,7 @@ package red.game.witcher3.menus.gwint
+@@ -468,7 +671,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
              _decidedCardTransaction.targetCardInstanceRef = null;
              _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -252,3 +281,14 @@ index bea2665..0990fe3 100644
           }
        }
        
+@@ -522,6 +725,10 @@ package red.game.witcher3.menus.gwint
+       
+       private function cancelCardTransaction(restoreSelection:Boolean = false) : void
+       {
++         if(this.duelMoveInFlight())
++         {
++            return;
++         }
+          _boardRenderer.activateAllHolders(true);
+          if(restoreSelection)
+          {
