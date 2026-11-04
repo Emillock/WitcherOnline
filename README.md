@@ -59,6 +59,30 @@ Play Gwent with other players, using your own decks.
 
 ![Gwent Duels](assets/gwent.gif)
 
+#### Gwent duels on The Witcher 3 Remastered 5.01
+
+On Remastered 5.01 the duels run on CDPR's own 5.01 Gwent board, patched with our own lockstep code (both clients play
+the same match from the same seed and exchange only the moves). Tested on game build **5.0.0.1048522**; both players
+need the same build and the same Witcher Online build. The board is built from your own game files, see the
+[build guide and test checklist](gwent/README.md).
+
+- **What works:** challenges, your own decks, all factions and leaders (including the choices they ask for), mulligan,
+  the Scoia'tael coin toss, the 5.01 cards, bets, and a drawn match that both players replay with the same bet. The
+  automated tests play duels between two bot-driven games. A test with two players over the Steam relay is still to be
+  done; its checklist is in [gwent/README.md](gwent/README.md).
+- **Two modes:** Normal has no clock. Timed gives each player 60 seconds per turn, mulligan and choice; when the time
+  runs out the turn is passed, an open choice takes its first option and the mulligan counts as done.
+- **Out of sync:** both clients compare a hash of the match on every move. If they differ, the match is cancelled with
+  "The match went out of sync and was cancelled".
+- **Opponent leaves:** if the other player's game closes or its connection drops (no packets for 30 seconds), the match is
+  cancelled with "Your opponent left. The match was cancelled".
+- **Stuck waits:** if the other client sends nothing for 120 seconds (Timed: 90 seconds), the match is cancelled with "No
+  answer in time. The match was cancelled".
+- **Surrender:** closing the board and confirming the surrender loses the bet for the one who quits and wins it for the
+  other player.
+- **No money moves** when a match is cancelled (out of sync, opponent left, no answer in time), or when a drawn match is
+  not replayed. Each client settles its own bet: nothing is held in escrow.
+
 ### Player Riding
 
 Sit back and relax while other players drive you to your destination.

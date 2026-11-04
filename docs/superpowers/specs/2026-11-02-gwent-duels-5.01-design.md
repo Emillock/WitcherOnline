@@ -2,6 +2,9 @@
 
 Status: draft for review, 2026-11-02. Target branch: Emillock/WitcherOnline `shared-enemies`, later rejuvenate7/WitcherOnline.
 
+Sections 8.2, 9.8, 9.10, 10 and 15 were brought in line with the build on 2026-11-04. Each change is marked
+"Amended after the build"; the code in `gwent/src/` is the final word.
+
 ## 1. Intent
 
 Witcher Online lets two players play Gwent against each other. On the game's 4.04 build this runs on a modified Flash
@@ -242,10 +245,14 @@ builder's.
 | Pass | local pass, or timer expiry in Timed mode | none |
 | Decision | local answer to a choice the rules asked this seat for | decision kind, net id of the card that asked (or "perk"/"coin"), chosen net id or template id, or "none" |
 | Mulligan done | local player finished or skipped mulligan | none |
-| Surrender | local player confirmed quit | none; the token must contain the literal `QUITGAME` so Witcher Online's script keeps the window alive after the menu closes |
-| Desync | local client detected a mismatch | its hash, the sequence it failed on |
+| Surrender | local player confirmed quit | one argument (amended after the build): `1` when the quitter settles the bet (its Hello exchange is complete), `0` when it quit while still waiting for the opponent's Hello; the token must contain the literal `QUITGAME` so Witcher Online's script keeps the window alive after the menu closes |
+| Desync | local client detected a mismatch, or a wait ran out | its hash, the sequence it failed on (`0` when no sequence applies), and (amended after the build) an optional third argument: `stuck` when a wait on the opponent expired or the opponent was taken as gone, `hello` when the Hello wait expired. A receiver of a plain Desync ends as no contest with reason desync; with `stuck` as no contest with reason stuck_wait, with `hello` as no contest with reason hello_timeout |
 | Replay | local player clicked Replay after a draw | none |
 | Leave | local player closed the end screen of a draw without replaying | none |
+| End of game (amended after the build) | a game ended and the board has settled; sent by both seats | the winner as the sender sees it (`A`, `B`, or `N` for a draw), and the whole-state `DuelHash` of the final state in the envelope |
+
+The type letters on the wire are `H` Hello, `P` play to row, `C` play on card, `G` play global, `L` leader, `S` pass,
+`D` decision, `M` mulligan done, `QUITGAME` surrender, `Y` desync, `R` replay, `X` leave and `E` end of game.
 
 Decision kinds: mulligan redraw, Scoia'tael who-goes-first, medic pick, leader resurrect pick, leader weather pick,
 leader bin pick, leader card pick. The builder adds any further choice the audit in 7.3 or a survey of
@@ -305,6 +312,16 @@ is fine.
    tie win and the counter-king checks are deterministic.
 8. **Match end.** The vanilla end flow runs and reports `OnMatchResult(hasWon)`. Surrender sends Surrender, and the
    receiver ends the match as a win for itself. Each client settles its own bet (user decision, see section 1).
+   **Amended after the build (end of game confirmation):** a win or loss is not settled when the board reaches the
+   end of a game. Both boards first send the end of game message (E: the winner as the sender sees it, and the hash of
+   the final state) and wait for the opponent's. Only when it arrives with the same winner and the same hash does the end
+   screen open (its close then settles the bet). A Desync in that wait, an E that differs, or no E within the stuck-wait
+   limit ends the match as no contest, so a desync on the last message of a match pays neither side. The cost is that
+   the end screen opens up to one round trip later than in single player. A surrender sends Surrender with the argument
+   of section 8.2: with `1` the receiver ends as a win for itself, with `0` as no contest. If both players surrender
+   before either sees the other's message, each settles its own loss. A surrender that crosses a Desync stays as it is:
+   the quitter pays its loss and the other side ends as no contest.
+
    **Draws** (user decision, 2026-11-02): both players replay together with the same bet.
    - Clicking Replay sends Replay and shows "Waiting for your opponent". The new match starts only when both seats
      have sent Replay.
@@ -314,6 +331,11 @@ is fine.
    - If either player closes the end screen instead (Leave), or no Replay arrives within the stuck-wait limit, the
      match ends as a draw with no money moving on either side. My call: the user chose replay over "both lose", so a
      draw that is not replayed should not cost anyone.
+   - Amended after the build: a draw is replayed only after both boards confirmed it with E (see above). Closing the
+     end screen sends Leave, also while the board waits for the opponent's Replay; a board whose Replay wait runs out
+     sends Leave itself and ends the draw. A Leave or surrender that the opponent sent just after its Replay (it left
+     while this board already had both Replays and started the next game) is still taken until a message of the
+     opponent's next game has been applied. The wait after Replay shows "Waiting for your opponent" once.
    - This needs a script-side change: a draw result that skips settlement, in place of today's "closing a draw counts
      as a loss".
 9. **Script card injection.** In a duel, `gwent.spawnCardInstance`, `gwent.addCardToDeck` and `gwent.killCard` are
@@ -321,6 +343,15 @@ is fine.
 10. **Card zoom during the opponent's turn.** Zoom uses the rules' choice dialog and pauses the flow. An opponent move
     that arrives while zoom is open waits until the player closes it. That costs the local player no time, because
     the local turn timer starts only on the local turn. My call.
+    **Amended after the build (Timed mode only):** in Normal mode this stays as written. In Timed mode the zoom would
+    let a player hold the opponent's move for a long time and then use a whole turn, which would push the opponent
+    past the stuck-wait limit (turn time plus 30 s) and end the match as no contest. So in Timed mode the local clock
+    starts when the opponent message that hands over the turn (or a decision, or the mulligan) arrives, even while a
+    zoom holds it. If the clock runs out with the zoom still open, the zoom closes, the held message applies, and the
+    stretch it hands over is already expired (the turn is passed, the decision takes its first option, the mulligan
+    counts as done). A zoom that does not hold anything (the opponent is waiting for its own next move, or the local
+    seat already passed this round) is not touched. The cost is that a Timed player who zooms on the opponent's turn
+    loses that time from their own turn. A zoom on the player's own turn keeps the clock running.
 11. **Deck contents.** Duel decks carry leader, special card and cards. `dynamicCards` and `additionalCards` are AI
     deck balancing and are forced empty on both sides in duels. My call.
 
@@ -334,8 +365,25 @@ is fine.
 - **Opponent leaves** (disconnect, game closed, menu closed): Witcher Online's script already tracks the opponent's
   presence. The script tells the board through a new flash value or function, and the board ends the match as no
   contest. The builder decides the exact mechanism with the script side.
+  **Amended after the build:** Witcher Online's own presence check counts engine time, which stands still while the
+  Gwent board is up, so the client watches the opponent's movement sequence in real time instead. When it has not
+  changed for 30 s (the clock starts again if this client itself stalled for more than 3 s), the script sets the board's
+  `opponentLeft` flag. The board first applies the opponent messages that are already in the window (for at most 5 s),
+  then sends Desync marked `stuck` (so an opponent that was only paused or lagging ends as no contest too instead of
+  settling alone) and ends as no contest with reason opponent_left. Exceptions: a win or loss whose end of game
+  messages were confirmed stands and settles; a confirmed draw ends as a draw with no money (reason opponent_leave);
+  while the board waits for the opponent's E it ends through the stuck path below.
 - **Stuck waiting**: if the board waits for an opponent message for longer than a generous limit (proposal: 120 s in
   Normal mode, turn time plus 30 s in Timed mode) it ends the match as no contest. My call; adjust after testing.
+  **Amended after the build:** one rule covers every wait on an opponent message (Hello once this board sent its own, a
+  move, a decision including the coin toss, the mulligan, E and Replay). The wait starts over whenever any opponent
+  message arrives. The limit is 120 s in Normal mode and 90 s (turn time 60 s plus 30 s) in Timed mode. Past it the
+  board sends Desync marked `stuck` (`hello` for the Hello wait) and then ends as no contest (reasons stuck_wait and
+  hello_timeout); the opponent ends the same way when that message arrives. The Replay wait is the exception: it sends
+  Leave and ends as a draw with no money (section 9.8). A decision that the local player never answers is not a wait on
+  the opponent: the script's coin popup closed without an answer counts as its first option (in Timed mode its clock
+  does the same), and a board decision dialog, which the player cannot cancel, is shown again when a card zoom that
+  replaced it closes.
 
 ## 11. Script side (WitcherScript, Emillock's `shared-enemies` branch)
 
@@ -363,7 +411,8 @@ is fine.
 - Repo layout (proposal): `gwent/src/` for our new classes, `gwent/patches/` for unified diffs against the vanilla
   5.01 classes as decompiled by FFDec 26.4.0, `gwent/build.py` for the pipeline.
 - `build.py`: locate the player's `content\content0\bundles\r4gui.bundle`, check the vanilla board's checksum against
-  the known 5.01c value, extract `gameplay\gui_new\swf\gwint\gwint_game.redswf`, pull out the Flash movie, decompile
+  the known value (amended after the build: only the board of game build 5.0.0.1048522 is known; the build refuses
+  any other unless `--allow-unknown-board` is given), extract `gameplay\gui_new\swf\gwint\gwint_game.redswf`, pull out the Flash movie, decompile
   with FFDec, apply the patches, append the new classes to host scripts, import with `-importScript`, compress back to
   the CFX format with the original version byte, write it back into the `.redswf` (replace the length-prefixed blob,
   fix the CR2W sizes and checksum), and pack it into the mod bundle with its `metadata.store`.
@@ -403,6 +452,17 @@ is fine.
 - Timer authority sits with the active player's client; on expiry it sends Pass. The opponent's view only counts down.
   Turn length 60 s (proposal). In Timed mode the mulligan and decisions also time out: mulligan counts as done,
   a decision takes the first option.
+  **Amended after the build:** one local clock of 60 s covers each stretch in which the board waits on local input and
+  has not yet sent the message that ends it: a turn (card pick, the move and every decision the move raises, leader
+  abilities), the mulligan, and a decision raised outside the local turn (the coin toss, a perk's medic). Decisions inside
+  a turn share the turn's 60 s and have none of their own; once the turn's time is up, each further decision of that
+  turn takes its first option at once. On expiry an open card zoom closes, open decisions take their first option, a
+  card that was picked but not yet played goes back, and the board sends Pass (turn), Mulligan done with the redraws so
+  far (mulligan), or the first-option answer (decision); the Scoia'tael coin popup, which belongs to the script, is closed
+  by the board's timeout too. The 60 s clock keeps running while the player zooms on their own turn. On the opponent's
+  turn the view counts down from 60 s when that turn starts; it is display only and never acts. The 60 s plus transit
+  stays under the 90 s Timed stuck limit, so a player who is still thinking is never ended as stuck. Normal mode has no
+  clock and no view. See also 9.10 for the zoom on the opponent's turn.
 - Turn timer drawn in code, not copied art.
 - Stuck-wait limits in section 10.
 - Canonical effect order and seat-relative rules code (7.4).
