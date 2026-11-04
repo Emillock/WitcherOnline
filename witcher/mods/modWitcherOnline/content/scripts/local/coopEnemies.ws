@@ -5791,6 +5791,10 @@ class r_CoopEnemies
         {
             return;  // it was heard
         }
+        if(p.npc.IsInHitAnim())
+        {
+            return;  // the hit animation carries its own sound, as it does on the leader's monster
+        }
         if(p.hitSoundHeavy)
         {
             p.npc.SoundEvent("cmb_play_hit_heavy");
