@@ -255,10 +255,12 @@ def test_one_pure_helper_decides_the_zoom_hold() -> None:
     assert held.startswith("var held:Boolean = DuelClock.zoomHolds(")
     for needle in ("human.duelZoomOpen", "BasePlayerController.ROUND_PLAYER_STATUS_DONE", "opponent.waitingForMove",
                    "opponent.hasQueuedMove", "this._window.peek() != null", "opponent.duelMoveInProgress",
-                   "flow.stateMachine.awaitingNextState"):
+                   "flow.stateMachine.awaitingNextState && this._window.nextSeq > this._progressAtSend"):
         assert needle in glue, needle
     assert "var progress:int = DuelClock.heldProgress(this._window.nextSeq,held," in glue
     assert ",held,this._localDecisions,this._gameNumber,progress," in glue
+    send = session("public function send(")
+    assert send.index("this._outSeq++") < send.index("this._progressAtSend = this._window.nextSeq")
 
 
 @needs_vanilla

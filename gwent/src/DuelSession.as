@@ -270,6 +270,9 @@ package red.game.witcher3.menus.gwint
       /** Local decisions opened so far: each one outside the local turn is its own stretch of the clock. */
       private var _localDecisions:int = 0;
 
+      /** The window's next seq when this board last sent a message (R58: an opponent message taken since hands over). */
+      private var _progressAtSend:int = 0;
+
       /**
        * Starts a duel game (use start(), which also makes it the active one).
        * @param seed The match seed from the script.
@@ -722,6 +725,7 @@ package red.game.witcher3.menus.gwint
             return;
          }
          this._outSeq++;
+         this._progressAtSend = this._window.nextSeq;
          var corruptAt:int = GwintGameMenu.mSingleton.duelDebugCorruptAt;
          if(corruptAt == this._outSeq || corruptAt == CORRUPT_END && type == END)
          {
@@ -982,7 +986,7 @@ package red.game.witcher3.menus.gwint
          // R56, R58: the local card zoom holds the handover of an opponent message to this seat
          var atHead:Boolean = this._window.peek() != null;
          var localPassed:Boolean = human != null && human.currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE;
-         var switchPending:Boolean = flow.stateMachine.awaitingNextState && flow.currentPlayer == CardManager.PLAYER_2;
+         var switchPending:Boolean = flow.stateMachine.awaitingNextState && this._window.nextSeq > this._progressAtSend;
          var held:Boolean = DuelClock.zoomHolds(human != null && human.duelZoomOpen,localPassed,opponent != null && opponent.waitingForMove,opponent != null && opponent.hasQueuedMove,atHead,opponent != null && opponent.duelMoveInProgress,switchPending);
          var progress:int = DuelClock.heldProgress(this._window.nextSeq,held,atHead);
          var expired:String = this._timer.update(this._isTimed,human,opponent,mulliganOpen,this._localDecision != null,held,this._localDecisions,this._gameNumber,progress,getTimer(),GwintGameMenu.mSingleton,this.log);

@@ -116,8 +116,8 @@ package red.game.witcher3.menus.gwint
        * @param queued An opponent move is queued in its controller.
        * @param atHead An opponent message is at the window's head.
        * @param opponentBusy The opponent's controller shows or applies a move (duelMoveInProgress).
-       * @param switchPending A state switch of the game flow is pending while the opponent is its current player
-       * (the switch to this seat's turn waits on the zoom's dialog).
+       * @param switchPending A state switch of the game flow is pending after an opponent message was taken since
+       * this board's last message (the switch towards this seat's turn waits on the zoom's dialog).
        * @return True when the zoom holds the handover.
        */
       public static function zoomHolds(zoomOpen:Boolean, localPassed:Boolean, opponentWaiting:Boolean, queued:Boolean, atHead:Boolean, opponentBusy:Boolean, switchPending:Boolean) : Boolean
