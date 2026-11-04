@@ -584,6 +584,18 @@ class r_CoopEnemies
     public var hurtsExpired : int;       // leader: hurts too old to mean anything by the time they could be sent
     public var hitSoundsPlayed : int;    // member: hit sounds the copies would not have made themselves
     public var fightStates : int;        // leader: times its game was put into combat for a member's fight
+    public var scenesHeard : int;        // party members heard entering a cutscene
+    public var sceneHurtsDropped : int;  // leader: hits on a member who was watching one
+    public var sceneTargetsTurned : int; // leader: times such a member's character was left alone
+    public var peopleHeard : int;        // member: lists of people the leader sent
+    public var peopleListed : int;       // ...people in the last one
+    public var peopleMissing : int;      // ...of them this world does not have
+    public var peopleMissingNames : string;
+    public var peopleShared : int;        // leader: people in the last list it sent
+    private var peopleTick : int;
+    private var lastPeopleSend : float;
+    private var peopleToldAt : float;    // member: when the last notice was shown, and about whom
+    private var peopleToldNames : string;
     private var fightForced : bool;      // whether it is in one now
     private var fightingUntil : float;   // held a few seconds past the last sighting, so it cannot flicker
     // member: a moment after coming back to life in which the leader's world cannot hurt it (its copies and its
@@ -770,7 +782,9 @@ class r_CoopEnemies
             }
             SendJournal(now);
             SendFacts(now);
+            SendNearPeople(now);
             LeaderFightState(now);
+            NoticeGhostDue(now);
             wasHost = true;
         }
         else if(wasHost)
@@ -1445,6 +1459,15 @@ class r_CoopEnemies
         hurtsExpired = 0;
         hitSoundsPlayed = 0;
         fightStates = 0;
+        scenesHeard = 0;
+        sceneHurtsDropped = 0;
+        sceneTargetsTurned = 0;
+        peopleHeard = 0;
+        peopleListed = 0;
+        peopleMissing = 0;
+        peopleMissingNames = "";
+        peopleShared = 0;
+        lastPeopleSend = 0;
         wasAlive = true;
         killsCredited = 0;
         puppetsTimedOut = 0;
@@ -1800,8 +1823,8 @@ class r_CoopEnemies
                     players[i].horse.SetGameplayVisibility(players[i].isMounted && players[i].isAlive);
                 }
                 // a dead member's character is left alone until it is back (its game shows the death screen, then
-                // loads a save)
-                if(players[i].isAlive)
+                // loads a save), and so is one watching a cutscene, who cannot fight back or dodge
+                if(players[i].isAlive && !players[i].inScene)
                 {
                     wanted.PushBack(players[i].ghost);
                 }
@@ -1940,7 +1963,14 @@ class r_CoopEnemies
             user = GhostOwner(victim);
             if(e && user != "")
             {
-                QueueHurt(user, e, act);
+                if(PlayerInScene(user))
+                {
+                    sceneHurtsDropped += 1;   // it cannot dodge or heal while it watches
+                }
+                else
+                {
+                    QueueHurt(user, e, act);
+                }
             }
         }
         // a hit on a riding member's horse is a hit on the member; the horse here takes none
@@ -3101,6 +3131,167 @@ class r_CoopEnemies
         return menuIcons[i];
     }
 
+    // "np epoch tick count {name x y z}": the people a party member standing here could talk to - whoever has
+    // something to say (an interaction scene) or sells things within 30 m of their character. Its game answers by
+    // naming the ones its own world does not have.
+    private function SendNearPeople(now : float)
+    {
+        var client : r_MultiplayerClient;
+        var globals : array<r_RemotePlayer>;
+        var entities : array<CGameplayEntity>;
+        var people : array<CActor>;
+        var actor : CActor;
+        var pos : Vector;
+        var text, me : string;
+        var area : int;
+        var i, j : int;
+
+        if(now - lastPeopleSend < 2.0)
+        {
+            return;
+        }
+        lastPeopleSend = now;
+        client = theGame.r_getMultiplayerClient();
+        me = client.getUsername();
+        area = WO_CurrentAreaCode();
+        globals = client.getGlobalPlayers();
+        for(i = 0; i < globals.Size(); i += 1)
+        {
+            if(!globals[i] || !globals[i].inParty || globals[i].joinedParty != me || globals[i].area != area
+                || VecDistance(globals[i].pos, thePlayer.GetWorldPosition()) > COOP_SHARE_RANGE())
+            {
+                continue;
+            }
+            entities.Clear();
+            FindGameplayEntitiesInSphere(entities, globals[i].pos, 30, 48, '', FLAG_OnlyAliveActors + FLAG_ExcludePlayer);
+            for(j = 0; j < entities.Size(); j += 1)
+            {
+                actor = (CActor)entities[j];
+                if(!IsSomeoneToTalkTo(actor))
+                {
+                    continue;
+                }
+                if(!people.Contains(actor))
+                {
+                    people.PushBack(actor);
+                }
+            }
+        }
+        if(people.Size() == 0 && peopleShared == 0)
+        {
+            return;
+        }
+        if(people.Size() > 12)
+        {
+            people.Resize(12);
+        }
+        peopleShared = people.Size();
+        peopleTick += 1;
+        text = "coop np " + epoch + " " + peopleTick + " " + people.Size();
+        for(i = 0; i < people.Size(); i += 1)
+        {
+            pos = people[i].GetWorldPosition();
+            text += " " + CoopEncode(people[i].GetReadableName()) + " " + FloatToStringPrec(pos.X, 1)
+                + " " + FloatToStringPrec(pos.Y, 1) + " " + FloatToStringPrec(pos.Z, 1);
+        }
+        WO_Send(text);
+    }
+
+    // someone a player would walk up to: not a monster passing by, not another player's character
+    private function IsSomeoneToTalkTo(actor : CActor) : bool
+    {
+        var npc : CNewNPC;
+
+        npc = (CNewNPC)actor;
+        if(!npc || npc.HasTag('MPEntity') || npc.IsHorse() || IsPuppet(npc))
+        {
+            return false;
+        }
+        if((W3MerchantNPC)npc)
+        {
+            return true;
+        }
+        return npc.HasInteractionScene();
+    }
+
+    // The member's side: who of them this world does not have. Names, not templates, because that is what a
+    // player would say to their friend ("the armourer isn't here").
+    private function OnNearPeople(sender : string, count : int)
+    {
+        var here : array<CActor>;
+        var who, missing : string;
+        var pos : Vector;
+        var n, i, j, idx, gone : int;
+        var found : bool;
+
+        if(GetRole() != 2 || sender != leaderName || count < 4)
+        {
+            return;
+        }
+        peopleHeard += 1;
+        n = StringToInt(WO_Str(3), 0);
+        idx = 4;
+        here = thePlayer.GetNPCsAndPlayersInRange(60, 64, '', FLAG_OnlyAliveActors + FLAG_ExcludePlayer);
+        for(i = 0; i < n && idx + 3 < count; i += 1)
+        {
+            who = WO_Str(idx);
+            pos = Vector(StringToFloat(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0), StringToFloat(WO_Str(idx + 3), 0));
+            idx += 4;
+            if(VecDistance(pos, thePlayer.GetWorldPosition()) > 40)
+            {
+                continue;  // too far from this player to judge
+            }
+            found = false;
+            for(j = 0; j < here.Size(); j += 1)
+            {
+                if(here[j])
+                {
+                    if(CoopEncode(here[j].GetReadableName()) == who)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if(!found)
+            {
+                gone += 1;
+                if(gone <= 3)
+                {
+                    if(missing != "")
+                    {
+                        missing += ", ";
+                    }
+                    missing += CoopDecode(who);
+                }
+            }
+        }
+        peopleListed = n;
+        peopleMissing = gone;
+        peopleMissingNames = missing;
+        LogSync("NP", gone, n, CoopEncode(missing));
+        TellAboutMissingPeople(gone, missing);
+    }
+
+    // said at most once a minute, and only when it changed: the worlds part where the two players' quests do
+    private function TellAboutMissingPeople(gone : int, missing : string)
+    {
+        var now : float;
+
+        now = theGame.GetEngineTimeAsSeconds();
+        if(gone < 1 || missing == peopleToldNames)
+        {
+            return;
+        }
+        if(now - peopleToldAt < 60)
+        {
+            return;
+        }
+        peopleToldAt = now;
+        peopleToldNames = missing;
+        theGame.GetGuiManager().ShowNotification(gone + " people " + leaderName + " can talk to are not here: " + missing);
+    }
+
     // ---------------------------------------------------------------- member
 
     // inbound COOP message from the client's pump; fields are read with WO_Str
@@ -3147,6 +3338,10 @@ class r_CoopEnemies
         {
             OnThrows(sender, count);
         }
+        else if(WO_Str(0) == "np")
+        {
+            OnNearPeople(sender, count);
+        }
     }
 
     // This player's horse standing where it was left (not ridden, within 100 m): other players' games keep Witcher
@@ -3160,7 +3355,7 @@ class r_CoopEnemies
     {
         var horse : CNewNPC;
         var pos : Vector;
-        var text, effects : string;
+        var text, effects, scene : string;
 
         horse = thePlayer.GetHorseWithInventory();
         text = "0 0 0 0 0";
@@ -3171,20 +3366,50 @@ class r_CoopEnemies
                 + " " + FloatToStringPrec(horse.GetHeading(), 1);
         }
         effects = OwnShownEffects();
+        scene = "0";
+        if(InSceneHere())
+        {
+            scene = "1";
+        }
         if(muteHz)
         {
             return;
         }
         if((effects != ownShownText && now - parkedSentAt >= 0.1) || (text != parkedText && now - parkedSentAt >= 0.3)
-            || now - parkedSentAt >= 2.0)
+            || scene != sentScene || now - parkedSentAt >= 2.0)
         {
             parkedText = text;
             ownShownText = effects;
+            sentScene = scene;
             parkedSentAt = now;
             parkedSent += 1;
             WO_Send("coop hz " + parkedSent + " " + text + " " + effects + " " + OwnVersion() + " "
-                + GameTimeToSeconds(theGame.GetGameTime()));
+                + GameTimeToSeconds(theGame.GetGameTime()) + " " + scene);
         }
+    }
+
+    private var sentScene : string;
+
+    // this game is in a cutscene or a dialogue, so gameplay here is suspended (currentScene also carries the
+    // scene the tests name)
+    private function InSceneHere() : bool
+    {
+        if(theGame.IsDialogOrCutscenePlaying())
+        {
+            return true;
+        }
+        if(thePlayer.IsInNonGameplayCutscene())
+        {
+            return true;
+        }
+        return currentScene != "";
+    }
+
+    // Said at once when a scene starts or ends, because the game stops ticking this loop while one plays.
+    private function SendSceneNow()
+    {
+        parkedSentAt = -999;
+        SendParkedHorse(theGame.GetEngineTimeAsSeconds());
     }
 
     // this player's effects that show (CoopShowsEffect), "type:seconds,..." or "-"
@@ -3313,7 +3538,111 @@ class r_CoopEnemies
             }
         }
         CheckVersion(sender, WO_Str(8));
+        SetScenePresence(p, WO_Str(10) == "1");
     }
+
+    // A party member watching a cutscene cannot fight back, dodge or answer: the others are told, and the
+    // leader's monsters leave their character alone until it is over.
+    private function SetScenePresence(p : r_RemotePlayer, nowInScene : bool)
+    {
+        if(nowInScene == p.inScene)
+        {
+            return;
+        }
+        p.inScene = nowInScene;
+        p.sceneAt = theGame.GetEngineTimeAsSeconds();
+        if(!IsMyPartyMember(p.username))
+        {
+            return;
+        }
+        LogSync("CS", 0, (int)nowInScene, p.username);
+        if(nowInScene)
+        {
+            scenesHeard += 1;
+            theGame.GetGuiManager().ShowNotification(p.username + " is watching a cutscene");
+            if(wasHost)
+            {
+                sceneTargetsTurned += 1;
+                DropHurtsOf(p.username);
+                ShowGhostTo(p.ghost, false);
+            }
+            return;
+        }
+        if(wasHost)
+        {
+            noticeGhostOf = p.username;   // the scene is over; the monsters see them again once it is armed
+            noticeGhostAt = theGame.GetEngineTimeAsSeconds() + 0.3;
+        }
+    }
+
+    private var noticeGhostOf : string;
+    private var noticeGhostAt : float;
+
+    private function NoticeGhostDue(now : float)
+    {
+        var ghost : CActor;
+
+        if(noticeGhostAt <= 0 || now < noticeGhostAt)
+        {
+            return;
+        }
+        noticeGhostAt = 0;
+        ghost = GhostOf(noticeGhostOf);
+        noticeGhostOf = "";
+        ShowGhostTo(ghost, true);
+    }
+
+    // Monsters are told to forget this character while its player watches a cutscene - ArmGhosts stops it being
+    // picked, but one in the middle of a fight keeps the target it has - and to notice it again afterwards, or
+    // they would stand around with a target they no longer see.
+    private function ShowGhostTo(ghost : CActor, visible : bool)
+    {
+        var i : int;
+
+        if(!ghost)
+        {
+            return;
+        }
+        for(i = 0; i < hostEnemies.Size(); i += 1)
+        {
+            if(hostEnemies[i].npc)
+            {
+                if(visible)
+                {
+                    hostEnemies[i].npc.NoticeActor(ghost);
+                }
+                else
+                {
+                    hostEnemies[i].npc.ForgetActor(ghost);
+                }
+            }
+        }
+    }
+
+    public function PlayerInScene(user : string) : bool
+    {
+        var players : array<r_RemotePlayer>;
+        var i : int;
+
+        if(user == "")
+        {
+            return false;
+        }
+        players = theGame.r_getMultiplayerClient().getPlayers();
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(players[i])
+            {
+                if(players[i].username == user)
+                {
+                    return players[i].inScene;
+                }
+            }
+        }
+        return false;
+    }
+
+
 
     // A member's time of day follows its leader's, whatever the distance or region (Witcher Online does this too,
     // but only while the leader is near and in the same region, because its clock rides in the near-player
@@ -3388,6 +3717,10 @@ class r_CoopEnemies
                 continue;
             }
             if(now - MaxF(nearSince[k], players[i].parkedAt) < 15 || silenceWarned.Contains(players[i].username))
+            {
+                continue;
+            }
+            if(players[i].inScene)
             {
                 continue;
             }
@@ -5596,7 +5929,7 @@ class r_CoopEnemies
                 puppets.Erase(i);
                 continue;
             }
-            if(now - p.seenAt > 5.0)
+            if(now - p.seenAt > 5.0 && !PlayerInScene(leaderName))
             {
                 puppetsTimedOut += 1;
                 LogSync("PT", p.netId, 0, FloatToStringPrec(now - p.seenAt, 1));
@@ -6578,17 +6911,20 @@ class r_CoopEnemies
         {
             currentScene = scene.GetPath();
         }
+        SendSceneNow();
     }
 
     public function OnSceneEnded()
     {
         currentScene = "";
+        SendSceneNow();
     }
 
     // the bots have no quest scene to share; they name one
     public function SetSceneForTest(path : string)
     {
         currentScene = path;
+        SendSceneNow();
     }
 
     // The leader skipped a line or cutscene: members in the same scene skip with it.

@@ -69,6 +69,10 @@ statemachine class r_RemotePlayer
     public var parkedPos : Vector;     // facing so, last heard then
     public var parkedYaw : float;
     public var parkedAt : float;
+    public var inScene : bool;         // its game is in a cutscene or dialogue (coopEnemies SetScenePresence)
+    public var putBacks : int;         // times its character here was put back where its game says it stands
+    private var offPlaceSince : float; // since when it has been away from there (0: it is where it belongs)
+    public var sceneAt : float;        // when that last changed
     public var dismountedAt : float;
     public var shownEffects : array<int>;  // this player's effects that show, put on their character here (coopEnemies)
     public var shownOn : CActor;           // ...that character (Witcher Online makes a new one when it comes near again)
@@ -6383,6 +6387,27 @@ statemachine class r_RemotePlayer
             setMoveType(entity, 0);
         }
         
+        // Off its place and staying there: a slide cannot climb back out of the water under a pier, so after a
+        // second it is simply put where its player stands.
+        if(!lastDiving && (dist > 3.0 || verticalDist > 1.5))
+        {
+            if(offPlaceSince == 0)
+            {
+                offPlaceSince = theGame.GetEngineTimeAsSeconds();
+            }
+            else if(theGame.GetEngineTimeAsSeconds() - offPlaceSince > 1.0)
+            {
+                offPlaceSince = 0;
+                putBacks += 1;
+                teleport(entity, targpos);
+                return;
+            }
+        }
+        else
+        {
+            offPlaceSince = 0;
+        }
+
         adjustor.Cancel(adjustor.GetRequest('w3mp_ghost'));
         ticket = adjustor.CreateNewRequest('w3mp_ghost');
 
