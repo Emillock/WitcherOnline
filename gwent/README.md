@@ -214,7 +214,7 @@ Before the first match, both players check that they run the same thing, and sto
 
 1. **The same game build.** In PowerShell:
    `(Get-Item "<game>\bin\x64_dx12\witcher3.exe").VersionInfo.FileVersion` (or right-click `witcher3.exe`,
-   Properties, Details, File version). Both must show **5.0.0.1048522**. The duel board is built and tested on that
+   Properties, Details, File version). Both must start with **5.0.0.1048522** (PowerShell adds "(Build Machine)"). The duel board is built and tested on that
    build only. Steam's update of 2026-10-29 is build 5.0.0.1090142: the witcher3-coop package runs on it, but no duel
    board has been built or tested on it yet. If one PC shows another build, or its `build.py build` stops with "not a
    known board", stop and report the build: do not pass `--allow-unknown-board` for the test.
@@ -359,9 +359,9 @@ it. Both boards must end in the same state.
   either way and the gold is paid once.
 - **F10** On a drawn match one player presses Replay at once and the other waits some seconds before pressing it.
   Expect: the new game starts when the second player presses Replay too.
-- **F11** A surrender popup left open across the end: player 1 presses the close button on their own turn and leaves the
-  surrender popup open without answering; player 2 plays the last card or passes so the game ends; once the end screen
-  is behind the popup, player 1 confirms the surrender. Expect: the surrender does nothing (no "forfeit" close), the end
+- **F11** A surrender popup left open across the end: in the deciding round player 1 passes, then presses the close
+  button and leaves the surrender popup open without answering while player 2 is still playing; player 2 passes so
+  the game ends; once the end screen is behind the popup, player 1 confirms the surrender. Expect: the surrender does nothing (no "forfeit" close), the end
   screen stays, and the game's own result is paid once on each side (or nothing, on a draw). (Not seen in game before.)
 
 ### G. Failures
@@ -470,6 +470,7 @@ All rows are pending. Fill in the result (pass, fail, skipped), date, the two pl
 
 | ID | Check | Result | Date / players | Notes |
 |---|---|---|---|---|
+| P1 | Before the first match: same game build, same commit, same board md5 | pending | | |
 | A1 | Single player: vanilla match against the AI | pending | | |
 | A2 | Single player: one quest Gwent match | pending | | |
 | A3 | Single player: Gwent tutorial | pending | | |
