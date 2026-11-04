@@ -75,6 +75,8 @@ class r_CoopPuppet
     public var npc : CNewNPC;
     public var netId : int;
     public var seenAt : float;  // the last snapshot that named it (UpdatePuppets drops ones the leader went quiet on)
+    public var hitSoundAt : float;   // when to make sure a hit of this player's was heard (0: nothing waiting)
+    public var hitSoundHeavy : bool; // which of the two the base game would have played
     public var killedAt : float;  // when it was killed here (it may yet be standing: see FreeStuckPuppet)
     public var spawned : bool;  // created here (destroyed on release) or a local twin (AI given back on release)
     public var aiId : int;
@@ -580,6 +582,10 @@ class r_CoopEnemies
     public var ownEffectsSent : int;     // member: effects it put straight on puppets (Axii, Yrden), sent alone
     public var hurtsDroppedDead : int;   // leader: hurts not sent, their member dead; member: hurts dropped while dead
     public var hurtsExpired : int;       // leader: hurts too old to mean anything by the time they could be sent
+    public var hitSoundsPlayed : int;    // member: hit sounds the copies would not have made themselves
+    public var fightStates : int;        // leader: times its game was put into combat for a member's fight
+    private var fightForced : bool;      // whether it is in one now
+    private var fightingUntil : float;   // held a few seconds past the last sighting, so it cannot flicker
     // member: a moment after coming back to life in which the leader's world cannot hurt it (its copies and its
     // ghost there are only just back; damage from before would land on a player who has no idea what hit it)
     private var hurtGraceUntil : float;
@@ -764,10 +770,12 @@ class r_CoopEnemies
             }
             SendJournal(now);
             SendFacts(now);
+            LeaderFightState(now);
             wasHost = true;
         }
         else if(wasHost)
         {
+            DropFightState();
             hostEnemies.Clear();
             hurts.Clear();
             DisarmGhosts();
@@ -912,6 +920,59 @@ class r_CoopEnemies
     //  last 1.5 s; move: see MoveText)
     // 30 snapshots a second for a normal fight; with a crowd the gap grows so that roughly the same amount goes
     // on the wire either way (and the member's slide follows, since it measures what arrives)
+    // One of the leader's monsters is fighting a party member's character nearby: that is the leader's fight too,
+    // so its game is put into combat for it (and let out a few seconds after the last one stops).
+    private function LeaderFightState(now : float)
+    {
+        var target : CActor;
+        var e : r_CoopHostEnemy;
+        var i : int;
+
+        for(i = 0; i < hostEnemies.Size(); i += 1)
+        {
+            e = hostEnemies[i];
+            if(e.npc)
+            {
+                if(e.deadAt < 0)
+                {
+                    target = e.npc.GetTarget();
+                    if(target)
+                    {
+                        if(target.HasTag('MPEntity'))
+                        {
+                            if(VecDistance(e.npc.GetWorldPosition(), thePlayer.GetWorldPosition()) < 50)
+                            {
+                                fightingUntil = now + 5.0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if(now < fightingUntil)
+        {
+            if(!fightForced)
+            {
+                fightForced = true;
+                fightStates += 1;
+                thePlayer.GetPlayerMode().ForceCombatMode(FCMR_Default);
+            }
+            return;
+        }
+        DropFightState();
+    }
+
+    private function DropFightState()
+    {
+        if(!fightForced)
+        {
+            return;
+        }
+        fightForced = false;
+        fightingUntil = 0;
+        thePlayer.GetPlayerMode().ReleaseForceCombatMode(FCMR_Default);
+    }
+
     private function HostInterval() : float
     {
         if(hostEnemies.Size() <= 8)
@@ -1382,6 +1443,8 @@ class r_CoopEnemies
         ghostEffectsEnded = 0;
         hurtsDroppedDead = 0;
         hurtsExpired = 0;
+        hitSoundsPlayed = 0;
+        fightStates = 0;
         wasAlive = true;
         killsCredited = 0;
         puppetsTimedOut = 0;
@@ -5563,6 +5626,7 @@ class r_CoopEnemies
 
             MovePuppet(p);
             DrivePuppetLocomotion(p);
+            HearHit(p);
             if(!p.stride)
             {
                 p.stride = new r_CoopStride in this;
@@ -5706,6 +5770,34 @@ class r_CoopEnemies
                 applyingHostState = false;
             }
         }
+    }
+
+    // A hit of this player's on a copy that the base game left silent, because the mirrored animation holds the
+    // body that its hit animation (and the sound on it) would have used.
+    private function HearHit(p : r_CoopPuppet)
+    {
+        if(p.hitSoundAt <= 0)
+        {
+            return;
+        }
+        if(theGame.GetEngineTimeAsSeconds() < p.hitSoundAt)
+        {
+            return;
+        }
+        p.hitSoundAt = 0;
+        if(p.npc.SoundIsActiveName('cmb_play_hit_light') || p.npc.SoundIsActiveName('cmb_play_hit_heavy'))
+        {
+            return;  // it was heard
+        }
+        if(p.hitSoundHeavy)
+        {
+            p.npc.SoundEvent("cmb_play_hit_heavy");
+        }
+        else
+        {
+            p.npc.SoundEvent("cmb_play_hit_light");
+        }
+        hitSoundsPlayed += 1;
     }
 
     // The slide keeps it on the leader's positions; the gameplay move speed and direction make its behavior graph
@@ -6000,6 +6092,9 @@ class r_CoopEnemies
         {
             return;
         }
+        // the base game plays its hit sound a moment later, off the hit animation; this is the mark to check
+        p.hitSoundAt = theGame.GetEngineTimeAsSeconds() + 0.05;
+        p.hitSoundHeavy = action.GetHitReactionType() == EHRT_Heavy;
 
         if(npc.UsesVitality())
         {
