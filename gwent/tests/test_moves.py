@@ -52,9 +52,9 @@ def test_the_three_commit_points_and_autoplay_use_commit(board: Path) -> None:
 
 @needs_vanilla
 def test_a_pass_sends_s(board: Path) -> None:
-    body = function_body((board / "HumanPlayerController.as").read_text(encoding="utf-8"),
-                         "override public function skipTurn(")
-    assert 'send("S"' in body
+    text = (board / "HumanPlayerController.as").read_text(encoding="utf-8")
+    assert "this.passTurn()" in function_body(text, "override public function skipTurn(")
+    assert 'send("S"' in function_body(text, "private function passTurn(")
 
 
 def test_opponent_applies_moves_through_applying_card() -> None:
@@ -111,5 +111,5 @@ def test_a_sent_move_is_neither_sent_again_nor_cancelled(board: Path) -> None:
     assert "awaitingNextState" in function_body(text, "function duelMoveInFlight(")
     assert "duelMoveInFlight()" in function_body(text, "function cancelCardTransaction(")
     skip = function_body(text, "override public function skipTurn(")
-    assert skip.index("duelMoveInFlight()") < skip.index('send("S"')
+    assert skip.index("duelMoveInFlight()") < skip.index("this.passTurn()")
     assert "_duelMovePending = false" in function_body(text, "override protected function state_begin_ApplyingCard(")

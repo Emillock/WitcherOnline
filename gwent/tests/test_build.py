@@ -106,3 +106,5 @@ def test_build_lists_duel_classes(tmp_path: Path) -> None:
     assert "DUEL CONFIRMED winner=" in (gwint / "DuelSession.as").read_text()
     assert "lateLeave" in (gwint / "DuelEnd.as").read_text()
     assert "LEFT_DRAW" in (gwint / "DuelWait.as").read_text() and "DUEL STUCK " in (gwint / "DuelSession.as").read_text()
+    assert "DUEL TIMER start " in (gwint / "DuelTimer.as").read_text() and "duelTimeUp" in human
+    assert "duelMulliganTimeUp" in flow and "duelCloseCoinPopup" in menu

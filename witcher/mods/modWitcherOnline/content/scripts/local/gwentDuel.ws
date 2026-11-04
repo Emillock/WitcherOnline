@@ -556,3 +556,24 @@ function OnClosing()
     }
     wrappedMethod();
 }
+
+// R53: in a Timed duel the Scoia'tael choice ran out and the board answered its first option itself; the popup goes,
+// marked answered first so its close (OnClosing above) answers nothing again.
+@addMethod(CR4GwintGameMenu)
+event OnDuelCoinTimeUp()
+{
+    var client : r_MultiplayerClient;
+
+    if(!IsDuel() || !chooseTurnPopup || chooseTurnPopup.duelAnswered)
+    {
+        return true;
+    }
+    chooseTurnPopup.duelAnswered = true;
+    client = theGame.r_getMultiplayerClient();
+    if(client)
+    {
+        client.duelLog("DUEL COIN popup closed: the time ran out");
+    }
+    chooseTurnPopup.ClosePopupOverlay();
+    return true;
+}

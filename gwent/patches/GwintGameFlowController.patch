@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/GwintGameFlowController.as b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
-index 9ffd03a..ad3b1a2 100644
+index 9ffd03a..1a4575f 100644
 --- a/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 +++ b/red/game/witcher3/menus/gwint/GwintGameFlowController.as
 @@ -1,6 +1,8 @@
@@ -57,7 +57,7 @@ index 9ffd03a..ad3b1a2 100644
           if(Boolean(this.mcTutorials) && Boolean(this.mcTutorials.visible) && !this.mcTutorials.isPaused)
           {
              return true;
-@@ -116,6 +150,208 @@ package red.game.witcher3.menus.gwint
+@@ -116,6 +150,227 @@ package red.game.witcher3.menus.gwint
           return this.mcMessageQueue.ShowingMessage() || CardFXManager.getInstance().isPlayingAnyCardFX() || this.mcChoiceDialog.isShown() || CardTweenManager.getInstance().isAnyCardMoving();
        }
        
@@ -104,6 +104,10 @@ index 9ffd03a..ad3b1a2 100644
 +       */
 +      public function stopDuelTimer() : void
 +      {
++         if(DuelSession.active != null)
++         {
++            DuelSession.active.hideTimer();
++         }
 +         if(this._duelTimer != null)
 +         {
 +            this._duelTimer.stop();
@@ -130,6 +134,21 @@ index 9ffd03a..ad3b1a2 100644
 +         return this._mulliganDecided;
 +      }
 +      
++      /**
++       * Duel, Timed mode (R53): the local mulligan ran out: it counts as done with the redraws so far, as a decline
++       * (the dialog closes and M goes out).
++       * @return True if the mulligan was still open.
++       */
++      public function duelMulliganTimeUp() : Boolean
++      {
++         if(this.stateMachine.currentState != "Mulligan" || this._mulliganDecided)
++         {
++            return false;
++         }
++         this.handleDeclineMulligan();
++         return true;
++      }
++
 +      /**
 +       * Duel: applies the opponent's mulligan redraw (D MUL) to PLAYER_2, as handleAcceptMulligan does for the local
 +       * player: the card goes back into the deck and the next card is drawn (it gets the next net id of that seat).
@@ -266,7 +285,7 @@ index 9ffd03a..ad3b1a2 100644
        public function turnOnAI(playerIndex:int) : void
        {
           var newController:BasePlayerController = null;
-@@ -154,7 +390,7 @@ package red.game.witcher3.menus.gwint
+@@ -154,7 +409,7 @@ package red.game.witcher3.menus.gwint
        
        protected function state_update_Initializing() : void
        {
@@ -275,7 +294,7 @@ index 9ffd03a..ad3b1a2 100644
           {
              this.stateMachine.ChangeState("Tutorials");
           }
-@@ -276,7 +512,11 @@ package red.game.witcher3.menus.gwint
+@@ -276,7 +531,11 @@ package red.game.witcher3.menus.gwint
           if(player1Faction != player2Faction && !this.mcTutorials.visible && (player1Faction == CardTemplate.FactionId_Scoiatael || player2Faction == CardTemplate.FactionId_Scoiatael))
           {
              GwintGameMenu.mSingleton.playSound("gui_gwint_scoia_tael_ability");
@@ -288,7 +307,7 @@ index 9ffd03a..ad3b1a2 100644
              {
                 this.currentPlayer = CardManager.PLAYER_INVALID;
                 dispatchEvent(new Event(COIN_TOSS_POPUP_NEEDED,false,false));
-@@ -289,7 +529,11 @@ package red.game.witcher3.menus.gwint
+@@ -289,7 +548,11 @@ package red.game.witcher3.menus.gwint
           }
           else
           {
@@ -301,7 +320,7 @@ index 9ffd03a..ad3b1a2 100644
              {
                 this.currentPlayer = CardManager.PLAYER_1;
              }
-@@ -323,6 +567,10 @@ package red.game.witcher3.menus.gwint
+@@ -323,6 +586,10 @@ package red.game.witcher3.menus.gwint
           this._mulliganDecided = false;
           this._mulliganCardsCount = 0;
           this.cardManager.shuffleAndDrawCards();
@@ -312,7 +331,7 @@ index 9ffd03a..ad3b1a2 100644
           cardsInHand = this.cardManager.getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,CardManager.PLAYER_1);
           this.mcChoiceDialog.showDialogCardInstances(cardsInHand,this.handleAcceptMulligan,this.handleDeclineMulligan,"[[gwint_can_choose_card_to_redraw]]");
           this.mcChoiceDialog.appendDialogText(" 0/2");
-@@ -338,8 +586,24 @@ package red.game.witcher3.menus.gwint
+@@ -338,8 +605,24 @@ package red.game.witcher3.menus.gwint
        
        protected function state_update_Mulligan() : void
        {
@@ -338,7 +357,7 @@ index 9ffd03a..ad3b1a2 100644
              this.stateMachine.ChangeState("RoundStart");
              this.mcChoiceDialog.hideDialog();
              this.gameStarted = true;
-@@ -355,6 +619,11 @@ package red.game.witcher3.menus.gwint
+@@ -355,6 +638,11 @@ package red.game.witcher3.menus.gwint
           var selectedCard:CardInstance = this.cardManager.getCardInstance(instanceId);
           if(selectedCard)
           {
@@ -350,7 +369,7 @@ index 9ffd03a..ad3b1a2 100644
              newCard = this.cardManager.mulliganCard(selectedCard);
              this.mcChoiceDialog.replaceCard(selectedCard,newCard);
              ++this._mulliganCardsCount;
-@@ -364,7 +633,15 @@ package red.game.witcher3.menus.gwint
+@@ -364,7 +652,15 @@ package red.game.witcher3.menus.gwint
                 this.mcChoiceDialog.updateDialogText("[[gwint_can_choose_card_to_redraw]]");
                 this.mcChoiceDialog.appendDialogText(" 1/2");
              }
@@ -366,7 +385,7 @@ index 9ffd03a..ad3b1a2 100644
           }
        }
        
-@@ -372,6 +649,7 @@ package red.game.witcher3.menus.gwint
+@@ -372,6 +668,7 @@ package red.game.witcher3.menus.gwint
        {
           this.mcChoiceDialog.hideDialog();
           this._mulliganDecided = true;
@@ -374,7 +393,7 @@ index 9ffd03a..ad3b1a2 100644
           if(this.playerControllers[CardManager.PLAYER_1] is HumanPlayerController)
           {
              (this.playerControllers[CardManager.PLAYER_1] as HumanPlayerController).attachToTutorialCarouselMessage();
-@@ -391,6 +669,11 @@ package red.game.witcher3.menus.gwint
+@@ -391,6 +688,11 @@ package red.game.witcher3.menus.gwint
           this.mcMessageQueue.PushMessage("[[gwint_round_start]]","round_start");
           this.allNeutralInRound = true;
           this.playedCreaturesInRound = false;
@@ -386,7 +405,7 @@ index 9ffd03a..ad3b1a2 100644
           if(this.lastRoundWinner != CardManager.PLAYER_INVALID && this.cardManager.playerDeckDefinitions[this.lastRoundWinner].getDeckFaction() == CardTemplate.FactionId_Northern_Kingdom)
           {
              this.mcMessageQueue.PushMessage("[[gwint_northern_ability_triggered]]","north_ability",this.onShowNorthAbilityShown,null);
-@@ -422,6 +705,10 @@ package red.game.witcher3.menus.gwint
+@@ -422,6 +724,10 @@ package red.game.witcher3.menus.gwint
              }
              if(this.shouldDisallowStateChangeFunc() == false)
              {
@@ -397,7 +416,7 @@ index 9ffd03a..ad3b1a2 100644
                 this.playerControllers[CardManager.PLAYER_1].resetCurrentRoundStatus();
                 this.playerControllers[CardManager.PLAYER_2].resetCurrentRoundStatus();
                 if(this.playerControllers[this.currentPlayer].currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE)
-@@ -459,6 +746,77 @@ package red.game.witcher3.menus.gwint
+@@ -459,6 +765,77 @@ package red.game.witcher3.menus.gwint
           this.cardManager.ressurectFromGraveyard(CardManager.PLAYER_2,2);
        }
        
@@ -475,7 +494,7 @@ index 9ffd03a..ad3b1a2 100644
        protected function state_begin_PlayerTurn() : void
        {
           this.log("#AI# starting player turn for player: " + this.currentPlayer);
-@@ -723,7 +1081,11 @@ package red.game.witcher3.menus.gwint
+@@ -723,7 +1100,11 @@ package red.game.witcher3.menus.gwint
        protected function state_begin_ClearingBoard() : void
        {
           var monsterAbilityTriggered:Boolean = false;
@@ -488,7 +507,7 @@ index 9ffd03a..ad3b1a2 100644
           {
              monsterAbilityTriggered = true;
           }
-@@ -814,6 +1176,10 @@ package red.game.witcher3.menus.gwint
+@@ -814,6 +1195,10 @@ package red.game.witcher3.menus.gwint
                 gameWinner = round2Winner;
              }
           }
@@ -499,7 +518,7 @@ index 9ffd03a..ad3b1a2 100644
           this.cardManager.logRoundResults();
           this.log("#AI#--- game winner was: " + gameWinner);
           this.log("#AI#--- current round was: " + this.currentRound);
-@@ -836,8 +1202,47 @@ package red.game.witcher3.menus.gwint
+@@ -836,8 +1221,47 @@ package red.game.witcher3.menus.gwint
           {
              GwintGameMenu.mSingleton.playSound("gui_gwint_battle_draw");
           }
@@ -547,7 +566,7 @@ index 9ffd03a..ad3b1a2 100644
        
        protected function state_update_ShowingFinalResult() : void
        {
-@@ -845,6 +1250,27 @@ package red.game.witcher3.menus.gwint
+@@ -845,6 +1269,27 @@ package red.game.witcher3.menus.gwint
        
        protected function OnEndGameResult(result:int) : void
        {

@@ -31,6 +31,8 @@ package red.game.witcher3.menus.gwint
 
       private var _showStartMs:int;
 
+      private var _duelTurnNumber:int = 0;
+
       /**
        * A controller without moves, in Idle.
        */
@@ -79,7 +81,26 @@ package red.game.witcher3.menus.gwint
       {
          super.startTurn();
          _turnOver = false;
+         this._duelTurnNumber++;
          _stateMachine.ChangeState("WaitingForMove");
+      }
+
+      /**
+       * Timed mode (R54): the opponent's turns started so far; the opponent's countdown starts over on each.
+       */
+      public function get duelTurnNumber() : int
+      {
+         return this._duelTurnNumber;
+      }
+
+      /**
+       * Timed mode (R54): the opponent's turn is on, from its start until its move (and the decisions it raises) has
+       * applied; the countdown only shows then.
+       */
+      public function get duelTurnActive() : Boolean
+      {
+         var state:String = _stateMachine.currentState;
+         return state == "WaitingForMove" || state == "ShowingMove" || state == "ApplyingCard";
       }
 
       /**

@@ -37,7 +37,7 @@ package red.game.witcher3.menus.gwint
 
       /**
        * function():String, the first option, or null: the default answer (R48: the Scoia'tael popup closed unanswered
-       * answers "1" this way through the script; Task 16 uses it on a decision timeout).
+       * answers "1" this way through the script; R53: Timed mode answers it when the time runs out).
        */
       public var firstFn:Function;
 
@@ -77,6 +77,16 @@ package red.game.witcher3.menus.gwint
       public function closedUnanswered(dialogShown:Boolean) : Boolean
       {
          return this.shown && this.kind != DuelSession.COIN && !dialogShown;
+      }
+
+      /**
+       * R53: the answer of a local decision whose time ran out (Timed mode): its first option, as R48 defines it.
+       * @return The first option as the wire writes it, or null when the decision has none.
+       */
+      public function firstChoice() : String
+      {
+         var first:Function = this.firstFn;
+         return first != null ? first() : null;
       }
 
       /**

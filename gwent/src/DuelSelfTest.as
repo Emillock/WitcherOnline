@@ -9,8 +9,10 @@ package red.game.witcher3.menus.gwint
     * of DuelIds, the window cap, the error paths, and the routing of synthetic D and M messages (DuelDecision.route,
     * DuelMulligan.route), the order of deferred effects and the double scorch guard (DuelDeferred), the end of a
     * game (DuelEnd.route: confirmation, replay, leave), and the stuck-wait rule and the opponent leaving (DuelWait:
-    * every wait kind, its limit, what resets it, each verdict, the marked Y; DuelDecision.closedUnanswered). Runs
-    * only when the script sets gwint.game.debug.selfTest (the w3test bot does, a normal player never), and reports
+    * every wait kind, its limit, what resets it, each verdict, the marked Y; DuelDecision.closedUnanswered), and Timed
+    * mode's clock (DuelClock: each stretch, its expiry, one budget across a decision in a turn, no timer in Normal
+    * mode; DuelDecision.firstChoice). Runs only when the script sets gwint.game.debug.selfTest (the w3test bot does,
+    * a normal player never), and reports
     * "DUEL SELFTEST pass=n fail=m" and one "DUEL SELFTEST FAIL ..." line per failure (at most MAX_REPORTED_FAILURES).
     */
    public class DuelSelfTest
@@ -56,6 +58,7 @@ package red.game.witcher3.menus.gwint
          test.guard("deferred",test.checkDeferred);
          test.guard("end",test.checkEnd);
          test.guard("wait",test.checkWait);
+         test.guard("timer",test.checkTimer);
          _checks = test._count;
          return test._failures;
       }
@@ -439,6 +442,63 @@ package red.game.witcher3.menus.gwint
          var coin:DuelDecision = new DuelDecision(DuelSession.COIN,DuelSession.ASKER_COIN,DuelStateHash.SCOPE_SEAT,null,null,null);
          coin.shown = true;
          this.expect(!coin.closedUnanswered(false),"decision: the coin popup is the script's (it answers a close itself)");
+      }
+
+      /**
+       * Timed mode's clock (R53, R54, DuelClock): Normal mode has no stretch; the stretches in order (a decision on the
+       * local turn belongs to the turn); each stretch runs out at the turn time, not before, once; an expired stretch
+       * stays expired until it ends; one budget across a decision in a turn (the turn's id does not change when its
+       * move raises a decision); the next turn, the next decision outside the turn and the next game's mulligan start
+       * over with the whole time; the countdown it shows; the turn time is the stuck limit's turn time; a decision's
+       * timeout answer is its first option (R48).
+       */
+      private function checkTimer() : void
+      {
+         var turn:int = DuelWait.TURN_MS;
+         this.expect(turn == 60000 && DuelWait.limitFor(true) == turn + DuelWait.TIMED_EXTRA_MS,"timer: 60 s turns, under the Timed stuck limit");
+         this.expect(DuelClock.stretchOf(false,true,true,true) == DuelClock.NONE,"timer: Normal mode has no timer");
+         this.expect(DuelClock.stretchOf(true,true,false,true) == DuelClock.TURN,"timer: a decision on the local turn is part of the turn");
+         this.expect(DuelClock.stretchOf(true,false,true,false) == DuelClock.MULLIGAN,"timer: the mulligan");
+         this.expect(DuelClock.stretchOf(true,false,false,true) == DuelClock.DECISION,"timer: a decision outside the local turn");
+         this.expect(DuelClock.stretchOf(true,false,false,false) == DuelClock.NONE,"timer: nothing to wait for locally");
+         var kinds:Array = [DuelClock.TURN,DuelClock.MULLIGAN,DuelClock.DECISION];
+         for(var k:int = 0; k < kinds.length; k++)
+         {
+            var clock:DuelClock = new DuelClock();
+            var started:Boolean = clock.tick(kinds[k],1,1000) == DuelClock.STARTED;
+            var early:Boolean = clock.tick(kinds[k],1,999 + turn) != DuelClock.RUNNING || clock.expired;
+            this.expect(started && !early && clock.tick(kinds[k],1,1000 + turn) == DuelClock.EXPIRED && clock.expired,"timer: " + kinds[k] + " runs out after the turn time");
+            this.expect(clock.tick(kinds[k],1,5000 + turn) == DuelClock.RUNNING && clock.expired,"timer: " + kinds[k] + " stays expired until it ends");
+         }
+         var none:DuelClock = new DuelClock();
+         this.expect(none.tick(DuelClock.NONE,0,1000) == DuelClock.RUNNING && none.tick(DuelClock.NONE,0,1000 + 10 * turn) == DuelClock.RUNNING && !none.expired,"timer: no stretch never runs out");
+         this.expect(none.remainingMs(1000) == -1,"timer: no stretch shows nothing");
+         var budget:DuelClock = new DuelClock();
+         budget.tick(DuelClock.stretchOf(true,true,false,false),7,1000);
+         this.expect(budget.tick(DuelClock.stretchOf(true,true,false,true),7,1000 + turn / 2) == DuelClock.RUNNING,"timer: a decision raised by the move keeps the turn's clock");
+         this.expect(budget.tick(DuelClock.stretchOf(true,true,false,true),7,1000 + turn) == DuelClock.EXPIRED,"timer: the turn and its decision share one budget (R53)");
+         this.expect(budget.tick(DuelClock.stretchOf(true,true,false,true),7,1001 + turn) == DuelClock.RUNNING && budget.expired,"timer: a chained decision of an expired turn is answered at once");
+         this.expect(budget.tick(DuelClock.TURN,8,2000 + turn) == DuelClock.STARTED && !budget.expired && budget.remainingMs(2000 + turn) == turn,"timer: the next turn has the whole time");
+         var decisions:DuelClock = new DuelClock();
+         decisions.tick(DuelClock.DECISION,3,1000);
+         decisions.tick(DuelClock.DECISION,3,1000 + turn);
+         this.expect(decisions.tick(DuelClock.DECISION,4,1001 + turn) == DuelClock.STARTED && !decisions.expired,"timer: the next decision outside the turn has its own time");
+         var games:DuelClock = new DuelClock();
+         games.tick(DuelClock.MULLIGAN,0,1000);
+         games.tick(DuelClock.NONE,0,2000);
+         this.expect(games.tick(DuelClock.MULLIGAN,1,3000) == DuelClock.STARTED && games.remainingMs(3000) == turn,"timer: the next game's mulligan starts over");
+         var shown:DuelClock = new DuelClock();
+         shown.tick(DuelClock.TURN,1,1000);
+         this.expect(shown.remainingMs(1000 + 15000) == turn - 15000 && shown.remainingMs(1000 + 2 * turn) == 0 && shown.elapsedMs(1000 + 15000) == 15000,"timer: the countdown shows the time left, never below 0");
+         var first:DuelDecision = new DuelDecision("NUR","A3",DuelStateHash.SCOPE_FULL,null,null,function():String
+         {
+            return "A9";
+         },function():String
+         {
+            return "A5";
+         });
+         this.expect(first.firstChoice() == "A5","timer: a decision's timeout answers its first option, not autoplay's");
+         this.expect(new DuelDecision("NUR","A3",DuelStateHash.SCOPE_FULL,null,null,null).firstChoice() == null,"timer: a decision without a first option has no timeout answer");
       }
 
       /** The verdict of a wait of this kind that just passed the Normal limit, the opponent still there. */

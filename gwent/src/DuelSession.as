@@ -95,6 +95,14 @@ package red.game.witcher3.menus.gwint
     * or loss stands (its end screen settles it). R48, R52: a board decision dialog that went away unanswered (a card
     * zoom replaced and closed it) is shown again; the Scoia'tael popup, the script's, counts a close as its first
     * option (gwentDuel.ws). A Y or QUITGAME of the opponent is taken before this board sent its own Hello too.
+    * Timed mode (spec 15, R53, R54, DuelClock): one local clock of DuelWait.TURN_MS covers each stretch in which the
+    * board waits on local input (the local turn with the decisions its move raises, the mulligan, a local decision
+    * outside the turn), so the opponent never waits longer than that plus transit (under the Timed stuck limit). When
+    * it runs out (DUEL TIMER expired <stretch> after=<ms>) an open card zoom closes, an open decision takes its first
+    * option once the board has settled (and every further decision of that turn at once), and before the move a picked
+    * card goes back and the turn passes (S); the mulligan counts as done with its redraws so far (M). The view
+    * (DuelTimerView) shows the local clock, or on the opponent's turn a countdown from TURN_MS that only displays.
+    * Normal mode has no clock and no view.
     *
     * Choice dialog callers (W3ChoiceDialog.showDialog*) in the decompiled vanilla 5.01 board, file:line in that output
     * (red/game/witcher3/menus/gwint, or red/game/witcher3/controls for W3ChoiceDialog), with the decision kind:
@@ -254,6 +262,12 @@ package red.game.witcher3.menus.gwint
       /** When this board saw gwint.game.opponentLeft (getTimer ms), -1 before. */
       private var _leftAtMs:int = -1;
 
+      /** Timed mode's clocks and their view (R53, R54). */
+      private var _timer:DuelTimer;
+
+      /** Local decisions opened so far: each one outside the local turn is its own stretch of the clock. */
+      private var _localDecisions:int = 0;
+
       /**
        * Starts a duel game (use start(), which also makes it the active one).
        * @param seed The match seed from the script.
@@ -274,6 +288,7 @@ package red.game.witcher3.menus.gwint
          this._deferred = new DuelDeferred();
          this._end = new DuelEnd();
          this._wait = new DuelWait();
+         this._timer = new DuelTimer();
          this._recent = [];
          this._sentHashes = {};
       }
@@ -523,8 +538,8 @@ package red.game.witcher3.menus.gwint
        * @param apply function(choice:String):Boolean, applies a choice; false if it is not one of the options (a
        * desync).
        * @param autoChoice function():String, the choice duel autoplay makes (null: autoplay never answers).
-       * @param firstChoice function():String, the first option as the wire writes it: the default answer (Task 16's
-       * decision timeout; a board dialog that went away unanswered is shown again instead, R52).
+       * @param firstChoice function():String, the first option as the wire writes it: the default answer (R53: Timed
+       * mode answers it when the time runs out; a board dialog that went away unanswered is shown again instead, R52).
        *
        * Only one decision is open at a time (R34). A second decide while one is open ends the duel as a local desync
        * rather than queueing it: the vanilla rules ask one choice per step and the next choice only from the handler
@@ -550,6 +565,7 @@ package red.game.witcher3.menus.gwint
          if(seat == this.localSeat)
          {
             this.log("DUEL DECIDE " + kind + " asker=" + asker + " by=local");
+            this._localDecisions++;
             this._localDecision = decision;
          }
          else if(seat == DuelIds.SEAT_B - this.localSeat)
@@ -812,7 +828,7 @@ package red.game.witcher3.menus.gwint
       /**
        * One step of the duel, every 20 ms: Hello, lost messages, the next inbound message (once this board sent its
        * Hello), the opponent leaving and the stuck-wait limit (after this tick's message, so one that is already queued
-       * is applied first), the local decision's dialog, autoplay.
+       * is applied first), the local decision's dialog, Timed mode's clock, autoplay.
        */
       public function update() : void
       {
@@ -864,6 +880,7 @@ package red.game.witcher3.menus.gwint
             this.log("DUEL DECIDE " + this._localDecision.kind + " closed unanswered: shown again");
             this._localDecision.shown = false;
          }
+         this.updateTimer();
          if(!this._ended && GwintGameMenu.mSingleton.duelDebugAutoplay)
          {
             this.autoplay();
@@ -944,6 +961,93 @@ package red.game.witcher3.menus.gwint
             this.abort("stuck_wait",STUCK_TEXT);
          }
          return true;
+      }
+
+      /**
+       * Timed mode (R53, R54): one update of the clocks and the view (DuelTimer); while the local time is up, its
+       * timeout (retried every update until it acted). Normal mode has no stretch, so nothing happens.
+       */
+      private function updateTimer() : void
+      {
+         var flow:GwintGameFlowController = GwintGameFlowController.getInstance();
+         if(flow == null)
+         {
+            return;
+         }
+         var human:HumanPlayerController = flow.playerControllers[CardManager.PLAYER_1] as HumanPlayerController;
+         var opponent:NetOpponentController = flow.playerControllers[CardManager.PLAYER_2] as NetOpponentController;
+         var mulliganOpen:Boolean = this._mulligan.phase == DuelMulligan.OPEN && !this._mulligan.localSent;
+         var expired:String = this._timer.update(this._isTimed,human,opponent,mulliganOpen,this._localDecision != null,this._localDecisions,this._gameNumber,getTimer(),GwintGameMenu.mSingleton,this.log);
+         if(expired != DuelClock.NONE)
+         {
+            this.timeUp(expired,human,flow);
+         }
+      }
+
+      /**
+       * R53: the local stretch ran out. An open card zoom closes; an open decision takes its first option once the board
+       * has settled (the state both boards hash at a decision point); else the local turn passes before its move was
+       * sent (a picked card goes back), and the mulligan counts as done with the redraws so far.
+       * @param kind The expired stretch.
+       * @param human The local player's controller.
+       * @param flow The game flow.
+       */
+      private function timeUp(kind:String, human:HumanPlayerController, flow:GwintGameFlowController) : void
+      {
+         if(human != null)
+         {
+            human.duelCloseZoom();
+         }
+         if(this._localDecision != null)
+         {
+            if(this.settled())
+            {
+               this.answerFirst();
+            }
+            return;
+         }
+         if(kind == DuelClock.TURN && human != null && human.duelTimeUp())
+         {
+            this.log("DUEL TIMER timeout pass");
+         }
+         else if(kind == DuelClock.MULLIGAN && flow.duelMulliganTimeUp())
+         {
+            this.log("DUEL TIMER timeout mulligan redraws=" + this.mulligans(this.localSeat));
+         }
+      }
+
+      /**
+       * R53 (the R48 default): answers the open local decision with its first option, as the player's answer would:
+       * the board's dialog goes (the Scoia'tael popup is the script's, which closes it as answered), D is sent, the
+       * choice applies. A decision without a first option stays open (the opponent's stuck wait then ends the match).
+       */
+      private function answerFirst() : void
+      {
+         var decision:DuelDecision = this._localDecision;
+         var choice:String = decision.firstChoice();
+         if(choice == null)
+         {
+            return;
+         }
+         this.log("DUEL TIMER timeout decide " + decision.kind + " " + choice);
+         decision.shown = true;
+         if(decision.kind == COIN)
+         {
+            GwintGameMenu.mSingleton.duelCloseCoinPopup();
+         }
+         else if(GwintGameMenu.mSingleton.mcChoiceDialog.isShown())
+         {
+            GwintGameMenu.mSingleton.mcChoiceDialog.hideDialog();
+         }
+         this.answer(decision.kind,choice);
+      }
+
+      /**
+       * Hides Timed mode's countdown (no stretch runs, or the duel tick stops: GwintGameFlowController.stopDuelTimer).
+       */
+      public function hideTimer() : void
+      {
+         this._timer.hide();
       }
 
       /** What this board waits for from the opponent now (DuelWait.kindOf). */
