@@ -104,6 +104,49 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * R58: whether the local card zoom holds the handover to this seat (stretchOf's heldByZoom). The board is between
+       * an opponent message arriving and the local stretch it hands over starting: the message is queued in the
+       * opponent's controller, at the window's head, being shown or applied by the opponent's controller, or the game
+       * flow's switch to the next state waits (it waits on the zoom's dialog). Nobody waits on this seat when the
+       * opponent waits for its own next move or the local seat already passed this round, so the zoom then holds
+       * nothing.
+       * @param zoomOpen The local player's card zoom is open.
+       * @param localPassed The local seat is done for the round.
+       * @param opponentWaiting The opponent's controller waits for its next move (NetOpponentController.waitingForMove).
+       * @param queued An opponent move is queued in its controller.
+       * @param atHead An opponent message is at the window's head.
+       * @param opponentBusy The opponent's controller shows or applies a move (duelMoveInProgress).
+       * @param switchPending A state switch of the game flow is pending while the opponent is its current player
+       * (the switch to this seat's turn waits on the zoom's dialog).
+       * @return True when the zoom holds the handover.
+       */
+      public static function zoomHolds(zoomOpen:Boolean, localPassed:Boolean, opponentWaiting:Boolean, queued:Boolean, atHead:Boolean, opponentBusy:Boolean, switchPending:Boolean) : Boolean
+      {
+         if(!zoomOpen || localPassed)
+         {
+            return false;
+         }
+         if(opponentWaiting && !queued && !atHead)
+         {
+            return false;
+         }
+         return queued || atHead || opponentBusy || switchPending;
+      }
+
+      /**
+       * R56: the progress tick() takes: the window's next seq, one more while the held message is still at the window's
+       * head (it counts as taken once it moves on).
+       * @param nextSeq The window's next seq.
+       * @param held zoomHolds().
+       * @param atHead An opponent message is at the window's head.
+       * @return The progress for tick().
+       */
+      public static function heldProgress(nextSeq:int, held:Boolean, atHead:Boolean) : int
+      {
+         return held && atHead ? nextSeq + 1 : nextSeq;
+      }
+
+      /**
        * One update: the stretch goes on, starts over (or, R56, carries on from a hold) or runs out.
        * @param kind The stretch now (stretchOf).
        * @param id Which one of its kind: the turn number for TURN, the count of local decisions for DECISION, the

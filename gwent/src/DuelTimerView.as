@@ -41,8 +41,6 @@ package red.game.witcher3.menus.gwint
 
       private var _seconds:TextField;
 
-      private var _anchor:DisplayObject;
-
       private var _shownSeconds:int = -1;
 
       /**
@@ -83,11 +81,7 @@ package red.game.witcher3.menus.gwint
          {
             layer.addChild(this);
          }
-         if(anchor != this._anchor)
-         {
-            this._anchor = anchor;
-            this.place(layer,anchor);
-         }
+         this.place(layer,anchor);
          var seconds:int = int(Math.ceil(remainingMs / 1000));
          if(seconds != this._shownSeconds)
          {
@@ -103,11 +97,10 @@ package red.game.witcher3.menus.gwint
       public function hide() : void
       {
          this.visible = false;
-         this._anchor = null;
          this._shownSeconds = -1;
       }
 
-      /** To the right of the renderer, centred on its height. */
+      /** To the right of the renderer, centred on its height (on every show, so it follows the renderer). */
       private function place(layer:DisplayObjectContainer, anchor:DisplayObject) : void
       {
          var bounds:Rectangle = anchor.getBounds(layer);

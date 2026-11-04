@@ -503,6 +503,9 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * R58: when a card zoom holds the handover (DuelClock.zoomHolds): a queued move, a message at the window head,
+       * the opponent showing or applying its move, the flow's switch to our turn; not while the opponent waits for its
+       * own next move or once we passed; the carry's progress (heldProgress).
        * R56: a card zoom that holds an opponent message: a stretch in Timed mode only (Normal mode keeps spec 9.10: the
        * zoom holds without a clock), never on the local turn; the stretch the held message hands over carries on from
        * the start of the hold, also across moments without a stretch; a hold past the turn time expires, and the turn
@@ -511,6 +514,18 @@ package red.game.witcher3.menus.gwint
        */
       private function checkHold(turn:int) : void
       {
+         // zoomHolds(zoomOpen, localPassed, opponentWaiting, queued, atHead, opponentBusy, switchPending)
+         this.expect(DuelClock.zoomHolds(true,false,false,true,false,false,false),"hold: a zoom holds a queued opponent move");
+         this.expect(DuelClock.zoomHolds(true,false,false,false,true,false,false),"hold: a zoom holds an opponent message at the window head");
+         this.expect(DuelClock.zoomHolds(true,false,false,false,false,true,false),"hold: a zoom holds the opponent's move while showing or applying it");
+         this.expect(DuelClock.zoomHolds(true,false,false,false,false,false,true),"hold: a zoom holds the flow's switch to our turn");
+         this.expect(!DuelClock.zoomHolds(true,false,true,false,false,false,false),"hold: nothing while the opponent waits for its own next move");
+         this.expect(!DuelClock.zoomHolds(true,false,true,false,false,false,true),"hold: nothing while the opponent waits for its own next move, whatever the flow does");
+         this.expect(DuelClock.zoomHolds(true,false,true,false,true,false,false),"hold: a message that arrived counts even before the opponent's controller took it");
+         this.expect(!DuelClock.zoomHolds(true,true,false,true,true,true,true),"hold: nothing once the local seat already passed this round");
+         this.expect(!DuelClock.zoomHolds(false,false,false,true,true,true,true),"hold: no zoom, no hold");
+         this.expect(DuelClock.heldProgress(8,true,true) == 9 && DuelClock.heldProgress(8,true,false) == 8,"hold: the held message counts as taken once it leaves the window head");
+         this.expect(DuelClock.heldProgress(8,false,true) == 8,"hold: without a hold the progress is the window's next seq");
          this.expect(DuelClock.stretchOf(false,false,false,false,true) == DuelClock.NONE,"hold: in Normal mode a zoom holds without a clock");
          this.expect(DuelClock.stretchOf(true,false,false,false,true) == DuelClock.HELD,"hold: in Timed mode a zoom holding a message runs the clock");
          this.expect(DuelClock.stretchOf(true,true,false,false,true) == DuelClock.TURN,"hold: a zoom on the local turn is part of the turn");

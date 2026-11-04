@@ -94,6 +94,16 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
+       * Timed mode (R58): the opponent's move is being shown or applied on this board (both wait on the local card
+       * zoom, spec 9.10), so a zoom now holds the handover to the local seat.
+       */
+      public function get duelMoveInProgress() : Boolean
+      {
+         var state:String = _stateMachine.currentState;
+         return state == "ShowingMove" || state == "ApplyingCard";
+      }
+
+      /**
        * Timed mode (R54): the opponent's turn is on, from its start until its move (and the decisions it raises) has
        * applied; the countdown only shows then.
        */

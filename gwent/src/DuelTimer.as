@@ -59,7 +59,7 @@ package red.game.witcher3.menus.gwint
          }
          var opponentKind:String = DuelClock.stretchOf(isTimed,opponent != null && opponent.duelTurnActive,false,false);
          this._opponentClock.tick(opponentKind,opponent != null ? opponent.duelTurnNumber : 0,nowMs);
-         if(kind != DuelClock.NONE)
+         if(kind != DuelClock.NONE && human != null)
          {
             this.show(layer,human.playerRenderer,this._clock.remainingMs(nowMs));
          }

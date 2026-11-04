@@ -143,10 +143,14 @@ def test_the_turn_passes_through_the_pass_path(board: Path) -> None:
     passing = function_body(human, "private function passTurn(")
     assert passing.index('send("S"') < passing.index("declineCardTransaction()") < passing.index('ChangeState("Idle")')
     up = function_body(human, "public function duelTimeUp(")
-    assert "this.duelMoveInFlight()" in up and "this.passTurn()" in up
+    assert "this.duelMoveInFlight()" in up and "!this.duelChoosing()" in up and "this.passTurn()" in up
+    # R59: the cancel a player's cancel takes, before the pass, when a card was picked (not from ChoosingCard)
+    assert up.index('!= "ChoosingCard"') < up.index("this.cancelCardTransaction(true)") < up.index("this.passTurn()")
+    choosing = function_body(human, "private function duelChoosing(")
     for state in ("ChoosingCard", "ChoosingHandler", "ChoosingTargetCard", "WaitConfirmation"):
-        assert f'"{state}"' in up and f'"{state}"' in function_body(human, "public function get duelTurnActive(")
-    assert '"ApplyingCard"' in function_body(human, "public function get duelTurnActive(")
+        assert f'"{state}"' in choosing
+    active = function_body(human, "public function get duelTurnActive(")
+    assert "this.duelChoosing()" in active and '"ApplyingCard"' in active and '"ChoosingHandler"' not in active
     assert '"ApplyingCard"' not in up
     assert "this.closeZoomCB()" in function_body(human, "public function duelCloseZoom(")
     start = function_body(human, "override public function startTurn(")
@@ -203,10 +207,6 @@ def test_a_zoom_hold_runs_the_clock_in_timed_mode_only() -> None:
     in the order, and Normal mode still has none (the zoom holds without a clock, spec 9.10)."""
     stretch = function_body(source("DuelClock.as"), "public static function stretchOf(")
     assert stretch.index("if(!isTimed)") < stretch.index("localDecision") < stretch.index("heldByZoom ? HELD : NONE")
-    glue = session("private function updateTimer(")
-    assert "human.duelZoomOpen && (queued || this._window.peek() != null)" in glue
-    assert "opponent.hasQueuedMove" in glue
-    assert "held && !queued ? this._window.nextSeq + 1 : this._window.nextSeq" in glue
     assert "mulliganOpen,localDecision,heldByZoom)" in timer_update()
     assert "this._clock.tick(kind,id,nowMs,progress)" in timer_update()
 
@@ -237,3 +237,49 @@ def test_self_test_covers_the_zoom_hold() -> None:
     timer = function_body(source("DuelSelfTest.as"), "private function checkHold(")
     assert "DuelClock.HELD" in timer and "stretchOf(false,false,false,false,true)" in timer
     assert "hold: " in timer and len(re.findall(r'"hold: ', timer)) >= 5
+
+
+def test_one_pure_helper_decides_the_zoom_hold() -> None:
+    """R58: the glue asks DuelClock.zoomHolds (driven by the self-test) and nothing else: a zoom holds while the local
+    seat has not passed and the board is between an opponent message arriving and our stretch starting (queued, at
+    the window head, the opponent showing or applying its move, or the flow's switch pending); never while the
+    opponent waits for its own next move. The carry's progress comes from DuelClock.heldProgress (R56)."""
+    holds = function_body(source("DuelClock.as"), "public static function zoomHolds(")
+    assert holds.index("!zoomOpen || localPassed") < holds.index("opponentWaiting && !queued && !atHead")
+    assert "queued || atHead || opponentBusy || switchPending" in holds
+    progress = function_body(source("DuelClock.as"), "public static function heldProgress(")
+    assert "held && atHead ? nextSeq + 1 : nextSeq" in progress
+    glue = session("private function updateTimer(")
+    held = glue[glue.index("var held:Boolean = "):]
+    held = held[:held.index(";")]
+    assert held.startswith("var held:Boolean = DuelClock.zoomHolds(")
+    for needle in ("human.duelZoomOpen", "BasePlayerController.ROUND_PLAYER_STATUS_DONE", "opponent.waitingForMove",
+                   "opponent.hasQueuedMove", "this._window.peek() != null", "opponent.duelMoveInProgress",
+                   "flow.stateMachine.awaitingNextState"):
+        assert needle in glue, needle
+    assert "var progress:int = DuelClock.heldProgress(this._window.nextSeq,held," in glue
+    assert ",held,this._localDecisions,this._gameNumber,progress," in glue
+
+
+@needs_vanilla
+def test_the_opponent_move_in_progress_is_read_from_its_states(board: Path) -> None:
+    """R58: the opponent showing or applying its move (both wait on the local zoom, spec 9.10)."""
+    net = source("NetOpponentController.as")
+    busy = function_body(net, "public function get duelMoveInProgress(")
+    assert '"ShowingMove"' in busy and '"ApplyingCard"' in busy and '"WaitingForMove"' not in busy
+
+
+def test_review_cleanups() -> None:
+    """R59: DuelTimer shows the local clock only with a local controller; the view re-places itself on every show."""
+    timer = timer_update()
+    assert "kind != DuelClock.NONE && human != null" in timer
+    show = function_body(source("DuelTimerView.as"), "public function show(")
+    assert "this.place(layer,anchor)" in show and "anchor != this._anchor" not in show
+
+
+def test_self_test_drives_the_zoom_hold_helper() -> None:
+    """R58: self-test rows for every input of zoomHolds, the three states after the queue among them."""
+    hold = function_body(source("DuelSelfTest.as"), "private function checkHold(")
+    assert hold.count("DuelClock.zoomHolds(") >= 9 and hold.count("DuelClock.heldProgress(") >= 2
+    for needle in ("showing or applying", "switch to our turn", "waits for its own", "already passed"):
+        assert needle in hold, needle

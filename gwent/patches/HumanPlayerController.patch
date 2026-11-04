@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
-index bea2665..05123ec 100644
+index bea2665..2516b73 100644
 --- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
 +++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
 @@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
@@ -27,7 +27,7 @@ index bea2665..05123ec 100644
        public function HumanPlayerController()
        {
           super();
-@@ -94,29 +105,226 @@ package red.game.witcher3.menus.gwint
+@@ -94,29 +105,238 @@ package red.game.witcher3.menus.gwint
        {
           if(CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID).length == 0 && !CardManager.getInstance().getCardLeader(playerID).canBeUsed)
           {
@@ -63,8 +63,16 @@ index bea2665..05123ec 100644
 +       */
 +      public function get duelTurnActive() : Boolean
 +      {
++         return this.duelChoosing() || _stateMachine.currentState == "ApplyingCard";
++      }
++
++      /**
++       * Duel: the local turn is in one of its choosing states (a card may be picked, nothing sent yet).
++       */
++      private function duelChoosing() : Boolean
++      {
 +         var state:String = _stateMachine.currentState;
-+         return state == "ChoosingCard" || state == "ChoosingHandler" || state == "ChoosingTargetCard" || state == "WaitConfirmation" || state == "ApplyingCard";
++         return state == "ChoosingCard" || state == "ChoosingHandler" || state == "ChoosingTargetCard" || state == "WaitConfirmation";
 +      }
 +
 +      /**
@@ -87,17 +95,21 @@ index bea2665..05123ec 100644
 +      }
 +
 +      /**
-+       * Duel, Timed mode (R53): the local turn ran out before its move was sent: a picked card goes back and the turn
-+       * passes (S), as the pass button does. Nothing happens once the move was sent (ApplyingCard; DuelSession answers
-+       * the decisions it raises) or while a sent move waits for its state switch.
++       * Duel, Timed mode (R53, R59): the local turn ran out before its move was sent: a picked card goes back the way
++       * a player's cancel takes it (cancelCardTransaction, outside ChoosingCard) and the turn passes (S), as the pass
++       * button does. Nothing happens once the move was sent (ApplyingCard; DuelSession answers the decisions it
++       * raises) or while a sent move waits for its state switch.
 +       * @return True if the turn passed.
 +       */
 +      public function duelTimeUp() : Boolean
 +      {
-+         var state:String = _stateMachine.currentState;
-+         if(this.duelMoveInFlight() || state != "ChoosingCard" && state != "ChoosingHandler" && state != "ChoosingTargetCard" && state != "WaitConfirmation")
++         if(this.duelMoveInFlight() || !this.duelChoosing())
 +         {
 +            return false;
++         }
++         if(_stateMachine.currentState != "ChoosingCard" && _transactionCard != null)
++         {
++            this.cancelCardTransaction(true);
 +         }
 +         this.passTurn();
 +         return true;
@@ -129,7 +141,7 @@ index bea2665..05123ec 100644
              }
 -            _stateMachine.ChangeState("Idle");
 +            this._duelMovePending = true;
-+         }
+          }
 +         _decidedCardTransaction = transaction;
 +         _stateMachine.ChangeState("ApplyingCard");
 +      }
@@ -162,7 +174,7 @@ index bea2665..05123ec 100644
 +         {
 +            this._duelAutoTurnMs = getTimer();
 +            return true;
-          }
++         }
 +         if(getTimer() - this._duelAutoTurnMs < DuelSession.AUTOPLAY_DELAY_MS)
 +         {
 +            return true;
@@ -263,7 +275,7 @@ index bea2665..05123ec 100644
        }
        
        override public function set cardZoomEnabled(value:Boolean) : *
-@@ -208,6 +416,10 @@ package red.game.witcher3.menus.gwint
+@@ -208,6 +428,10 @@ package red.game.witcher3.menus.gwint
           var isCardEffect:Boolean = false;
           var isGlobalEffect:Boolean = false;
           this.on_state_about_to_update();
@@ -274,7 +286,7 @@ index bea2665..05123ec 100644
           if(_transactionCard)
           {
              cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
-@@ -313,18 +525,19 @@ package red.game.witcher3.menus.gwint
+@@ -313,18 +537,19 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction = new CardTransaction();
              _decidedCardTransaction.targetPlayerID = playerID;
              _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
@@ -296,7 +308,7 @@ index bea2665..05123ec 100644
           _boardRenderer.activateAllHolders(true);
           if(Boolean(this._handHolder) && _boardRenderer.getSelectedCardHolder() != this._handHolder)
           {
-@@ -335,7 +548,7 @@ package red.game.witcher3.menus.gwint
+@@ -335,7 +560,7 @@ package red.game.witcher3.menus.gwint
        override protected function state_update_ApplyingCard() : void
        {
           this.on_state_about_to_update();
@@ -305,7 +317,7 @@ index bea2665..05123ec 100644
           {
              _turnOver = true;
              _stateMachine.ChangeState("Idle");
-@@ -450,7 +663,7 @@ package red.game.witcher3.menus.gwint
+@@ -450,7 +675,7 @@ package red.game.witcher3.menus.gwint
                       _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
                       _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
                       _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -314,7 +326,7 @@ index bea2665..05123ec 100644
                    }
              }
           }
-@@ -468,7 +681,7 @@ package red.game.witcher3.menus.gwint
+@@ -468,7 +693,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
              _decidedCardTransaction.targetCardInstanceRef = null;
              _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -323,7 +335,7 @@ index bea2665..05123ec 100644
           }
        }
        
-@@ -522,6 +735,10 @@ package red.game.witcher3.menus.gwint
+@@ -522,6 +747,10 @@ package red.game.witcher3.menus.gwint
        
        private function cancelCardTransaction(restoreSelection:Boolean = false) : void
        {

@@ -979,10 +979,12 @@ package red.game.witcher3.menus.gwint
          var human:HumanPlayerController = flow.playerControllers[CardManager.PLAYER_1] as HumanPlayerController;
          var opponent:NetOpponentController = flow.playerControllers[CardManager.PLAYER_2] as NetOpponentController;
          var mulliganOpen:Boolean = this._mulligan.phase == DuelMulligan.OPEN && !this._mulligan.localSent;
-         // R56: an opponent message that arrived waits behind the local card zoom (a queued move, or the window's head)
-         var queued:Boolean = opponent != null && opponent.hasQueuedMove;
-         var held:Boolean = human != null && human.duelZoomOpen && (queued || this._window.peek() != null);
-         var progress:int = held && !queued ? this._window.nextSeq + 1 : this._window.nextSeq;
+         // R56, R58: the local card zoom holds the handover of an opponent message to this seat
+         var atHead:Boolean = this._window.peek() != null;
+         var localPassed:Boolean = human != null && human.currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE;
+         var switchPending:Boolean = flow.stateMachine.awaitingNextState && flow.currentPlayer == CardManager.PLAYER_2;
+         var held:Boolean = DuelClock.zoomHolds(human != null && human.duelZoomOpen,localPassed,opponent != null && opponent.waitingForMove,opponent != null && opponent.hasQueuedMove,atHead,opponent != null && opponent.duelMoveInProgress,switchPending);
+         var progress:int = DuelClock.heldProgress(this._window.nextSeq,held,atHead);
          var expired:String = this._timer.update(this._isTimed,human,opponent,mulliganOpen,this._localDecision != null,held,this._localDecisions,this._gameNumber,progress,getTimer(),GwintGameMenu.mSingleton,this.log);
          if(expired != DuelClock.NONE)
          {
