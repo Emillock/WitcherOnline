@@ -4893,8 +4893,10 @@ class r_CoopEnemies
             buffs = p.npc.GetBuffs();
             for(i = 0; i < buffs.Size(); i += 1)
             {
+                // the wait is for the leader to have had time to list the effect: at 30 snapshots a second that
+                // is a third of a second, not the whole second it used to take
                 if(buffs[i] && CoopShowsEffect(buffs[i].GetEffectType()) && buffs[i].GetSourceName() != "W3CoopShown"
-                    && buffs[i].GetTimeActive() > 1.0 && !effects.Contains((int)buffs[i].GetEffectType()))
+                    && buffs[i].GetTimeActive() > MaxF(0.3, snapPeriod * 6.0) && !effects.Contains((int)buffs[i].GetEffectType()))
                 {
                     p.npc.RemoveEffect(buffs[i], false);
                     localEffectsDropped += 1;
