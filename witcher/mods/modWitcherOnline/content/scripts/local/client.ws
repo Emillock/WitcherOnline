@@ -2006,10 +2006,21 @@ statemachine class r_MultiplayerClient
     }
 
     // The board cancelled the duel as no contest (reason: version, templates, decks, desync, opponent_left, ...):
-    // no money moves.
+    // no money moves. "board": the Gwent menu closed without the board ever sending its Hello, so this game runs a board
+    // without Witcher Online's duel code (the vanilla board, the 4.04 bundle or another Gwent mod) and the match was
+    // played against the AI (gwentDuel.ws, OnClosingMenu).
     public function onGwentGameAborted(reason : string)
     {
-        GetWitcherPlayer().DisplayHudMessage("The Gwent duel was cancelled (" + reason + "). No bet was paid.");
+        if(reason == "board")
+        {
+            GetWitcherPlayer().DisplayHudMessage("The Gwent duel was cancelled: this game does not have Witcher Online's"
+                + " Gwent duel board, so that match was against the AI. Build the board as WitcherOnline's"
+                + " gwent/README.md describes. No bet was paid.");
+        }
+        else
+        {
+            GetWitcherPlayer().DisplayHudMessage("The Gwent duel was cancelled (" + reason + "). No bet was paid.");
+        }
         finishGwentGame();
     }
 

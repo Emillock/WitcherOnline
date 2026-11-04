@@ -16,6 +16,9 @@ license file, so we cannot be sure we may reuse it. The shipped board is in the 
 was committed by rejuvenate, not x4lva. Writing our own removes the doubt, lets us license the result under GPL-3.0,
 and lets us pick a design that fits the 5.01 board.
 
+(Amended after the build: the board is built and tested on game build 5.0.0.1048522 only, see section 12, and both
+duel players need that build.)
+
 Success looks like: two friends, one on Steam and one on GOG, both on game build 5.0.0.1090142 (5.01c) with Witcher
 Online on the `shared-enemies` branch over the w3relay Steam relay, play a full Gwent duel with their own decks,
 in Normal or Timed mode, with a bet, and the result and payout match on both sides in normal play. Each client
@@ -412,8 +415,9 @@ is fine.
   5.01 classes as decompiled by FFDec 26.4.0, `gwent/build.py` for the pipeline.
 - `build.py`: locate the player's `content\content0\bundles\r4gui.bundle`, check the vanilla board's checksum against
   the known value (amended after the build: only the board of game build 5.0.0.1048522 is known; the build refuses
-  any other unless `--allow-unknown-board` is given), extract `gameplay\gui_new\swf\gwint\gwint_game.redswf`, pull out the Flash movie, decompile
-  with FFDec, apply the patches, append the new classes to host scripts, import with `-importScript`, compress back to
+  any other unless `--allow-unknown-board` is given), extract `gameplay\gui_new\swf\gwint\gwint_game.redswf`, pull
+  out the Flash movie, decompile with FFDec, apply the patches, append the new classes to host scripts, import with
+  `-importScript`, compress back to
   the CFX format with the original version byte, write it back into the `.redswf` (replace the length-prefixed blob,
   fix the CR2W sizes and checksum), and pack it into the mod bundle with its `metadata.store`.
 - FFDec and a Java runtime are downloaded by the build with pinned versions and checksums, or documented as a

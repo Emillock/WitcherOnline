@@ -329,7 +329,8 @@ package red.game.witcher3.menus.gwint
        * its own, then confirms only with the same winner; nothing is settled before that (a Y in the wait goes to the
        * desync path, a move after the end is a desync; the waits themselves are DuelWait's, checkWait); R and X count
        * only after a confirmed draw, one R each; after a replay the opponent's late X or QUITGAME of the game before is
-       * found at the new game's first seq (DuelEnd.lateLeave), nothing else.
+       * found at the new game's first seq (DuelEnd.lateLeave), nothing else; a QUITGAME of this game behind a held
+       * message is found before the game ends as opponent_left (DuelEnd.queuedSurrender).
        */
       private function checkEnd() : void
       {
@@ -365,6 +366,9 @@ package red.game.witcher3.menus.gwint
          this.expect(left != null && left.type == DuelSession.LEAVE,"end: an X after the opponent's R of the game before is taken at the new game's first seq");
          this.expect(DuelEnd.lateLeave("1.1g0.17.X._.00000007","1g0",18) == null && DuelEnd.lateLeave("1.1g1.17.X._.00000007","1g0",17) == null,"end: a late X of another seq or match is not taken");
          this.expect(DuelEnd.lateLeave("1.1g0.17.S._.00000007~none","1g0",17) == null && DuelEnd.lateLeave(null,"1g0",17) == null,"end: only X and QUITGAME are taken late");
+         var queued:DuelMessage = DuelEnd.queuedSurrender(["1.1g0.16.P.a3,1,A.00000005","1.1g0.17.QUITGAME.1.00000009"].join("~"),"1g0");
+         this.expect(queued != null && queued.seq == 17 && queued.args[0] == "1","left: a QUITGAME behind a held move settles before the game ends as opponent_left");
+         this.expect(DuelEnd.queuedSurrender("1.1g0.17.QUITGAME.1.00000009","1g1") == null && DuelEnd.queuedSurrender("1.1g0.16.P.a3,1,A.00000005~none","1g0") == null && DuelEnd.queuedSurrender(null,"1g0") == null,"left: only a QUITGAME of this game is taken");
       }
 
       /**

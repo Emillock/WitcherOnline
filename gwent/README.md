@@ -5,8 +5,10 @@ This folder builds the Gwent board for Witcher Online duels on The Witcher 3 Rem
 Witcher Online connection) and writes a mod bundle that replaces the board in `modWitcherOnline`. The design is in
 [`docs/superpowers/specs/2026-11-02-gwent-duels-5.01-design.md`](../docs/superpowers/specs/2026-11-02-gwent-duels-5.01-design.md).
 
-Tested game build: **5.0.0.1048522**. The build refuses any other vanilla board unless `--allow-unknown-board` is
-given (see "Build commands").
+Tested game build: **5.0.0.1048522**, the only one in `KNOWN_BOARDS` (`gwent/build/build.py`). The build refuses
+any other vanilla board unless `--allow-unknown-board` is given (see "Build commands"). The witcher3-coop package itself
+also runs on Steam's update of 2026-10-29 (build 5.0.0.1090142, through its own bridge fix), but no duel board has been
+built or tested on that build: both duel players need 5.0.0.1048522.
 
 ## Provenance and licensing
 
@@ -61,7 +63,7 @@ For the automated game tests (`gwent_vanilla`, `gwent_selftest`, `gwent_duel`, `
 
 | Need | Version | Notes |
 |---|---|---|
-| WitcherNativeBridge | upstream commit `382898a` for game build 5.0.0.1048522 | The commit right before upstream's "update for 5.01c". The newer master matches only the 5.0.0.1090142 exe and makes this one crash about 6 s after start when a script native takes a string. |
+| WitcherNativeBridge | upstream commit `382898a` for game build 5.0.0.1048522 | The commit right before upstream's "update for 5.01c". The newer upstream master matches only the 5.0.0.1090142 exe and makes this one crash about 6 s after start when a script native takes a string. (The witcher3-coop package bundles a bridge with a local fix that accepts both builds, see its README.) |
 | Witcher Online client | this repository, `client/` | `msbuild MultiplayerClient.sln -p:Configuration=Release -p:Platform=x64 -p:OutDir=<root>\WitcherOnline\client\build\Release\`. The `client/asio` submodule must be initialised (`git submodule update --init client/asio`). |
 | Witcher Online server | this repository, `server/` | `javac` and `jar` with a JDK 21 (see the coop README). |
 | `w3test.asi` | witcher3-coop, `w3test\build.cmd` | The test bot. |
@@ -93,16 +95,28 @@ python gwent/build/build.py diff    [--work <dir>]
 look at a new game build: the patches may not apply, and the result is untested.
 
 To use the board in the game, install it together with the Witcher Online scripts. The tested route is the
-witcher3-coop `deploy.py`, which backs up what it replaces and restores it on uninstall:
+witcher3-coop `deploy.py`, which backs up what it replaces and restores it on uninstall. It needs the whole
+witcher3-coop checkout next to this repository (its "Building" section) and these builds on the same PC: the Witcher
+Online client `.asi` and the WitcherNativeBridge `.asi` of commit `382898a` (see "Build prerequisites"; `deploy.py`
+installs the bridge of `<root>\WitcherNativeBridge` unless an `--extra` replaces it). A player's install, run from the
+witcher3-coop folder:
 
 ```
-python -I deploy.py install --scripts-only --dlc --extra <WitcherOnline>\gwent\out\modWitcherOnline\content=mods\modWitcherOnline\content [--extra ...]
+python -I deploy.py install --scripts-only --dlc --extra <WitcherOnline>\client\build\Release\WitcherOnlineClient.asi=bin\x64_dx12\WitcherOnlineClient.asi --extra <bridge 382898a build>\WitcherNativeBridge.asi=bin\x64_dx12\WitcherNativeBridge.asi --extra <WitcherOnline>\gwent\out\modWitcherOnline\content=mods\modWitcherOnline\content
 python -I deploy.py uninstall
 ```
 
+The game tests add the test bot on top (`--extra <witcher3-coop>\w3test\modW3Test=mods\modW3Test` and
+`--extra <witcher3-coop>\w3test\build\w3test.asi=bin\x64_dx12\w3test.asi`). A player without this checkout
+cannot follow this route alone yet; for the manual test the author helps with the install.
+
 Only this board replaces Witcher Online's 4.04 board (`blob0.bundle` and `metadata.store`); the old 4.04 Gwent
 script overrides (`gwintManager.ws`, `gwintGameMenu.ws`) are not installed. The witcher3-coop release package does not
-include a Gwent board yet: every player builds it from their own game with the commands above.
+include a Gwent board yet: every player builds it from their own game with the commands above. A player who has the
+scripts but not this board (the vanilla 5.01 board, the 4.04 bundle or another Gwent mod in its place) plays the duel
+against the AI without knowing it: Witcher Online's script sees that the board never sent its Hello and cancels the
+duel when the menu closes ("this game does not have Witcher Online's Gwent duel board", reason `board`), and the
+opponent's board ends by its own Hello wait (no contest, `hello_timeout`, after 2 minutes). Nobody pays.
 
 ## How the board patches are made
 
@@ -142,6 +156,8 @@ python -m pytest gwent/tests -q -m "not slow"
 
 The `slow` test (`test_build.py`, about 15 seconds) runs the real FFDec pipeline against the installed game; it reads the
 game folder from `WITCHER3_GAME_DIR` (default: the GOG install path) and skips itself when `r4gui.bundle` is not there.
+`build.py build` itself ends with a smoke check: it lists the classes of the recompiled movie and stops with an error
+unless every `gwent/src` class (`NetOpponentController` included) is in it; the fast tests cover that check.
 It needs the tools from `build.py tools`. The Python reference, the codec, the message window, the logdiff, the match
 end, the stuck-wait rule, Timed mode and the patches each have a test file.
 
@@ -151,11 +167,11 @@ folder:
 
 | Command | What it checks |
 |---|---|
-| `python run_test.py gwent_vanilla` | A vanilla match against the AI on the rebuilt board; the bot plays and surrenders once the board is up. Passes when the match ends with a result. The bot log should hold no `DUEL ` line (single-player Gwent must not reach the duel code); that is a check to make by reading it. |
+| `python run_test.py gwent_vanilla` | A vanilla match against the AI on the rebuilt board; the bot plays and surrenders once the board is up. Passes when the match ends with a result and the board logged no `DUEL ` line (single-player Gwent must not reach the duel code); any such line fails it. |
 | `python run_test.py gwent_selftest` | The board replays the test vectors and its own rule checks through the AS3 duel classes and logs `DUEL SELFTEST pass=<n> fail=<m>`. Passes only with `fail=0`. |
-| `python run_test.py gwent_duel` | Two games: a duel between two bots through the real challenge. Both boards play themselves. The duel logs are compared by `gwent/tools/duel_logdiff.py` and the two results and the money must fit. The `W3T_GWENT_*` switches (decks, seed, mulligan, Timed, forced draw, replay, surrender, quit, idle, corrupt) are described in the witcher3-coop README. |
+| `python run_test.py gwent_duel` | Two games: a duel between two bots through the real challenge. Both boards play themselves. The duel logs are compared by `gwent/tools/duel_logdiff.py` and the two results and the money must fit. The `W3T_GWENT_*` switches (decks, seed, mulligan, Timed, forced draw, replay, surrender, quit, idle, corrupt, no duel board) are described in the witcher3-coop README. |
 | `python run_test.py --matrix <file>` | Several `gwent_duel` entries with their own settings in one game launch. |
-| `python run_suite.py gwent_vanilla gwent_selftest gwent_duel` | The whole Gwent subset with a summary table. `gwent_duel` runs every entry of `GWENT_DUEL_MATRIX` in `run_suite.py` (31 entries: decks and seeds, decisions, mulligan, the match end cases, stuck waits, an opponent that quits, Timed mode) as `--matrix` sessions; `--no-session` gives every duel fresh games (slower). Allow about 1.5 to 2 hours. |
+| `python run_suite.py gwent_vanilla gwent_selftest gwent_duel` | The whole Gwent subset with a summary table. `gwent_duel` runs every entry of `GWENT_DUEL_MATRIX` in `run_suite.py` (32 entries: decks and seeds, decisions, mulligan, the match end cases, stuck waits, an opponent that quits, Timed mode, a client without the duel board) as `--matrix` sessions; `--no-session` gives every duel fresh games (slower). Allow about 1.5 to 2 hours. |
 
 Results of the last full run are under "Results". Log lines of the board are `DUEL HELLO`, `DUEL SEND`, `DUEL APPLY`,
 `DUEL ROUND`, `DUEL END`, `DUEL DESYNC` and others; `python gwent/tools/duel_logdiff.py <logA> <logB>` reports the
@@ -166,12 +182,22 @@ as a human does, or think for a long time. That is what the manual checklist is 
 
 ## What a duel does (for the tester)
 
-- Challenge the other player with the console command `duel("<player id>")` (`-debugscripts`, then `~`). Witcher Online's
-  player menu, which also offers the challenge, shows no entries on Remastered yet (see the witcher3-coop README). Choose
-  Normal or Timed mode in the popup, then the bet. The other player accepts in a popup. Both need the same game build,
-  the same Witcher Online build and no Gwent card mods.
-- Normal mode has no clock. Timed mode gives each player 60 seconds per turn, mulligan and decision; when it runs out,
-  the turn is passed (or the first option is taken). The opponent's turn shows a countdown.
+- Challenge the other player with the console command `duel("<their username>")` (`-debugscripts`, then `~`). The id
+  the command takes is the other player's Witcher Online username, exactly as in the `<Username>` line of their
+  `bin\WitcherOnline\config.xml` (on Remastered the client uses the username as the player id; the harness log shows
+  it as `challenge BotB (id BotB, ...)`). Ask the other player for it before you start. The other player must be near
+  you (their character in your world), out of combat and out of dialog. Witcher Online's player menu, which also offers
+  the challenge, shows no entries on Remastered yet (see the witcher3-coop README). Choose Normal or Timed mode in the
+  popup, then the bet. The other player accepts in a popup. Both need the same game build, the same Witcher Online
+  build and no Gwent card mods.
+- Normal mode has no turn clock, but it is not unlimited: a player who takes more than 2 minutes to make a move (or to
+  answer the mulligan or a choice) cancels the match as no contest for both, and no money moves. Timed mode gives each
+  player 60 seconds per turn, mulligan and decision; when it runs out, the turn is passed (or the first option is
+  taken). The opponent's turn shows a countdown.
+- A surrender loses the bet for the one who quits and wins it for the other player, except when it is confirmed while
+  the board still waits for the opponent's first message (right at the start): then the match is no contest. A surrender
+  confirmed after the game already ended (the popup was opened before the last card) does nothing: the result of the
+  game counts.
 - A win pays the bet, a loss costs it, each client settles its own bet. A draw is replayed by both with the same bet;
   if one closes the end screen instead, nobody pays.
 - If the match is cancelled (out of sync, opponent left, nobody answers in time) it ends as "no contest": no money moves
@@ -183,6 +209,20 @@ Two players on two PCs over the Steam relay (or one PC and the bot harness for t
 build 5.0.0.1048522 with this branch installed. Both players need a deck for every faction. Write down both players'
 gold before and after every match. Both players try both seats (host and guest) wherever a row says "both seats".
 Record each result in the table under "Results". Mark a row passed only when you saw it.
+
+Before the first match, both players check that they run the same thing, and stop if anything differs:
+
+1. **The same game build.** In PowerShell:
+   `(Get-Item "<game>\bin\x64_dx12\witcher3.exe").VersionInfo.FileVersion` (or right-click `witcher3.exe`,
+   Properties, Details, File version). Both must show **5.0.0.1048522**. The duel board is built and tested on that
+   build only. Steam's update of 2026-10-29 is build 5.0.0.1090142: the witcher3-coop package runs on it, but no duel
+   board has been built or tested on it yet. If one PC shows another build, or its `build.py build` stops with "not a
+   known board", stop and report the build: do not pass `--allow-unknown-board` for the test.
+2. **The same Witcher Online commit** (`git rev-parse HEAD` in this repository) on both PCs.
+3. **The same board.** `build.py build` prints `board matches game build 5.0.0.1048522` and
+   `smoke check: all 20 gwent/src classes are in the built board`. The build is deterministic, so the md5 of
+   `gwent/out/modWitcherOnline/content/blob0.bundle` (`Get-FileHash -Algorithm MD5 <file>`) must be the same on both
+   PCs. A board from another commit passes the Hello but can go out of sync minutes later.
 
 Things that always hold, and that you should watch in every match:
 
@@ -199,8 +239,10 @@ Things that always hold, and that you should watch in every match:
 
 ### B. Starting a duel
 
-- **B1** Challenge in Normal mode, accept, play a short match. Do it once with each player hosting. If the mode popup or
-  the bet window does not appear on Remastered, write down exactly what you see and stop: nothing else can start.
+- **B1** Challenge in Normal mode with `duel("<their username>")` (see "What a duel does"), accept, play a short match.
+  Do it once with each player hosting. If the other player gets no challenge popup, check the exact spelling of the
+  username and that the other player is near you. If the mode popup or the bet window does not appear on Remastered,
+  write down exactly what you see and stop: nothing else can start.
 - **B2** Challenge in Timed mode, accept. Expect: the turn clock is visible (see section H).
 - **B3** Choose a bet higher than your own gold: a message appears and no challenge is sent. Challenge a player who is
   in combat or in a dialog: expect the challenge to be declined, no board opens, and you can challenge again later.
@@ -286,6 +328,11 @@ it. Both boards must end in the same state.
 - **E6** Think for 100 seconds on your turn in Normal mode, then play. Expect: the match goes on. Then, once, think
   for more than 2 minutes while the other player waits. Expect: the match ends as no contest ("No answer in time") for
   both, and no money moves. (The limit is a guess; say if 2 minutes is too short for a real player.)
+- **E7** Play a duel where one player has the Witcher Online scripts but not the built board (uninstall the board only,
+  or skip `--extra ...\gwent\out\...` in that player's install). Expect: that player sees an ordinary match against
+  the AI, and when it closes, "this game does not have Witcher Online's Gwent duel board ... No bet was paid"; the other
+  player's board ends after about 2 minutes as no contest. Nobody pays on either side. (Covered by the `noboard` entry
+  of the automated matrix; do it only if the install is easy to change.)
 
 ### F. Match end
 
@@ -293,15 +340,16 @@ it. Both boards must end in the same state.
   result is confirmed (it can take a second or two longer than in single player).
 - **F2** A drawn match, both press Replay. Expect: "Waiting for your opponent", then a new game with the same bet, a fresh
   shuffle, and a later win or loss that pays. The "Waiting for your opponent" message is shown once; see how long the
-  board looks still if the other player takes a while (up to 2 minutes before the match is cancelled).
+  board looks still if the other player takes a while (if the other player never presses Replay, the wait ends after 2
+  minutes in Normal mode, 90 seconds in Timed mode, as a draw with no money, as if they had pressed Leave; see F4).
 - **F3** A drawn match, one presses Replay and the other closes the end screen. Expect: both end as a draw and no money
   moves.
 - **F4** A drawn match, one presses Replay and the other does nothing for over 2 minutes. Expect: the waiting player's
   match ends as a draw with no money moved, and the other player's end screen closes.
 - **F5** A natural draw (equal scores in all rounds) followed by a replay and another draw in the replayed game.
 - **F6** Surrender: one player closes the board with the close button and confirms. Expect: the quitter loses the bet,
-  the other wins it, both see the result. Do it in game 1, in a replayed game 2, and while the other player is still in
-  the mulligan.
+  the other wins it, both see the result. Do it in game 1, in a replayed game 2 (also during its mulligan), and while
+  the other player is still in the mulligan.
 - **F7** Both players surrender at the same moment. Expect: each loses their own bet, nobody wins it. (Hard to time; try
   it once.)
 - **F8** Surrender over the relay: the other player must see it within a few seconds. (The surrender keeps being sent
@@ -311,11 +359,17 @@ it. Both boards must end in the same state.
   either way and the gold is paid once.
 - **F10** On a drawn match one player presses Replay at once and the other waits some seconds before pressing it.
   Expect: the new game starts when the second player presses Replay too.
+- **F11** A surrender popup left open across the end: player 1 presses the close button on their own turn and leaves the
+  surrender popup open without answering; player 2 plays the last card or passes so the game ends; once the end screen
+  is behind the popup, player 1 confirms the surrender. Expect: the surrender does nothing (no "forfeit" close), the end
+  screen stays, and the game's own result is paid once on each side (or nothing, on a draw). (Not seen in game before.)
 
 ### G. Failures
 
-You cannot cause a desync from the game's own menus; the automated tests corrupt a card on purpose (the
-`corrupt` entries of `gwent_duel`) and must report `DUEL DESYNC` and no contest.
+Decision: the deliberate desync of spec 14 is not a manual row. The shipped board can only corrupt a card through
+the test switch `CR4GwintManager.duelDebugCorruptAt` (the board's `gwint.game.debug.corruptAt`), which only the w3test
+bot sets; no console command or menu sets it. The automated tests use it (the `corrupt` entries of `gwent_duel`, one at
+a move and one at the last message) and must report `DUEL DESYNC` and no contest on both sides.
 
 - **G1** The opponent closes the game (Alt+F4) during a match. Expect: about 30 seconds later the other player sees
   "Your opponent left. The match was cancelled", nobody pays, and they are free to start another duel.
@@ -324,7 +378,8 @@ You cannot cause a desync from the game's own menus; the automated tests corrupt
 - **G3** The opponent closes the game while the end screen of a drawn match is open. Expect: a draw, no money moved.
 - **G4** The opponent pauses their game (Alt+Tab to the desktop for 10 to 20 seconds, then back). Expect: the match goes
   on and is not ended as "left". Repeat once with 40 seconds and write down what happens (it may end as left); in no case
-  may only one side be paid.
+  may only one side be paid. Do it on both machines: the player who paused also checks that their own board does not
+  end the match as "left" when they come back (a hitch on the local side restarts the silence clock).
 - **G5** The opponent closes the game at different stages: while the boards are still exchanging their first messages,
   during the mulligan, and right as the last card of the match is played (while the boards confirm the result). Write
   down the money on both sides each time; expect no contest and no money, or, if the result was already confirmed, one
@@ -333,7 +388,8 @@ You cannot cause a desync from the game's own menus; the automated tests corrupt
   connection stayed up sees the opponent-left message after about 30 seconds and nobody is paid alone. Write down what
   the player who dropped sees.
 - **G7** The opponent leaves their board untouched on their own turn for more than 2 minutes in Normal mode. Expect: both
-  end as no contest ("No answer in time"), nobody pays, and both are free to start another duel.
+  end as no contest ("No answer in time"), nobody pays, and both are free to start another duel. (This is the same rule
+  as E6: in Normal mode a move that takes more than 2 minutes cancels the match.)
 - **G8** If a duel is accepted but its board never opens (for example a menu was open at the moment): after 120 seconds
   "The Gwent duel could not start. No bet was paid." appears and you are not stuck "in Gwent". (Not seen in game; only
   if it happens by itself.)
@@ -374,30 +430,38 @@ the human coin popup (E1, E2, H7), waiting messages (E3, F2), zoom holding the o
 time out (H6), the Timed clock layout (H1), cancel-before-pass (H3), the one-by-one landing of cards (D11, D15), the
 berserker morph with mushroom (D9), two medics landing together (D3), a Northern Realms draw with a Skellige perk (C3),
 spies from the Skellige perk (D4), cow and Kambi spawns (D9), game end with effects queued (D17), simultaneous surrender
-(F7), the replay and end timeouts (F2 to F4), a natural draw in a replayed game (F5), the opponent leaving at each stage
-(G1 to G6), Hello refusal paths (B4, B5), the agile medic tie (D1).
+(F7), the replay timeouts (F2 to F4), a natural draw in a replayed game (F5), the opponent leaving at each stage
+(G1 to G6), Hello refusal paths (B4, B5), the agile medic tie (D1), a surrender popup left open across the end (F11).
+
+Not reachable by hand (source tests and the self-test only; no row): a move or a decision that arrives after the
+opponent's end of game message ("move after the opponent's end", a desync); the late X or QUITGAME that crosses a replay
+(the opponent leaves or surrenders the old game while this board already started the replayed one); the end timeout
+(`end_timeout`: the opponent's game stays alive but never sends its end of game message, which G5 and G7 do not
+produce); the empty-hand auto-pass (R21); a QUITGAME that arrives behind a move this board still holds when the opponent
+then leaves (it settles as a surrender, not as "left").
 
 ## Results
 
 ### Automated (last full run)
 
-Run on 2026-11-04 with the final board (`blob0.bundle` md5 `ed1287f8f082216f23a485105204c490`) on game build
+Run on 2026-11-04 with the final board (`blob0.bundle` md5 `96254ad6b30c282f1bdcce9aa4d229cf`) on game build
 5.0.0.1048522, minimized test games, command `python run_suite.py gwent_vanilla gwent_selftest gwent_duel` in
 `witcher3-coop` (branch `gwent-duels-5.01`):
 
-- **33 of 33 passed**, wall-clock 92 minutes (03:38 to 05:10): `gwent_duel` 31 of 31 in one game launch (5434 s),
-  `gwent_vanilla` PASS (48 s, no `DUEL ` line in the bot log), `gwent_selftest` PASS (48 s,
-  `DUEL SELFTEST pass=536 fail=0`).
-- The 31 `gwent_duel` entries: five pirate_ske seeds, two muster seeds, five deck pairs with mulligan (two seeds each),
+- **34 of 34 passed**, wall-clock 98 minutes (05:45 to 07:23): `gwent_duel` 32 of 32 in one game launch (5775 s),
+  `gwent_vanilla` PASS (48 s; it now fails on any `DUEL ` line, and the bot log had none), `gwent_selftest` PASS
+  (48 s, `DUEL SELFTEST pass=538 fail=0`).
+- The 32 `gwent_duel` entries: five pirate_ske seeds, two muster seeds, five deck pairs with mulligan (two seeds each),
   the corrupt check (desync at seq 8), a tricks pair, two leader-first pairs, the forced draw with replay, with leave, with
   no answer, a surrender at message 4, a replayed game surrendered through the close button, a desync on the last message,
-  a bot that stops playing (stuck wait), Timed idle seat, Timed both play, and a bot that quits its game. All with
-  `duel_logdiff` clean and the money right.
-- The game window was the foreground window 0 times in 49672 samples.
-- `python -m pytest gwent/tests -q` in the WitcherOnline repository: 196 passed. `python -m pytest tests -q` in
-  `witcher3-coop`: 49 passed.
-- The run folders are under `<W3C_WORK>\runs\`: `20261104-033833-matrix31`, `20261104-050907-gwent_vanilla`,
-  `20261104-050956-gwent_selftest`.
+  a bot that stops playing (stuck wait), Timed idle seat, Timed both play, a guest whose board runs as the vanilla board
+  (`noboard`: guest `nocontest reason=board`, host `nocontest reason=hello_timeout`, no money on either side), and a bot
+  that quits its game. All with `duel_logdiff` clean and the money right.
+- The game window was the foreground window 0 times in 52772 samples.
+- `python -m pytest gwent/tests -q` in the WitcherOnline repository: 202 passed. `python -m pytest tests -q` in
+  `witcher3-coop`: 55 passed.
+- The run folders are under `<W3C_WORK>\runs\`: `20261104-054532-matrix32`, `20261104-072147-gwent_vanilla`,
+  `20261104-072235-gwent_selftest`.
 - `python -I deploy.py uninstall` afterwards: manifest empty, no `witcher3.exe` or `java` process left.
 
 ### Manual
@@ -447,6 +511,7 @@ All rows are pending. Fill in the result (pass, fail, skipped), date, the two pl
 | E4 | Card zoom on your own turn | pending | | |
 | E5 | Card zoom on the opponent's turn | pending | | |
 | E6 | Thinking time in Normal mode | pending | | |
+| E7 | A player without the built board | pending | | |
 | F1 | Win and loss pay once | pending | | |
 | F2 | Draw, both Replay | pending | | |
 | F3 | Draw, one Replay, one closes | pending | | |
@@ -457,6 +522,7 @@ All rows are pending. Fill in the result (pass, fail, skipped), date, the two pl
 | F8 | Surrender arrives over the relay | pending | | |
 | F9 | End screen closed right away or late | pending | | |
 | F10 | Replay pressed at different times | pending | | |
+| F11 | Surrender popup left open across the end | pending | | |
 | G1 | Opponent closes the game during a match | pending | | |
 | G2 | Opponent closes the game on a confirmed win or loss | pending | | |
 | G3 | Opponent closes the game on a confirmed draw | pending | | |

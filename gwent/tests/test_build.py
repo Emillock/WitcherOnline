@@ -50,15 +50,39 @@ def test_diff_removes_stale_patches(tmp_path: Path) -> None:
     assert not (patch_dir / "Gone.patch").exists()
 
 
+def test_smoke_check_wants_every_src_class() -> None:
+    """Spec 12: the post-build check expects each gwent/src class, NetOpponentController included, in the board's
+    package, and refuses a build that lacks one."""
+    expected = build.expected_classes()
+    assert build.BOARD_PACKAGE == PACKAGE
+    assert sorted(expected) == sorted(f"{PACKAGE}.{path.stem}" for path in (GWENT_DIR / "src").glob("*.as"))
+    assert f"{PACKAGE}.NetOpponentController" in expected and f"{PACKAGE}.DuelSession" in expected
+    listed = [f"{PACKAGE}.CardTransaction", *expected]
+    assert build.check_built_classes(listed) == len(expected)
+    with pytest.raises(build.BuildError, match="NetOpponentController"):
+        build.check_built_classes([name for name in listed if not name.endswith(".NetOpponentController")])
+    with pytest.raises(build.BuildError, match="lacks"):
+        build.check_built_classes([f"{PACKAGE}.CardTransaction"])
+
+
+def test_build_runs_the_smoke_check_after_the_import() -> None:
+    """Spec 12: build_mod lists the classes of the recompiled movie and checks them before it writes the bundle."""
+    source = (GWENT_DIR / "build" / "build.py").read_text(encoding="utf-8")
+    body = source[source.index("def build_mod("):source.index("def diff_patches(")]
+    assert body.index("ffdec.import_scripts(") < body.index("check_built_classes(ffdec.dump_as3(built_swf))")
+    assert body.index("check_built_classes(") < body.index("bundle.write_v3(")
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not (GAME_DIR / build.GUI_BUNDLE).is_file(), reason="game folder not found")
 def test_build_lists_duel_classes(tmp_path: Path) -> None:
     out = tmp_path / "out"
     work = tmp_path / "w"
-    subprocess.run(
+    result = subprocess.run(
         [sys.executable, str(GWENT_DIR / "build" / "build.py"), "build",
          "--game", str(GAME_DIR), "--out", str(out), "--work", str(work)],
-        check=True)
+        check=True, capture_output=True, text=True)
+    assert "smoke check: all " in result.stdout
     content = out / "modWitcherOnline" / "content"
     assert (content / "metadata.store").is_file()
     board = bundle.extract(content / "blob0.bundle", build.BOARD_ENTRY)

@@ -23,9 +23,10 @@ package red.game.witcher3.menus.gwint
     * next message, before or after Hello, and ends the game as a win (or no contest) on the receiver. R41: if both
     * players surrender before either sees the other's QUITGAME, each settles its own loss; the opponent's QUITGAME
     * that arrives after the local surrender is logged (DUEL IGNORED) and ignored. R42: a surrender that crosses a Y
-    * stays as is: the quitter pays its loss, the other side ends as no contest (desync) with no money. A player who
-    * quits while its board waits for the opponent's E (CONFIRMING; the UI blocks it, only a script call reaches it)
-    * pays a loss as well, even when its own result was a win: the quitter pays, as for any surrender.
+    * stays as is: the quitter pays its loss, the other side ends as no contest (desync) with no money. Once this board
+    * sent its E (CONFIRMING or CONFIRMED) a surrender is not taken: the UI blocks a new surrender popup then, but one
+    * opened before the end can still be accepted, so surrender() sends nothing and the end confirmation settles the
+    * game (gwentDuel.ws ignores that popup's accept as well).
     *
     * Moves (spec 5, 9.5): HumanPlayerController sends P, C, G or L (sendMove) at its commit points and S when it passes,
     * before the move applies; NetOpponentController applies the opponent's moves. Move arguments:
@@ -90,7 +91,8 @@ package red.game.witcher3.menus.gwint
     * settles alone. The R wait sends X instead and ends as a draw (replay_timeout, R51). gwint.game.opponentLeft
     * (Witcher Online's script lost the opponent: no packet for 30 s, or a disconnect) ends the game once the opponent
     * messages already in the window have applied (at most DuelWait.LEFT_DRAIN_MS): as no contest (opponent_left) after
-    * the stuck Y (R50: a present opponent the script took for gone ends as no contest too); through the stuck path
+    * the stuck Y (R50: a present opponent the script took for gone ends as no contest too), unless its window holds a
+    * QUITGAME of this game behind a held message (it surrendered, then left: a win by surrender); through the stuck path
     * while this board waits for the opponent's E; as a draw (opponent_leave) after a confirmed draw; a confirmed win
     * or loss stands (its end screen settles it). R48, R52: a board decision dialog that went away unanswered (a card
     * zoom replaced and closed it) is shown again; the Scoia'tael popup, the script's, counts a close as its first
@@ -952,6 +954,18 @@ package red.game.witcher3.menus.gwint
             this.finishDraw("replay_timeout");
             return true;
          }
+         if(verdict == DuelWait.LEFT)
+         {
+            // the opponent may have surrendered behind a message this board still holds, then left: its QUITGAME
+            // settles here as it did there (as dispatchEarlyEnd takes one before this board's Hello)
+            var quit:DuelMessage = DuelEnd.queuedSurrender(this._lastWindow,this._matchId);
+            if(quit != null)
+            {
+               this.log("DUEL OPPONENT left after its surrender seq=" + quit.seq);
+               this.applySurrender(quit,this._gameNumber);
+               return true;
+            }
+         }
          this.log("DUEL STUCK " + (verdict == DuelWait.LEFT ? "left" : kind) + " limit=" + DuelWait.limitFor(this._isTimed));
          this.sendStuckY(verdict == DuelWait.HELLO_TIMEOUT);
          if(verdict == DuelWait.HELLO_TIMEOUT)
@@ -1348,11 +1362,12 @@ package red.game.witcher3.menus.gwint
        * The local player confirmed a surrender (GwintGameMenu.onQuitConfirmed; the script then closes the menu as a
        * forfeit). Sends QUITGAME with "1" when this side settles: its Hello is complete, so it pays the loss as today
        * and the opponent settles a win. Before that it sends "0" and the game ends as no contest on both sides
-       * (OnMultiplayerAbort, nobody pays). Nothing is sent once the game ended (an aborted board pays nothing).
+       * (OnMultiplayerAbort, nobody pays). Nothing is sent once the game ended (an aborted board pays nothing) or this
+       * board sent its E (a surrender popup left open across the end: the end confirmation settles).
        */
       public function surrender() : void
       {
-         if(this._ended)
+         if(this._ended || this._end.over)
          {
             return;
          }

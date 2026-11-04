@@ -206,6 +206,11 @@ var duelDebugReplay : bool;
 @addField(CR4GwintManager)
 var duelDebugBreakTemplates : bool;
 
+// The board gets seed 0 and so runs as the vanilla board, without duel code, while this script still treats the menu
+// as a duel: what a client without the rebuilt board does (its close must settle nothing).
+@addField(CR4GwintManager)
+var duelDebugNoBoard : bool;
+
 // Makes the next Gwent menu a duel against `deck`.
 @addMethod(CR4GwintManager)
 public function SetEnemyDeckFromMultiplayer(deck : SDeckDefinition)
@@ -259,6 +264,20 @@ var duelMatchId : string;
 @addField(CR4GwintGameMenu)
 var duelAbortReason : string;
 
+// The board sent its Hello: an outbound H of this build's duel protocol (WO_GwentProtocol()), so this menu runs
+// Witcher Online's rebuilt duel board. A board that never does (the vanilla 5.01 board, the 4.04 bundle or another
+// Gwent mod in its place) plays the opponent's deck with the vanilla AI, and the close of such a duel settles nothing
+// (no contest, reason "board"); the opponent ends by its own Hello wait as no contest too. The Hello is sent once per
+// duel, so only the menu opening clears it, not a replayed game.
+@addField(CR4GwintGameMenu)
+var duelBoardSpoke : bool;
+
+// The board sent the end of game message (E) of the current game: from then on the end confirmation settles that game,
+// and a surrender popup that stayed open across the end is not taken (OnQuitGameConfirmed). Cleared with the end
+// signals, and when the board starts the next game after a replay (OnDuelLog, "DUEL GAME ").
+@addField(CR4GwintGameMenu)
+var duelEndSent : bool;
+
 @addMethod(CR4GwintGameMenu)
 function IsDuel() : bool
 {
@@ -285,6 +304,7 @@ function OnConfigUI()
     }
     ClearDuelEndSignals();
     duelMatchId = "";
+    duelBoardSpoke = false;
 
     wrappedMethod();
 
@@ -302,7 +322,14 @@ function OnConfigUI()
 @addMethod(CR4GwintGameMenu)
 function SendDuelValues()
 {
-    m_flashValueStorage.SetFlashInt("gwint.game.seed", duelSeed);
+    if(gwintManager.duelDebugNoBoard)
+    {
+        m_flashValueStorage.SetFlashInt("gwint.game.seed", 0);
+    }
+    else
+    {
+        m_flashValueStorage.SetFlashInt("gwint.game.seed", duelSeed);
+    }
     m_flashValueStorage.SetFlashBool("gwint.game.isHost", IsDuel() && gwintManager.multiplayerIsHost);
     m_flashValueStorage.SetFlashBool("gwint.game.isTimed", IsDuel() && gwintManager.multiplayerIsTimed);
     m_flashValueStorage.SetFlashBool("gwint.game.opponentLeft", false);
@@ -365,6 +392,13 @@ function OnQuitGameConfirmed()
 
     if(IsDuel())
     {
+        if(duelEndSent)
+        {
+            // the popup was opened before the game ended and accepted after this board sent its E: the end
+            // confirmation settles this game (the end screen's close), so the surrender sends nothing and pays nothing
+            OnDuelLog("DUEL SURRENDER ignored: the game already ended");
+            return;
+        }
         // a surrender is a loss, not a draw; an abort stays (an aborted game settles nothing, surrender or not)
         duelDraw = false;
         // the board sends QUITGAME: "1" (it settles: a loss here, a win there) once its Hello is complete, "0" before
@@ -392,11 +426,19 @@ function OnMatchResult(pWon : bool)
     duelDraw = false;
 }
 
-// Settles the duel after vanilla's close: abort and draw move no money, otherwise win or loss as before.
+// Settles the duel after vanilla's close: abort and draw move no money, otherwise win or loss as before. A duel whose
+// board never sent its Hello (not the duel board, see duelBoardSpoke) is an abort, reason "board", decided before the
+// vanilla close so its DUEL END line comes before anything another wrap of the close logs.
 @wrapMethod(CR4GwintGameMenu)
 function OnClosingMenu()
 {
     var client : r_MultiplayerClient;
+
+    if(IsDuel() && !duelBoardSpoke && !duelAborted)
+    {
+        OnDuelLog("DUEL END result=nocontest reason=board game=0");
+        OnMultiplayerAbort("board");
+    }
 
     wrappedMethod();
 
@@ -428,13 +470,14 @@ function OnClosingMenu()
 
 // ---- board to script ----
 
-// Both end signals, at the menu opening and when a new game of the duel starts.
+// The end signals, at the menu opening and when a new game of the duel starts.
 @addMethod(CR4GwintGameMenu)
 function ClearDuelEndSignals()
 {
     duelDraw = false;
     duelAborted = false;
     duelAbortReason = "";
+    duelEndSent = false;
 }
 
 // One outbound duel message (a token without spaces or "~": "<version>.<matchId>.<seq>.<type>.<args>.<hash>").
@@ -443,6 +486,8 @@ event OnMultiplayerMessage(message : string)
 {
     var version : string;
     var matchId : string;
+    var seq : string;
+    var type : string;
     var rest : string;
 
     if(StrSplitFirst(message, ".", version, rest) && StrSplitFirst(rest, ".", matchId, rest))
@@ -453,6 +498,17 @@ event OnMultiplayerMessage(message : string)
             ClearDuelEndSignals();
         }
         duelMatchId = matchId;
+        if(StrSplitFirst(rest, ".", seq, rest) && StrSplitFirst(rest, ".", type, rest))
+        {
+            if(type == "H" && version == IntToString(WO_GwentProtocol()))
+            {
+                duelBoardSpoke = true;
+            }
+            else if(type == "E")
+            {
+                duelEndSent = true;
+            }
+        }
     }
     HandleOutgoingGwentAction(message);
 }
@@ -481,6 +537,11 @@ event OnDuelLog(line : string)
 {
     var client : r_MultiplayerClient;
 
+    if(StrBeginsWith(line, "DUEL GAME "))
+    {
+        // the board started the next game after a replay (DuelSession.startNextGame): the E it sent was the last game's
+        duelEndSent = false;
+    }
     client = theGame.r_getMultiplayerClient();
     if(client)
     {

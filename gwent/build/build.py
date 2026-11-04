@@ -36,6 +36,8 @@ PATCH_DIR = GWENT_DIR / "patches"
 
 MOD_NAME = "modWitcherOnline"
 HOST_SCRIPT = Path("red") / "game" / "witcher3" / "menus" / "gwint" / "CardTransaction.as"
+# The AS3 package of the host script, so of every hosted gwent/src class.
+BOARD_PACKAGE = ".".join(HOST_SCRIPT.parent.parts)
 
 GUI_BUNDLE = Path("content") / "content0" / "bundles" / "r4gui.bundle"
 BOARD_ENTRY = "gameplay\\gui_new\\swf\\gwint\\gwint_game.redswf"
@@ -161,6 +163,25 @@ def _host_classes(build_dir: Path) -> int:
     return len(sources)
 
 
+def expected_classes() -> list[str]:
+    """The fully qualified names of the classes a built board must hold: every gwent/src class (our duel classes and
+    NetOpponentController), all hosted in the package of HOST_SCRIPT."""
+    return [f"{BOARD_PACKAGE}.{source.stem}" for source in sorted(SRC_DIR.glob("*.as"))]
+
+
+def check_built_classes(listed: list[str]) -> int:
+    """Post-build smoke check (spec 12): raises BuildError unless every expected class is in listed (the classes
+    FFDec lists in the built movie); returns how many were checked."""
+    expected = expected_classes()
+    if not expected:
+        raise BuildError(f"no classes found in {SRC_DIR}")
+    present = set(listed)
+    missing = [name for name in expected if name not in present]
+    if missing:
+        raise BuildError(f"the built board lacks {len(missing)} of our classes: {', '.join(missing)}")
+    return len(expected)
+
+
 def build_mod(game: Path, out: Path, work: Path, allow_unknown: bool) -> int:
     """Runs the whole pipeline and writes the mod bundle under out; returns the exit code."""
     started = time.monotonic()
@@ -189,6 +210,8 @@ def build_mod(game: Path, out: Path, work: Path, allow_unknown: bool) -> int:
     print(f"recompiling {len(changed)} script(s): {', '.join(p.stem for p in changed)}")
     built_swf = work / "build.swf"
     ffdec.import_scripts(vanilla_swf, work / "import", built_swf)
+    checked = check_built_classes(ffdec.dump_as3(built_swf))
+    print(f"smoke check: all {checked} gwent/src classes are in the built board")
 
     fws = built_swf.read_bytes()
     if fws[3] != movie.version:

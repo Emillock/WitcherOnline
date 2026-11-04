@@ -17,6 +17,7 @@ PATCHES = GWENT_DIR / "patches"
 GWINT = Path("red") / "game" / "witcher3" / "menus" / "gwint"
 GWENT_DUEL_WS = (GWENT_DIR.parent / "witcher" / "mods" / "modWitcherOnline" / "content" / "scripts" / "local"
                  / "gwentDuel.ws")
+CLIENT_WS = GWENT_DUEL_WS.parent / "client.ws"
 
 needs_vanilla = pytest.mark.skipif(not (VANILLA / GWINT).is_dir(),
                                    reason="no decompiled vanilla board (run build.py build first)")
@@ -138,7 +139,7 @@ def test_surrender_after_an_abort_sends_nothing_and_late_quits_are_logged() -> N
     ignored."""
     text = session()
     surrender = function_body(text, "public function surrender(")
-    assert surrender.index("if(this._ended)") < surrender.index("this.send(DuelCodec.SURRENDER")
+    assert surrender.index("if(this._ended || this._end.over)") < surrender.index("this.send(DuelCodec.SURRENDER")
     assert "this.logLateQuit(this._lastWindow)" in surrender
     remote = function_body(text, "public function onRemoteInput(")
     assert remote.index("this._quitLocally") < remote.index("this._lastWindow = window")
@@ -237,3 +238,74 @@ def test_one_draw_route() -> None:
     """Review Minor 7: finishGame settles only a confirmed win or loss; draws go through localReplay and localLeave."""
     finish = function_body(session(), "public function finishGame(")
     assert "winner == CardManager.PLAYER_INVALID" in finish and "localLeave" not in finish
+
+
+def test_the_script_protocol_is_the_board_protocol() -> None:
+    """The script's duel board check (an outbound H of WO_GwentProtocol()) only works while the board sends that
+    version, so DuelCodec.PROTOCOL_VERSION and WO_GwentProtocol() must stay equal."""
+    codec = (SRC / "DuelCodec.as").read_text(encoding="utf-8")
+    board = re.search(r"public static const PROTOCOL_VERSION:int = (\d+);", codec)
+    script = re.search(r"function WO_GwentProtocol\(\) : int\s*\{\s*return (\d+);",
+                       GWENT_DUEL_WS.read_text(encoding="utf-8"))
+    assert board and script
+    assert int(board.group(1)) == int(script.group(1))
+
+
+def test_a_duel_without_the_duel_board_settles_nothing() -> None:
+    """Final review C2: a duel whose board never sent our Hello (the vanilla 5.01 board plays the opponent's deck with
+    the AI) ends as no contest, reason board, on its close; the opponent, which never gets a Hello, ends by its Hello
+    wait as no contest (hello_timeout). Neither side moves money."""
+    text = GWENT_DUEL_WS.read_text(encoding="utf-8")
+    message = function_body(text, "event OnMultiplayerMessage(")
+    assert 'type == "H" && version == IntToString(WO_GwentProtocol())' in message
+    assert message.index("duelBoardSpoke = true") < message.index("HandleOutgoingGwentAction(message)")
+    config = function_body(text, "function OnConfigUI()")
+    assert config.index("duelBoardSpoke = false") < config.index("wrappedMethod()")
+    assert "duelBoardSpoke" not in function_body(text, "function ClearDuelEndSignals()")
+    close = function_body(text, "function OnClosingMenu()")
+    check = close.index("if(IsDuel() && !duelBoardSpoke && !duelAborted)")
+    assert check < close.index("DUEL END result=nocontest reason=board") < close.index('OnMultiplayerAbort("board")')
+    assert close.index('OnMultiplayerAbort("board")') < close.index("wrappedMethod()")
+    assert close.index("wrappedMethod()") < close.index("if(duelAborted)") < close.index("client.onGwentGameAborted(")
+    assert close.index("if(duelAborted)") < close.index("NotifyGwentMatchEnded(playerWon)")
+    abort = function_body(text, "event OnMultiplayerAbort(")
+    assert "duelAbortReason = reason" in abort
+    values = function_body(text, "function SendDuelValues()")
+    assert values.index("if(gwintManager.duelDebugNoBoard)") < values.index('SetFlashInt("gwint.game.seed", 0)')
+    aborted = function_body(CLIENT_WS.read_text(encoding="utf-8"), "public function onGwentGameAborted(")
+    assert 'reason == "board"' in aborted and "gwent/README.md" in aborted and "settleGwentBet" not in aborted
+    gone = function_body(session(), "private function opponentGone(")
+    assert gone.index("this.sendStuckY(") < gone.index('this.abort("hello_timeout")')
+
+
+def test_a_surrender_popup_left_open_across_the_end_pays_nothing() -> None:
+    """Final review I1: once the board sent its E, accepting a surrender popup opened before the end sends no QUITGAME
+    and does not close the menu as a forfeit (the end confirmation settles); the board refuses it too."""
+    text = GWENT_DUEL_WS.read_text(encoding="utf-8")
+    message = function_body(text, "event OnMultiplayerMessage(")
+    assert 'else if(type == "E")' in message and "duelEndSent = true" in message
+    assert message.index("ClearDuelEndSignals()") < message.index("duelEndSent = true")
+    assert "duelEndSent = false" in function_body(text, "function ClearDuelEndSignals()")
+    log = function_body(text, "event OnDuelLog(")
+    assert 'StrBeginsWith(line, "DUEL GAME ")' in log and "duelEndSent = false" in log
+    assert 'this.log("DUEL GAME " + this._gameNumber' in function_body(session(), "private function startNextGame(")
+    quit_game = function_body(text, "function OnQuitGameConfirmed()")
+    guard = quit_game.index("if(duelEndSent)")
+    assert guard < quit_game.index("return;") < quit_game.index('GetMemberFlashFunction("onQuitConfirmed")')
+    assert quit_game.index("return;") < quit_game.index("wrappedMethod()")
+    surrender = function_body(session(), "public function surrender(")
+    assert surrender.index("this._end.over") < surrender.index("this.send(DuelCodec.SURRENDER")
+
+
+def test_a_surrender_behind_a_held_move_settles_before_opponent_left() -> None:
+    """Final review M3: when the opponent moved, surrendered and left while this board held the move, its QUITGAME in
+    the last window settles (a win by surrender) instead of ending as opponent_left."""
+    text = session()
+    gone = function_body(text, "private function opponentGone(")
+    left = gone.index("if(verdict == DuelWait.LEFT)")
+    queued = gone.index("DuelEnd.queuedSurrender(this._lastWindow,this._matchId)")
+    assert left < queued < gone.index("this.applySurrender(quit,this._gameNumber)") < gone.index("this.sendStuckY(")
+    found = function_body((SRC / "DuelEnd.as").read_text(encoding="utf-8"), "public static function queuedSurrender(")
+    assert "m.matchId == matchId && m.type == DuelCodec.SURRENDER" in found
+    checks = function_body((SRC / "DuelSelfTest.as").read_text(encoding="utf-8"), "private function checkEnd(")
+    assert "a QUITGAME behind a held move settles before the game ends as opponent_left" in checks

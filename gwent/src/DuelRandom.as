@@ -9,8 +9,8 @@ package red.game.witcher3.menus.gwint
     * Rules code draws through DuelSession.randomInt(ownerPlayer, n): the stream of the owner's seat in a duel, the
     * vanilla Math.random expression outside duels. Only the coin toss takes STREAM_SHARED directly.
     *
-    * Math.random audit (spec 7.3): every call in the decompiled vanilla 5.01 board (FFDec 26.4.0, 38 calls on 33
-    * lines), file:line in that output (in red/game/witcher3/menus/gwint, or in
+    * Math.random audit (spec 7.3): every call in the decompiled vanilla 5.01 board (FFDec 26.4.0, 37 calls on 33
+    * lines in 8 files), file:line in that output (in red/game/witcher3/menus/gwint, or in
     * red/game/witcher3/<folder> where a folder is given).
     *
     * Stream (changes which card goes where or who acts):

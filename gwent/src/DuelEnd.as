@@ -157,5 +157,27 @@ package red.game.witcher3.menus.gwint
          }
          return null;
       }
+
+      /**
+       * The opponent's QUITGAME of this game anywhere in its window, also behind messages this board has not applied
+       * yet (it moved, surrendered and left while this board held the move). DuelSession takes it before it ends the
+       * game as opponent_left, so the surrender settles on this side as it did on the quitter's.
+       * @param window The opponent's window.
+       * @param matchId The match id of this game.
+       * @return That message, or null.
+       */
+      public static function queuedSurrender(window:String, matchId:String) : DuelMessage
+      {
+         var tokens:Array = window != null ? window.split(DuelWindow.SEPARATOR) : [];
+         for(var i:int = 0; i < tokens.length; i++)
+         {
+            var m:DuelMessage = DuelCodec.decode(tokens[i]);
+            if(m != null && m.version == DuelCodec.PROTOCOL_VERSION && m.matchId == matchId && m.type == DuelCodec.SURRENDER)
+            {
+               return m;
+            }
+         }
+         return null;
+      }
    }
 }
