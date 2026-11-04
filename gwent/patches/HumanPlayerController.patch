@@ -1,5 +1,5 @@
 diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
-index bea2665..7a47180 100644
+index bea2665..05123ec 100644
 --- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
 +++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
 @@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
@@ -27,7 +27,7 @@ index bea2665..7a47180 100644
        public function HumanPlayerController()
        {
           super();
-@@ -94,29 +105,218 @@ package red.game.witcher3.menus.gwint
+@@ -94,29 +105,226 @@ package red.game.witcher3.menus.gwint
        {
           if(CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID).length == 0 && !CardManager.getInstance().getCardLeader(playerID).canBeUsed)
           {
@@ -68,7 +68,15 @@ index bea2665..7a47180 100644
 +      }
 +
 +      /**
-+       * Duel, Timed mode (R53): the local time ran out: an open card zoom closes.
++       * Duel, Timed mode (R56): the local player's card zoom is open (it holds the opponent's moves, spec 9.10).
++       */
++      public function get duelZoomOpen() : Boolean
++      {
++         return this._currentZoomedHolder != null;
++      }
++
++      /**
++       * Duel, Timed mode (R53, R56): the local time ran out: an open card zoom closes.
 +       */
 +      public function duelCloseZoom() : void
 +      {
@@ -121,7 +129,7 @@ index bea2665..7a47180 100644
              }
 -            _stateMachine.ChangeState("Idle");
 +            this._duelMovePending = true;
-          }
++         }
 +         _decidedCardTransaction = transaction;
 +         _stateMachine.ChangeState("ApplyingCard");
 +      }
@@ -154,7 +162,7 @@ index bea2665..7a47180 100644
 +         {
 +            this._duelAutoTurnMs = getTimer();
 +            return true;
-+         }
+          }
 +         if(getTimer() - this._duelAutoTurnMs < DuelSession.AUTOPLAY_DELAY_MS)
 +         {
 +            return true;
@@ -255,7 +263,7 @@ index bea2665..7a47180 100644
        }
        
        override public function set cardZoomEnabled(value:Boolean) : *
-@@ -208,6 +408,10 @@ package red.game.witcher3.menus.gwint
+@@ -208,6 +416,10 @@ package red.game.witcher3.menus.gwint
           var isCardEffect:Boolean = false;
           var isGlobalEffect:Boolean = false;
           this.on_state_about_to_update();
@@ -266,7 +274,7 @@ index bea2665..7a47180 100644
           if(_transactionCard)
           {
              cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
-@@ -313,18 +517,19 @@ package red.game.witcher3.menus.gwint
+@@ -313,18 +525,19 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction = new CardTransaction();
              _decidedCardTransaction.targetPlayerID = playerID;
              _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
@@ -288,7 +296,7 @@ index bea2665..7a47180 100644
           _boardRenderer.activateAllHolders(true);
           if(Boolean(this._handHolder) && _boardRenderer.getSelectedCardHolder() != this._handHolder)
           {
-@@ -335,7 +540,7 @@ package red.game.witcher3.menus.gwint
+@@ -335,7 +548,7 @@ package red.game.witcher3.menus.gwint
        override protected function state_update_ApplyingCard() : void
        {
           this.on_state_about_to_update();
@@ -297,7 +305,7 @@ index bea2665..7a47180 100644
           {
              _turnOver = true;
              _stateMachine.ChangeState("Idle");
-@@ -450,7 +655,7 @@ package red.game.witcher3.menus.gwint
+@@ -450,7 +663,7 @@ package red.game.witcher3.menus.gwint
                       _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
                       _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
                       _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -306,7 +314,7 @@ index bea2665..7a47180 100644
                    }
              }
           }
-@@ -468,7 +673,7 @@ package red.game.witcher3.menus.gwint
+@@ -468,7 +681,7 @@ package red.game.witcher3.menus.gwint
              _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
              _decidedCardTransaction.targetCardInstanceRef = null;
              _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
@@ -315,7 +323,7 @@ index bea2665..7a47180 100644
           }
        }
        
-@@ -522,6 +727,10 @@ package red.game.witcher3.menus.gwint
+@@ -522,6 +735,10 @@ package red.game.witcher3.menus.gwint
        
        private function cancelCardTransaction(restoreSelection:Boolean = false) : void
        {

@@ -102,7 +102,9 @@ package red.game.witcher3.menus.gwint
     * option once the board has settled (and every further decision of that turn at once), and before the move a picked
     * card goes back and the turn passes (S); the mulligan counts as done with its redraws so far (M). The view
     * (DuelTimerView) shows the local clock, or on the opponent's turn a countdown from TURN_MS that only displays.
-    * Normal mode has no clock and no view.
+    * R56 (Timed mode only, amends spec 9.10): while the local card zoom holds an opponent message that arrived, the
+    * clock already runs, and the stretch that message hands over carries on from there; if the hold runs out, the zoom
+    * closes, the held message applies and that stretch is expired at once. Normal mode has no clock and no view.
     *
     * Choice dialog callers (W3ChoiceDialog.showDialog*) in the decompiled vanilla 5.01 board, file:line in that output
     * (red/game/witcher3/menus/gwint, or red/game/witcher3/controls for W3ChoiceDialog), with the decision kind:
@@ -977,7 +979,11 @@ package red.game.witcher3.menus.gwint
          var human:HumanPlayerController = flow.playerControllers[CardManager.PLAYER_1] as HumanPlayerController;
          var opponent:NetOpponentController = flow.playerControllers[CardManager.PLAYER_2] as NetOpponentController;
          var mulliganOpen:Boolean = this._mulligan.phase == DuelMulligan.OPEN && !this._mulligan.localSent;
-         var expired:String = this._timer.update(this._isTimed,human,opponent,mulliganOpen,this._localDecision != null,this._localDecisions,this._gameNumber,getTimer(),GwintGameMenu.mSingleton,this.log);
+         // R56: an opponent message that arrived waits behind the local card zoom (a queued move, or the window's head)
+         var queued:Boolean = opponent != null && opponent.hasQueuedMove;
+         var held:Boolean = human != null && human.duelZoomOpen && (queued || this._window.peek() != null);
+         var progress:int = held && !queued ? this._window.nextSeq + 1 : this._window.nextSeq;
+         var expired:String = this._timer.update(this._isTimed,human,opponent,mulliganOpen,this._localDecision != null,held,this._localDecisions,this._gameNumber,progress,getTimer(),GwintGameMenu.mSingleton,this.log);
          if(expired != DuelClock.NONE)
          {
             this.timeUp(expired,human,flow);
@@ -985,9 +991,10 @@ package red.game.witcher3.menus.gwint
       }
 
       /**
-       * R53: the local stretch ran out. An open card zoom closes; an open decision takes its first option once the board
-       * has settled (the state both boards hash at a decision point); else the local turn passes before its move was
-       * sent (a picked card goes back), and the mulligan counts as done with the redraws so far.
+       * R53: the local stretch ran out. An open card zoom closes (R56: for a hold that is all, the held message then
+       * applies and the stretch it hands over is already expired); an open decision takes its first option once the
+       * board has settled (the state both boards hash at a decision point); else the local turn passes before its move
+       * was sent (a picked card goes back), and the mulligan counts as done with the redraws so far.
        * @param kind The expired stretch.
        * @param human The local player's controller.
        * @param flow The game flow.

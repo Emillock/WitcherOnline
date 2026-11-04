@@ -75,7 +75,7 @@ def test_one_budget_across_a_decision_in_a_turn() -> None:
     """R53: a decision inside the local turn is part of the turn (TURN wins over DECISION), and an expired stretch
     stays expired until it ends, so every further decision of that turn takes its first option at once."""
     stretch = function_body(source("DuelClock.as"), "public static function stretchOf(")
-    assert stretch.index("localTurn") < stretch.index("mulliganOpen") < stretch.index("localDecision ? DECISION")
+    assert stretch.index("localTurn") < stretch.index("mulliganOpen") < stretch.index("return DECISION")
     tick = function_body(source("DuelClock.as"), "public function tick(")
     assert "kind != this._kind || id != this._id" in tick and "this._expired = false" in tick
     assert "this._expired = true" in tick
@@ -196,3 +196,44 @@ def test_self_test_covers_the_timer() -> None:
                    "stretchOf(false"):
         assert needle in timer, needle
     assert len(re.findall(r"this\.expect\(", timer)) >= 12
+
+
+def test_a_zoom_hold_runs_the_clock_in_timed_mode_only() -> None:
+    """R56: in Timed mode a card zoom that holds an opponent message that arrived is a stretch of its own (HELD), last
+    in the order, and Normal mode still has none (the zoom holds without a clock, spec 9.10)."""
+    stretch = function_body(source("DuelClock.as"), "public static function stretchOf(")
+    assert stretch.index("if(!isTimed)") < stretch.index("localDecision") < stretch.index("heldByZoom ? HELD : NONE")
+    glue = session("private function updateTimer(")
+    assert "human.duelZoomOpen && (queued || this._window.peek() != null)" in glue
+    assert "opponent.hasQueuedMove" in glue
+    assert "held && !queued ? this._window.nextSeq + 1 : this._window.nextSeq" in glue
+    assert "mulliganOpen,localDecision,heldByZoom)" in timer_update()
+    assert "this._clock.tick(kind,id,nowMs,progress)" in timer_update()
+
+
+def test_the_stretch_a_hold_hands_over_carries_its_start() -> None:
+    """R56: the next local stretch goes on from the start of the hold (also across moments without a stretch), unless
+    a further opponent message was taken first; the hold's own expiry only closes the zoom (timeUp), so the held
+    message applies and the stretch it hands over is expired at once."""
+    tick = function_body(source("DuelClock.as"), "public function tick(")
+    assert "kind != HELD && progress > this._heldUntil" in tick and "this._heldSinceMs = -1" in tick
+    assert "this._heldSinceMs = nowMs" in tick and "this._heldUntil = progress" in tick
+    assert "this._startMs = this._heldSinceMs" in tick
+    assert tick.index("this._startMs = nowMs") < tick.index("this._startMs = this._heldSinceMs")
+    up = session("private function timeUp(")
+    assert up.index("human.duelCloseZoom()") < up.index("this._localDecision != null")
+
+
+@needs_vanilla
+def test_the_zoom_hold_reads_the_zoom(board: Path) -> None:
+    """R56: the hold is read from HumanPlayerController's zoom (the one that holds opponent moves, spec 9.10)."""
+    human = (board / "HumanPlayerController.as").read_text(encoding="utf-8")
+    assert "this._currentZoomedHolder != null" in function_body(human, "public function get duelZoomOpen(")
+
+
+def test_self_test_covers_the_zoom_hold() -> None:
+    """R56 rows in the self-test: a zoom held past expiry in Timed mode, a zoom in Normal mode without a clock."""
+    assert "this.checkHold(turn)" in function_body(source("DuelSelfTest.as"), "private function checkTimer(")
+    timer = function_body(source("DuelSelfTest.as"), "private function checkHold(")
+    assert "DuelClock.HELD" in timer and "stretchOf(false,false,false,false,true)" in timer
+    assert "hold: " in timer and len(re.findall(r'"hold: ', timer)) >= 5

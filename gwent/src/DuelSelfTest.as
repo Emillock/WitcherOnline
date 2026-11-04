@@ -490,6 +490,7 @@ package red.game.witcher3.menus.gwint
          var shown:DuelClock = new DuelClock();
          shown.tick(DuelClock.TURN,1,1000);
          this.expect(shown.remainingMs(1000 + 15000) == turn - 15000 && shown.remainingMs(1000 + 2 * turn) == 0 && shown.elapsedMs(1000 + 15000) == 15000,"timer: the countdown shows the time left, never below 0");
+         this.checkHold(turn);
          var first:DuelDecision = new DuelDecision("NUR","A3",DuelStateHash.SCOPE_FULL,null,null,function():String
          {
             return "A9";
@@ -499,6 +500,43 @@ package red.game.witcher3.menus.gwint
          });
          this.expect(first.firstChoice() == "A5","timer: a decision's timeout answers its first option, not autoplay's");
          this.expect(new DuelDecision("NUR","A3",DuelStateHash.SCOPE_FULL,null,null,null).firstChoice() == null,"timer: a decision without a first option has no timeout answer");
+      }
+
+      /**
+       * R56: a card zoom that holds an opponent message: a stretch in Timed mode only (Normal mode keeps spec 9.10: the
+       * zoom holds without a clock), never on the local turn; the stretch the held message hands over carries on from
+       * the start of the hold, also across moments without a stretch; a hold past the turn time expires, and the turn
+       * it hands over is expired at once; a further opponent message taken first drops the carried start.
+       * @param turn DuelWait.TURN_MS.
+       */
+      private function checkHold(turn:int) : void
+      {
+         this.expect(DuelClock.stretchOf(false,false,false,false,true) == DuelClock.NONE,"hold: in Normal mode a zoom holds without a clock");
+         this.expect(DuelClock.stretchOf(true,false,false,false,true) == DuelClock.HELD,"hold: in Timed mode a zoom holding a message runs the clock");
+         this.expect(DuelClock.stretchOf(true,true,false,false,true) == DuelClock.TURN,"hold: a zoom on the local turn is part of the turn");
+         var normal:DuelClock = new DuelClock();
+         normal.tick(DuelClock.stretchOf(false,false,false,false,true),0,1000,8);
+         this.expect(normal.tick(DuelClock.stretchOf(false,false,false,false,true),0,1000 + 10 * turn,8) == DuelClock.RUNNING && !normal.expired,"hold: a Normal zoom never runs out");
+         var carry:DuelClock = new DuelClock();
+         this.expect(carry.tick(DuelClock.HELD,0,1000,8) == DuelClock.STARTED,"hold: the clock starts when the zoom holds the message");
+         carry.tick(DuelClock.NONE,0,1000 + 20000,8);
+         this.expect(carry.tick(DuelClock.TURN,5,1000 + 25000,8) == DuelClock.STARTED && carry.remainingMs(1000 + 25000) == turn - 25000,"hold: the turn it hands over goes on from the start of the hold");
+         this.expect(carry.tick(DuelClock.TURN,5,1000 + turn,8) == DuelClock.EXPIRED,"hold: the hold and the turn share one budget");
+         this.expect(carry.tick(DuelClock.TURN,6,2000 + turn,9) == DuelClock.STARTED && carry.remainingMs(2000 + turn) == turn,"hold: the next turn has the whole time again");
+         var past:DuelClock = new DuelClock();
+         past.tick(DuelClock.HELD,0,1000,8);
+         this.expect(past.tick(DuelClock.HELD,0,1000 + turn,8) == DuelClock.EXPIRED && past.expired,"hold: a zoom held past the turn time expires (the board closes it)");
+         past.tick(DuelClock.NONE,0,2000 + turn,8);
+         past.tick(DuelClock.TURN,5,3000 + turn,8);
+         this.expect(past.tick(DuelClock.TURN,5,3020 + turn,8) == DuelClock.EXPIRED,"hold: the turn the expired hold hands over is expired at once");
+         var dropped:DuelClock = new DuelClock();
+         dropped.tick(DuelClock.HELD,0,1000,8);
+         dropped.tick(DuelClock.NONE,0,2000,8);
+         dropped.tick(DuelClock.NONE,0,3000,9);
+         this.expect(dropped.tick(DuelClock.TURN,5,4000,9) == DuelClock.STARTED && dropped.remainingMs(4000) == turn,"hold: a further opponent message drops the carried start");
+         var mulligan:DuelClock = new DuelClock();
+         mulligan.tick(DuelClock.HELD,0,1000,3);
+         this.expect(mulligan.tick(DuelClock.MULLIGAN,0,1500,3) == DuelClock.STARTED && mulligan.elapsedMs(1500) == 500,"hold: a mulligan or decision it hands over carries the start too");
       }
 
       /** The verdict of a wait of this kind that just passed the Normal limit, the opponent still there. */

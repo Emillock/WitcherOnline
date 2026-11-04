@@ -1,7 +1,7 @@
 package red.game.witcher3.menus.gwint
 {
    /**
-    * The turn timer of Timed mode (spec 15, R53, R54): board-independent, so DuelSelfTest can run it on synthetic
+    * The turn timer of Timed mode (spec 15, R53, R54, R56): board-independent, so DuelSelfTest can run it on synthetic
     * stretches and times; DuelSession gathers the board state, acts on an expiry and draws DuelTimerView.
     *
     * R53: one clock of DuelWait.TURN_MS (60 s) covers each stretch in which the board waits on local input and has not
@@ -13,6 +13,13 @@ package red.game.witcher3.menus.gwint
     * until it ends, so the board retries its timeout every update until it can act (a picked card's state switch, a
     * decision dialog that waits for the board to settle) and answers every further decision of an expired turn at
     * once (a player loses unspent time inside chained decisions).
+    *
+    * R56 (amends spec 9.10 for Timed mode): while the local player's card zoom holds an opponent message that has
+    * arrived (HELD), the clock already runs. The next local stretch that starts before any further opponent message
+    * is taken (the one the held message handed over: the turn, a decision, the mulligan) goes on from the start of the
+    * hold instead of starting over, also across the moments in between without a stretch (the zoom closed, the message
+    * applying). A further opponent message taken first drops the carried start. When the hold itself runs out, the
+    * board closes the zoom, the held message applies, and the stretch it hands over is expired at once.
     *
     * R54: the opponent's turns run on a second DuelClock (TURN on the opponent's turn), display only: it never acts.
     */
@@ -31,6 +38,9 @@ package red.game.witcher3.menus.gwint
       /** stretchOf(): a local decision raised outside the local turn (the coin toss, a perk's medic). */
       public static const DECISION:String = "decision";
 
+      /** stretchOf(): R56, a card zoom holds an opponent message that arrived (Timed mode only). */
+      public static const HELD:String = "held";
+
       /** tick(): the stretch goes on (or there is none). */
       public static const RUNNING:String = "";
 
@@ -48,6 +58,12 @@ package red.game.witcher3.menus.gwint
 
       private var _expired:Boolean = false;
 
+      /** R56: when the current hold began (the start the next stretch carries on from), -1 without one. */
+      private var _heldSinceMs:int = -1;
+
+      /** R56: the progress at which the held message has been taken; a larger progress drops the carry. */
+      private var _heldUntil:int = 0;
+
       /**
        * No stretch yet.
        */
@@ -62,10 +78,11 @@ package red.game.witcher3.menus.gwint
        * @param localTurn The local turn is on (HumanPlayerController.duelTurnActive).
        * @param mulliganOpen The mulligan is open and this seat has not sent its M.
        * @param localDecision A local decision is open.
-       * @return NONE in Normal mode; else TURN, MULLIGAN, DECISION or NONE, in that order (a decision on the local
-       * turn is part of the turn).
+       * @param heldByZoom R56: the local player's card zoom is open and an opponent message waits behind it.
+       * @return NONE in Normal mode; else TURN, MULLIGAN, DECISION, HELD or NONE, in that order (a decision on the local
+       * turn is part of the turn; a zoom on the local turn is part of the turn too).
        */
-      public static function stretchOf(isTimed:Boolean, localTurn:Boolean, mulliganOpen:Boolean, localDecision:Boolean) : String
+      public static function stretchOf(isTimed:Boolean, localTurn:Boolean, mulliganOpen:Boolean, localDecision:Boolean, heldByZoom:Boolean = false) : String
       {
          if(!isTimed)
          {
@@ -79,26 +96,52 @@ package red.game.witcher3.menus.gwint
          {
             return MULLIGAN;
          }
-         return localDecision ? DECISION : NONE;
+         if(localDecision)
+         {
+            return DECISION;
+         }
+         return heldByZoom ? HELD : NONE;
       }
 
       /**
-       * One update: the stretch goes on, starts over or runs out.
+       * One update: the stretch goes on, starts over (or, R56, carries on from a hold) or runs out.
        * @param kind The stretch now (stretchOf).
        * @param id Which one of its kind: the turn number for TURN, the count of local decisions for DECISION, the
-       * game number for MULLIGAN.
+       * game number for MULLIGAN, 0 for HELD.
        * @param nowMs getTimer().
-       * @return STARTED when the kind or id changed to a stretch, EXPIRED on the update it lasted DuelWait.TURN_MS,
-       * else RUNNING.
+       * @param progress The opponent's messages taken so far (the window's next seq); for HELD the progress once the
+       * held message is taken.
+       * @return STARTED when the kind or id changed to a stretch, EXPIRED on the update it lasted DuelWait.TURN_MS
+       * (counted from the hold it carries on from), else RUNNING.
        */
-      public function tick(kind:String, id:int, nowMs:int) : String
+      public function tick(kind:String, id:int, nowMs:int, progress:int = 0) : String
       {
+         if(this._heldSinceMs >= 0 && kind != HELD && progress > this._heldUntil)
+         {
+            this._heldSinceMs = -1;
+         }
+         if(kind == HELD)
+         {
+            if(this._heldSinceMs < 0)
+            {
+               this._heldSinceMs = nowMs;
+            }
+            this._heldUntil = progress;
+         }
          if(kind != this._kind || id != this._id)
          {
             this._kind = kind;
             this._id = id;
             this._startMs = nowMs;
             this._expired = false;
+            if(kind != NONE && this._heldSinceMs >= 0)
+            {
+               this._startMs = this._heldSinceMs;
+               if(kind != HELD)
+               {
+                  this._heldSinceMs = -1;
+               }
+            }
             return kind != NONE ? STARTED : RUNNING;
          }
          if(kind == NONE || this._expired || nowMs - this._startMs < DuelWait.TURN_MS)
@@ -124,7 +167,7 @@ package red.game.witcher3.menus.gwint
       /**
        * How long the stretch has lasted.
        * @param nowMs getTimer().
-       * @return Milliseconds since it started, 0 without a stretch.
+       * @return Milliseconds since it started (or since the hold it carries on from), 0 without a stretch.
        */
       public function elapsedMs(nowMs:int) : int
       {
