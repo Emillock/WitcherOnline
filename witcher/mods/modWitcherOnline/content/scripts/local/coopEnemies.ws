@@ -591,6 +591,9 @@ class r_CoopEnemies
     public var peopleListed : int;       // ...people in the last one
     public var peopleMissing : int;      // ...of them this world does not have
     public var peopleMissingNames : string;
+    private var heardPeople : array<string>;  // the leader's last list, compared in this game's own tick
+    private var heardSpots : array<Vector>;
+    private var peopleDue : bool;
     public var peopleShared : int;        // leader: people in the last list it sent
     private var peopleTick : int;
     private var lastPeopleSend : float;
@@ -824,6 +827,7 @@ class r_CoopEnemies
             }
             ApplyDueHurts(now);
             SendHits(now);
+            CheckMissingPeople();
         }
         else if(puppets.Size() > 0 || suppressed.Size() > 0)
         {
@@ -3197,32 +3201,65 @@ class r_CoopEnemies
         WO_Send(text);
     }
 
-    // someone a player would walk up to: not a monster passing by, not another player's character
+    // Someone a player would walk up to: a character this world placed for its own reasons, not one of the
+    // crowd walking past, not a monster (those are shared as copies), not another player. Remastered answers
+    // GetReadableName with the entity template's path, which is what tells them apart.
     private function IsSomeoneToTalkTo(actor : CActor) : bool
     {
         var npc : CNewNPC;
+        var path : string;
 
         npc = (CNewNPC)actor;
-        if(!npc || npc.HasTag('MPEntity') || npc.IsHorse() || IsPuppet(npc))
+        if(!npc || npc.HasTag('MPEntity') || npc.IsHorse() || IsPuppet(npc) || npc.IsMonster())
         {
             return false;
         }
-        if((W3MerchantNPC)npc)
+        path = npc.GetReadableName();
+        if(path == "")
         {
-            return true;
+            return false;
         }
-        return npc.HasInteractionScene();
+        if(StrFindFirst(path, "community_npcs") >= 0 || StrFindFirst(path, "crowd_npc") >= 0)
+        {
+            return false;
+        }
+        return StrFindFirst(path, "dlc_mpmod") < 0;
     }
 
-    // The member's side: who of them this world does not have. Names, not templates, because that is what a
-    // player would say to their friend ("the armourer isn't here").
+    // "...\main_npc\hattori.w2ent" -> "hattori": what to call them on screen
+    private function PersonLabel(path : string) : string
+    {
+        var work, left, right, ch, tail : string;
+        var i : int;
+
+        work = path;
+        if(StrSplitLast(work, ".", left, right))
+        {
+            work = left;
+        }
+        for(i = StrLen(work) - 1; i >= 0; i -= 1)
+        {
+            ch = StrMid(work, i, 1);
+            if(StrFindFirst("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", ch) < 0)
+            {
+                break;
+            }
+            tail = ch + tail;
+        }
+        if(tail == "")
+        {
+            return path;
+        }
+        return tail;
+    }
+
+    // The member's side: the list is only written down here. Asking the world who stands nearby from inside the
+    // message pump faults the game, so the comparison waits for this game's own tick (CheckMissingPeople).
     private function OnNearPeople(sender : string, count : int)
     {
-        var here : array<CActor>;
-        var who, missing : string;
-        var pos : Vector;
-        var n, i, j, idx, gone : int;
-        var found : bool;
+        var spot : Vector;
+        var who : string;
+        var n, i, idx : int;
 
         if(GetRole() != 2 || sender != leaderName || count < 4)
         {
@@ -3230,14 +3267,45 @@ class r_CoopEnemies
         }
         peopleHeard += 1;
         n = StringToInt(WO_Str(3), 0);
+        heardPeople.Clear();
+        heardSpots.Clear();
         idx = 4;
-        here = thePlayer.GetNPCsAndPlayersInRange(60, 64, '', FLAG_OnlyAliveActors + FLAG_ExcludePlayer);
-        for(i = 0; i < n && idx + 3 < count; i += 1)
+        for(i = 0; i < n; i += 1)
         {
+            if(idx + 3 >= count)
+            {
+                break;
+            }
             who = WO_Str(idx);
-            pos = Vector(StringToFloat(WO_Str(idx + 1), 0), StringToFloat(WO_Str(idx + 2), 0), StringToFloat(WO_Str(idx + 3), 0));
+            spot.X = StringToFloat(WO_Str(idx + 1), 0);
+            spot.Y = StringToFloat(WO_Str(idx + 2), 0);
+            spot.Z = StringToFloat(WO_Str(idx + 3), 0);
+            heardPeople.PushBack(who);
+            heardSpots.PushBack(spot);
             idx += 4;
-            if(VecDistance(pos, thePlayer.GetWorldPosition()) > 40)
+        }
+        peopleListed = n;
+        peopleDue = true;
+    }
+
+    // Who of the people the leader listed this world does not have. The label is the last part of the template
+    // path, because that is what a player would say to their friend ("the armourer isn't here").
+    private function CheckMissingPeople()
+    {
+        var here : array<CActor>;
+        var missing : string;
+        var i, j, gone : int;
+        var found : bool;
+
+        if(!peopleDue)
+        {
+            return;
+        }
+        peopleDue = false;
+        here = thePlayer.GetNPCsAndPlayersInRange(50, 48, '', FLAG_OnlyAliveActors + FLAG_ExcludePlayer);
+        for(i = 0; i < heardPeople.Size(); i += 1)
+        {
+            if(VecDistance(heardSpots[i], thePlayer.GetWorldPosition()) > 40)
             {
                 continue;  // too far from this player to judge
             }
@@ -3246,7 +3314,7 @@ class r_CoopEnemies
             {
                 if(here[j])
                 {
-                    if(CoopEncode(here[j].GetReadableName()) == who)
+                    if(CoopEncode(here[j].GetReadableName()) == heardPeople[i])
                     {
                         found = true;
                         break;
@@ -3262,14 +3330,13 @@ class r_CoopEnemies
                     {
                         missing += ", ";
                     }
-                    missing += CoopDecode(who);
+                    missing += PersonLabel(CoopDecode(heardPeople[i]));
                 }
             }
         }
-        peopleListed = n;
         peopleMissing = gone;
         peopleMissingNames = missing;
-        LogSync("NP", gone, n, CoopEncode(missing));
+        LogSync("NP", gone, heardPeople.Size(), CoopEncode(missing));
         TellAboutMissingPeople(gone, missing);
     }
 
@@ -3289,7 +3356,12 @@ class r_CoopEnemies
         }
         peopleToldAt = now;
         peopleToldNames = missing;
-        theGame.GetGuiManager().ShowNotification(gone + " people " + leaderName + " can talk to are not here: " + missing);
+        if(gone == 1)
+        {
+            theGame.GetGuiManager().ShowNotification(leaderName + " can talk to someone who is not here: " + missing);
+            return;
+        }
+        theGame.GetGuiManager().ShowNotification(leaderName + " can talk to " + gone + " people who are not here: " + missing);
     }
 
     // ---------------------------------------------------------------- member
