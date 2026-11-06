@@ -594,6 +594,10 @@ class r_CoopEnemies
     private var heardPeople : array<string>;  // the leader's last list, compared in this game's own tick
     private var heardSpots : array<Vector>;
     private var peopleDue : bool;
+    private var peopleHeardAt : float;        // when the last list came; the figures go when they stop
+    public var peopleMirrored : int;          // people of the leader's stood here because this world lacks them
+    private var mirrorNames : array<string>;  // ...which ones, and the figures standing for them
+    private var mirrors : array<CEntity>;
     public var peopleShared : int;        // leader: people in the last list it sent
     private var peopleTick : int;
     private var lastPeopleSend : float;
@@ -828,8 +832,12 @@ class r_CoopEnemies
             ApplyDueHurts(now);
             SendHits(now);
             CheckMissingPeople();
+            if(mirrors.Size() > 0 && now - peopleHeardAt > 8.0)
+            {
+                SendEveryoneAway();   // the leader went quiet: nobody is left standing for it
+            }
         }
-        else if(puppets.Size() > 0 || suppressed.Size() > 0)
+        else if(puppets.Size() > 0 || suppressed.Size() > 0 || mirrors.Size() > 0)
         {
             ReleaseAll();
             leaderName = "";
@@ -1470,6 +1478,7 @@ class r_CoopEnemies
         peopleListed = 0;
         peopleMissing = 0;
         peopleMissingNames = "";
+        peopleMirrored = 0;
         peopleShared = 0;
         lastPeopleSend = 0;
         wasAlive = true;
@@ -3214,6 +3223,10 @@ class r_CoopEnemies
         {
             return false;
         }
+        if(npc.HasTag('W3CoopMirror'))
+        {
+            return false;
+        }
         path = npc.GetReadableName();
         if(path == "")
         {
@@ -3266,6 +3279,7 @@ class r_CoopEnemies
             return;
         }
         peopleHeard += 1;
+        peopleHeardAt = theGame.GetEngineTimeAsSeconds();
         n = StringToInt(WO_Str(3), 0);
         heardPeople.Clear();
         heardSpots.Clear();
@@ -3293,6 +3307,7 @@ class r_CoopEnemies
     private function CheckMissingPeople()
     {
         var here : array<CActor>;
+        var missingNow : array<string>;
         var missing : string;
         var i, j, gone : int;
         var found : bool;
@@ -3314,12 +3329,20 @@ class r_CoopEnemies
             {
                 if(here[j])
                 {
-                    if(CoopEncode(here[j].GetReadableName()) == heardPeople[i])
+                    if(!here[j].HasTag('W3CoopMirror'))
                     {
-                        found = true;
-                        break;
+                        if(CoopEncode(here[j].GetReadableName()) == heardPeople[i])
+                        {
+                            found = true;
+                            break;
+                        }
                     }
                 }
+            }
+            if(!found)
+            {
+                StandSomeoneHere(heardPeople[i], heardSpots[i]);
+                missingNow.PushBack(heardPeople[i]);
             }
             if(!found)
             {
@@ -3336,8 +3359,79 @@ class r_CoopEnemies
         }
         peopleMissing = gone;
         peopleMissingNames = missing;
+        SendOthersAway(missingNow);
         LogSync("NP", gone, heardPeople.Size(), CoopEncode(missing));
         TellAboutMissingPeople(gone, missing);
+    }
+
+    // One of the leader's people, standing here as a sight: out of gameplay (nothing targets it, it takes no
+    // hits, it cannot be talked to) and gone again as soon as the leader stops listing it.
+    private function StandSomeoneHere(who : string, spot : Vector)
+    {
+        var template : CEntityTemplate;
+        var npc : CNewNPC;
+        var ent : CEntity;
+        var rot : EulerAngles;
+        var path : string;
+
+        if(mirrorNames.Contains(who) || mirrors.Size() >= 6)
+        {
+            return;
+        }
+        path = CoopDecode(who);
+        template = (CEntityTemplate)LoadResource(path, true);
+        if(!template)
+        {
+            return;   // this world does not have that character's template either
+        }
+        ent = theGame.CreateEntity(template, spot, rot, true, false, false, PM_DontPersist);
+        npc = (CNewNPC)ent;
+        if(!npc)
+        {
+            if(ent)
+            {
+                ent.Destroy();
+            }
+            return;
+        }
+        npc.AddTag('W3CoopMirror');
+        npc.SetGameplayVisibility(false);
+        npc.EnableCollisions(false);          // as Witcher Online's own player characters: never in the way
+        npc.EnableCharacterCollisions(false);
+        npc.SetCanPlayHitAnim(false);
+        npc.SetImmortalityMode(AIM_Invulnerable, AIC_Default, true);
+        npc.SetAttitude(thePlayer, AIA_Friendly);
+        mirrorNames.PushBack(who);
+        mirrors.PushBack(ent);
+        peopleMirrored += 1;
+        LogSync("NM", mirrors.Size(), 0, who);
+    }
+
+    // ...and the ones the leader no longer lists as missing go
+    private function SendOthersAway(stillMissing : array<string>)
+    {
+        var i : int;
+
+        for(i = mirrors.Size() - 1; i >= 0; i -= 1)
+        {
+            if(stillMissing.Contains(mirrorNames[i]))
+            {
+                continue;
+            }
+            if(mirrors[i])
+            {
+                mirrors[i].Destroy();
+            }
+            mirrors.Erase(i);
+            mirrorNames.Erase(i);
+        }
+    }
+
+    public function SendEveryoneAway()
+    {
+        var empty : array<string>;
+
+        SendOthersAway(empty);
     }
 
     // said at most once a minute, and only when it changed: the worlds part where the two players' quests do
@@ -6377,6 +6471,9 @@ class r_CoopEnemies
             Unsuppress(suppressed[i].npc);
         }
         suppressed.Clear();
+        SendEveryoneAway();
+        heardPeople.Clear();
+        heardSpots.Clear();
     }
 
     // local hostiles near this member that the leader's world doesn't have: hidden and idle while in the party
