@@ -600,6 +600,9 @@ class r_CoopEnemies
     private var heardSpots : array<Vector>;
     private var peopleDue : bool;
     private var peopleHeardAt : float;        // when the last list came; the figures go when they stop
+    public var questsBehind : int;            // quests the leader is further back on than this game
+    public var lastQuestBehind : string;
+    private var behindTold : array<name>;     // ...the ones already said out loud
     public var peopleMirrored : int;          // people of the leader's stood here because this world lacks them
     private var mirrorNames : array<string>;  // ...which ones, and the figures standing for them
     private var mirrors : array<CEntity>;
@@ -1482,6 +1485,9 @@ class r_CoopEnemies
         waitsTaken = 0;
         sceneHurtsDropped = 0;
         sceneTargetsTurned = 0;
+        questsBehind = 0;
+        lastQuestBehind = "";
+        behindTold.Clear();
         peopleHeard = 0;
         peopleListed = 0;
         peopleMissing = 0;
@@ -7075,6 +7081,10 @@ class r_CoopEnemies
                 lastJournalApplied = tag;
                 lastJournalAppliedStatus = status;
             }
+            else if(current != status)
+            {
+                TellQuestIsBehind(tag, current, status);
+            }
         }
 
         // after the statuses: a quest the leader just activated can be tracked here too
@@ -7325,6 +7335,46 @@ class r_CoopEnemies
     }
 
     // inactive -> active -> succeeded/failed; never back, never from one outcome to the other
+    // The leader is further back on a quest than this game is. Their world is the one being played, so what this
+    // player already finished may stand unfinished around them; said once per quest.
+    private function TellQuestIsBehind(tag : name, mine : int, theirs : int)
+    {
+        if(!JournalAdvances(theirs, mine))
+        {
+            return;   // not behind, just different (failed where this one succeeded, say)
+        }
+        if(behindTold.Contains(tag))
+        {
+            return;
+        }
+        behindTold.PushBack(tag);
+        questsBehind += 1;
+        lastQuestBehind = NameToString(tag);
+        LogSync("QB", mine, theirs, lastQuestBehind);
+        theGame.GetGuiManager().ShowNotification(leaderName + " has not got as far as you in " + QuestLabel(tag)
+            + ", and their world is the one you are both in");
+    }
+
+    // "q104_hunting_a_witch" reads better than nothing, and the journal's own title if it has one
+    private function QuestLabel(tag : name) : string
+    {
+        var found : CJournalBase;
+        var questFound : CJournalQuest;
+        var title : string;
+
+        found = FindJournalEntry(tag);
+        questFound = (CJournalQuest)found;
+        if(questFound)
+        {
+            title = GetLocStringById(questFound.GetTitleStringId());
+            if(title != "")
+            {
+                return title;
+            }
+        }
+        return NameToString(tag);
+    }
+
     private function JournalAdvances(current : int, wanted : int) : bool
     {
         if(current == (int)JS_Inactive)
