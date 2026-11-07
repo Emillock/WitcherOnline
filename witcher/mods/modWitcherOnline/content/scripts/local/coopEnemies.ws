@@ -585,6 +585,11 @@ class r_CoopEnemies
     public var hitSoundsPlayed : int;    // member: hit sounds the copies would not have made themselves
     public var fightStates : int;        // leader: times its game was put into combat for a member's fight
     public var scenesHeard : int;        // party members heard entering a cutscene
+    public var waitsOffered : int;       // ...and the offers to wait for them
+    public var waitsTaken : int;
+    private var waitingFor : string;     // whom this game is paused for (empty: nobody)
+    private var waitingUntil : float;    // and when it gives up on them whatever happens
+    private var waitAsked : string;      // whom it has already been asked about, for this scene of theirs
     public var sceneHurtsDropped : int;  // leader: hits on a member who was watching one
     public var sceneTargetsTurned : int; // leader: times such a member's character was left alone
     public var peopleHeard : int;        // member: lists of people the leader sent
@@ -757,6 +762,7 @@ class r_CoopEnemies
             sendsInWindow = 0;
             rateWindowAt = now;
         }
+        HoldForScene(now);
         RetryFactsBaseline(now);
         SendParkedHorse(now);
         CheckSilentPlayers(now);
@@ -1472,6 +1478,8 @@ class r_CoopEnemies
         hitSoundsPlayed = 0;
         fightStates = 0;
         scenesHeard = 0;
+        waitsOffered = 0;
+        waitsTaken = 0;
         sceneHurtsDropped = 0;
         sceneTargetsTurned = 0;
         peopleHeard = 0;
@@ -3537,6 +3545,10 @@ class r_CoopEnemies
         {
             scene = "1";
         }
+        if(InCutsceneHere())
+        {
+            scene = "2";   // one nobody can act in, as against an ordinary conversation
+        }
         if(muteHz)
         {
             return;
@@ -3555,6 +3567,21 @@ class r_CoopEnemies
     }
 
     private var sentScene : string;
+
+    // a scene this player cannot act in at all: worth asking the others to wait for, which a conversation with a
+    // vendor is not
+    private function InCutsceneHere() : bool
+    {
+        if(thePlayer.IsInNonGameplayCutscene())
+        {
+            return true;
+        }
+        if(theGame.IsCurrentlyPlayingNonGameplayScene())
+        {
+            return true;
+        }
+        return currentScene != "";
+    }
 
     // this game is in a cutscene or a dialogue, so gameplay here is suspended (currentScene also carries the
     // scene the tests name)
@@ -3704,18 +3731,19 @@ class r_CoopEnemies
             }
         }
         CheckVersion(sender, WO_Str(8));
-        SetScenePresence(p, WO_Str(10) == "1");
+        SetScenePresence(p, WO_Str(10) != "" && WO_Str(10) != "0", WO_Str(10) == "2");
     }
 
     // A party member watching a cutscene cannot fight back, dodge or answer: the others are told, and the
     // leader's monsters leave their character alone until it is over.
-    private function SetScenePresence(p : r_RemotePlayer, nowInScene : bool)
+    private function SetScenePresence(p : r_RemotePlayer, nowInScene : bool, isCutscene : bool)
     {
         if(nowInScene == p.inScene)
         {
             return;
         }
         p.inScene = nowInScene;
+        p.inCutscene = isCutscene;
         p.sceneAt = theGame.GetEngineTimeAsSeconds();
         if(!IsMyPartyMember(p.username))
         {
@@ -3725,7 +3753,11 @@ class r_CoopEnemies
         if(nowInScene)
         {
             scenesHeard += 1;
-            theGame.GetGuiManager().ShowNotification(p.username + " is watching a cutscene");
+            if(isCutscene)
+            {
+                theGame.GetGuiManager().ShowNotification(p.username + " is watching a cutscene");
+                OfferToWait(p);
+            }
             if(wasHost)
             {
                 sceneTargetsTurned += 1;
@@ -3733,6 +3765,10 @@ class r_CoopEnemies
                 ShowGhostTo(p.ghost, false);
             }
             return;
+        }
+        if(waitAsked == p.username)
+        {
+            waitAsked = "";
         }
         if(wasHost)
         {
@@ -3783,6 +3819,88 @@ class r_CoopEnemies
                 }
             }
         }
+    }
+
+    // Asked once per cutscene of theirs, and only when this player is near enough for it to matter and free to
+    // answer (not fighting, not in a scene of their own, no other window open).
+    private function OfferToWait(p : r_RemotePlayer)
+    {
+        var guiManager : CR4GuiManager;
+
+        if(waitingFor != "" || waitAsked == p.username || !p.inCutscene)
+        {
+            return;
+        }
+        if(VecDistance(p.pos, thePlayer.GetWorldPosition()) > 60)
+        {
+            return;
+        }
+        guiManager = theGame.GetGuiManager();
+        if(!thePlayer.IsAlive() || thePlayer.IsInCombat() || InSceneHere() || guiManager.IsAnyMenu()
+            || guiManager.GetPopup('MessagePopup'))
+        {
+            return;
+        }
+        waitAsked = p.username;
+        waitsOffered += 1;
+        LogSync("CW", 0, 0, p.username);
+        guiManager.ShowUserDialogAdv(W3CoopWaitMessageId(), "W3Coop", p.username
+            + " is watching a cutscene. Wait for them?", false, UDB_YesNo);
+    }
+
+    // the answer to that question (CR4GuiManager.UserDialogCallback)
+    public function OnWaitAnswer(yes : bool)
+    {
+        if(!yes || waitAsked == "")
+        {
+            return;
+        }
+        waitingFor = waitAsked;
+        waitingUntil = theGame.GetEngineTimeAsSeconds() + 180;
+        waitsTaken += 1;
+        LogSync("CP", 1, 0, waitingFor);
+        thePlayer.BlockAllActions('W3CoopWait', true);
+        theGame.GetGuiManager().ShowNotification("Waiting for " + waitingFor + "'s cutscene");
+    }
+
+    // Held until their scene is over. Let go when it is, when something attacks this player (so nobody is held
+    // still through a fight), when their game goes quiet, when they leave the party, after three minutes, or on
+    // death. The world keeps running while this player waits, which is what lets this run at all.
+    private function HoldForScene(now : float)
+    {
+        var p : r_RemotePlayer;
+        var done : bool;
+
+        if(waitingFor == "")
+        {
+            return;
+        }
+        p = mpghosts_getPlayer(waitingFor);
+        if(!p || !IsMyPartyMember(waitingFor) || !p.inScene || now > waitingUntil || !thePlayer.IsAlive())
+        {
+            done = true;
+        }
+        else if(now - p.parkedAt > 10)
+        {
+            done = true;   // their game has gone quiet; waiting longer would be waiting for nothing
+        }
+        else if(thePlayer.IsInCombat() || thePlayer.GetHostileEnemiesCount() > 0)
+        {
+            done = true;   // something came for this player: fighting beats waiting
+        }
+        if(!done)
+        {
+            return;
+        }
+        LogSync("CP", 0, 0, waitingFor);
+        waitingFor = "";
+        waitingUntil = 0;
+        thePlayer.BlockAllActions('W3CoopWait', false);
+    }
+
+    public function WaitingForScene() : string
+    {
+        return waitingFor;
     }
 
     public function PlayerInScene(user : string) : bool
@@ -8357,6 +8475,11 @@ function W3CoopTradeMessageId() : int
     return 731103;
 }
 
+function W3CoopWaitMessageId() : int
+{
+    return 731104;
+}
+
 @wrapMethod(CR4GuiManager)
 function UserDialogCallback(messageId : int, actionId : EUserMessageAction) : void
 {
@@ -8371,6 +8494,10 @@ function UserDialogCallback(messageId : int, actionId : EUserMessageAction) : vo
     if(messageId == W3CoopTradeMessageId())
     {
         theGame.r_getMultiplayerClient().getCoopEnemies().OnTradeAnswer(actionId == UMA_Yes);
+    }
+    if(messageId == W3CoopWaitMessageId())
+    {
+        theGame.r_getMultiplayerClient().getCoopEnemies().OnWaitAnswer(actionId == UMA_Yes);
     }
     wrappedMethod(messageId, actionId);
 }

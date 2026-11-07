@@ -70,6 +70,7 @@ statemachine class r_RemotePlayer
     public var parkedYaw : float;
     public var parkedAt : float;
     public var inScene : bool;         // its game is in a cutscene or dialogue (coopEnemies SetScenePresence)
+    public var inCutscene : bool;      // ...and it is the kind nobody can act in, not a conversation
     public var putBacks : int;         // times its character here was put back where its game says it stands
     private var offPlaceSince : float; // since when it has been away from there (0: it is where it belongs)
     public var sceneAt : float;        // when that last changed
