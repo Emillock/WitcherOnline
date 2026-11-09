@@ -1,0 +1,348 @@
+diff --git a/red/game/witcher3/menus/gwint/HumanPlayerController.as b/red/game/witcher3/menus/gwint/HumanPlayerController.as
+index bea2665..2516b73 100644
+--- a/red/game/witcher3/menus/gwint/HumanPlayerController.as
++++ b/red/game/witcher3/menus/gwint/HumanPlayerController.as
+@@ -3,6 +3,7 @@ package red.game.witcher3.menus.gwint
+    import flash.events.Event;
+    import flash.events.GestureEvent;
+    import flash.events.MouseEvent;
++   import flash.utils.getTimer;
+    import red.core.constants.KeyCode;
+    import red.core.events.GestureEventEx;
+    import red.game.witcher3.constants.GwintInputFeedback;
+@@ -32,6 +33,16 @@ package red.game.witcher3.menus.gwint
+       
+       protected var _cardConfirmation:Boolean;
+       
++      private var _duelAutoAI:AIPlayerController;
++      
++      private var _duelAutoTurnMs:int = -1;
++
++      /** Duel: a move was sent and its switch to ApplyingCard is pending (up to one 20 ms tick). */
++      private var _duelMovePending:Boolean = false;
++
++      /** Duel: local turns started so far (Timed mode's clock starts a new turn stretch on each, R53). */
++      private var _duelTurnNumber:int = 0;
++      
+       public function HumanPlayerController()
+       {
+          super();
+@@ -94,29 +105,238 @@ package red.game.witcher3.menus.gwint
+       {
+          if(CardManager.getInstance().getCardInstanceList(CardManager.CARD_LIST_LOC_HAND,playerID).length == 0 && !CardManager.getInstance().getCardLeader(playerID).canBeUsed)
+          {
++            if(DuelSession.active != null)
++            {
++               DuelSession.active.log("DUEL AUTOPASS nothing to play");
++               DuelSession.active.send("S",[],DuelStateHash.SCOPE_FULL);
++               _turnOver = true;
++            }
+             currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
+          }
+          else
+          {
+             super.startTurn();
++            this._duelAutoTurnMs = -1;
++            this._duelMovePending = false;
++            this._duelTurnNumber++;
+             _stateMachine.ChangeState("ChoosingCard");
+          }
+       }
++
++      /**
++       * Duel, Timed mode (R53): local turns started so far; a new number starts a new turn stretch of the clock.
++       */
++      public function get duelTurnNumber() : int
++      {
++         return this._duelTurnNumber;
++      }
++
++      /**
++       * Duel, Timed mode (R53): the local turn is on, from its card pick through the move it sends and the decisions
++       * the move raises (ApplyingCard), until it is over (Idle).
++       */
++      public function get duelTurnActive() : Boolean
++      {
++         return this.duelChoosing() || _stateMachine.currentState == "ApplyingCard";
++      }
++
++      /**
++       * Duel: the local turn is in one of its choosing states (a card may be picked, nothing sent yet).
++       */
++      private function duelChoosing() : Boolean
++      {
++         var state:String = _stateMachine.currentState;
++         return state == "ChoosingCard" || state == "ChoosingHandler" || state == "ChoosingTargetCard" || state == "WaitConfirmation";
++      }
++
++      /**
++       * Duel, Timed mode (R56): the local player's card zoom is open (it holds the opponent's moves, spec 9.10).
++       */
++      public function get duelZoomOpen() : Boolean
++      {
++         return this._currentZoomedHolder != null;
++      }
++
++      /**
++       * Duel, Timed mode (R53, R56): the local time ran out: an open card zoom closes.
++       */
++      public function duelCloseZoom() : void
++      {
++         if(this._currentZoomedHolder != null)
++         {
++            this.closeZoomCB();
++         }
++      }
++
++      /**
++       * Duel, Timed mode (R53, R59): the local turn ran out before its move was sent: a picked card goes back the way
++       * a player's cancel takes it (cancelCardTransaction, outside ChoosingCard) and the turn passes (S), as the pass
++       * button does. Nothing happens once the move was sent (ApplyingCard; DuelSession answers the decisions it
++       * raises) or while a sent move waits for its state switch.
++       * @return True if the turn passed.
++       */
++      public function duelTimeUp() : Boolean
++      {
++         if(this.duelMoveInFlight() || !this.duelChoosing())
++         {
++            return false;
++         }
++         if(_stateMachine.currentState != "ChoosingCard" && _transactionCard != null)
++         {
++            this.cancelCardTransaction(true);
++         }
++         this.passTurn();
++         return true;
++      }
+       
+-      override public function skipTurn() : void
++      /**
++       * Every local move goes through here (the three commit points of spec 5 and duel autoplay): in a duel the move is
++       * sent first (DuelSession.sendMove, spec 9.5), then the vanilla ApplyingCard state applies the transaction.
++       * The row and decoy commit points run from input handlers, and the switch to ApplyingCard happens on the next
++       * 20 ms tick of the state machine. In a duel, once a move is sent nothing else is committed, cancelled or passed
++       * until ApplyingCard has taken it (_duelMovePending), so one move is sent once and always applied.
++       * @param transaction The decided move.
++       */
++      protected function commitTransaction(transaction:CardTransaction) : void
+       {
+-         if(_stateMachine.currentState == "ChoosingCard" && this._currentZoomedHolder == null)
++         if(DuelSession.active != null)
+          {
+-            currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
+-            _turnOver = true;
+-            if(_transactionCard != null)
++            if(this.duelMoveInFlight() || !DuelSession.active.sendMove(transaction))
+             {
+-               _boardRenderer.activateAllHolders(true);
+-               _boardRenderer.selectCard(_transactionCard);
+-               declineCardTransaction();
++               return;
+             }
+-            _stateMachine.ChangeState("Idle");
++            this._duelMovePending = true;
+          }
++         _decidedCardTransaction = transaction;
++         _stateMachine.ChangeState("ApplyingCard");
++      }
++
++      /**
++       * Duel: whether a sent move or pass still waits for its state switch (then nothing may be committed, cancelled
++       * or passed). Always false outside duels.
++       */
++      private function duelMoveInFlight() : Boolean
++      {
++         return DuelSession.active != null && (this._duelMovePending || _stateMachine.awaitingNextState);
++      }
++      
++      /**
++       * Duel autoplay (gwint.game.debug.autoplay, test bots): on the local turn, after a short pause, plays the move
++       * the vanilla AI evaluation picks for PLAYER_1 through commitTransaction, or passes. A move that opens a choice
++       * (medic, leader) is played like any other; DuelSession autoplay answers the decision. Nothing is played while
++       * the board has not settled (cardEffectApplying: card moves, FX, messages, a dialog, an open decision, deferred
++       * effects), so the hash of the move includes everything the previous one started.
++       * @return True while autoplay handles the turn (ChoosingCard then does nothing else this update).
++       */
++      private function duelAutoplayTick() : Boolean
++      {
++         var move:CardTransaction = null;
++         if(DuelSession.active == null || DuelSession.active.ended || this.cardEffectApplying() || !GwintGameMenu.mSingleton.duelDebugAutoplay || _transactionCard != null || this._currentZoomedHolder != null || this.mcChoiceDialog.isShown())
++         {
++            return false;
++         }
++         if(this._duelAutoTurnMs < 0)
++         {
++            this._duelAutoTurnMs = getTimer();
++            return true;
++         }
++         if(getTimer() - this._duelAutoTurnMs < DuelSession.AUTOPLAY_DELAY_MS)
++         {
++            return true;
++         }
++         this._duelAutoTurnMs = -1;
++         if(this._duelAutoAI == null)
++         {
++            this._duelAutoAI = new AIPlayerController();
++            this._duelAutoAI.gameFlowControllerRef = gameFlowControllerRef;
++            this._duelAutoAI.playerID = playerID;
++            this._duelAutoAI.opponentID = opponentID;
++         }
++         move = this._duelAutoAI.duelSuggestMove();
++         if(GwintGameMenu.mSingleton.duelDebugLeaderFirst && CardManager.getInstance().getCardLeader(playerID) != null && CardManager.getInstance().getCardLeader(playerID).canBeUsed)
++         {
++            // test switch gwint.game.debug.leaderFirst: the leader before the AI's move
++            move = new CardTransaction();
++            move.sourceCardInstanceRef = CardManager.getInstance().getCardLeader(playerID);
++            move.targetPlayerID = playerID;
++            DuelSession.active.log("DUEL AUTOPLAY leader first");
++         }
++         if(move == null || move.sourceCardInstanceRef == null || !this.duelPlayable(move))
++         {
++            DuelSession.active.log("DUEL AUTOPLAY pass");
++            this.skipTurn();
++            return true;
++         }
++         DuelSession.active.log("DUEL AUTOPLAY play " + this.duelCardName(move.sourceCardInstanceRef) + " slot=" + move.targetSlotID);
++         startCardTransaction(move.sourceCardInstanceRef.instanceId);
++         this.commitTransaction(this.duelCopyTransaction(move));
++         return true;
++      }
++
++      /**
++       * Whether autoplay can commit a move as it is: the usable leader, or a card of this player's hand with a slot,
++       * a target card or a global effect.
++       */
++      private function duelPlayable(transaction:CardTransaction) : Boolean
++      {
++         var source:CardInstance = transaction.sourceCardInstanceRef;
++         if(source is CardLeaderInstance)
++         {
++            return (source as CardLeaderInstance).canBeUsed && source.owningPlayer == playerID;
++         }
++         if(source.inList != CardManager.CARD_LIST_LOC_HAND || source.listsPlayer != playerID)
++         {
++            return false;
++         }
++         return transaction.targetSlotID != CardManager.CARD_LIST_LOC_INVALID || transaction.targetCardInstanceRef != null || source.templateRef.isType(CardTemplate.CardType_Global_Effect);
++      }
++
++      /** A copy of an AI transaction (the card's own evaluation object changes when the AI evaluates again). */
++      private function duelCopyTransaction(transaction:CardTransaction) : CardTransaction
++      {
++         var copy:CardTransaction = new CardTransaction();
++         copy.sourceCardInstanceRef = transaction.sourceCardInstanceRef;
++         copy.targetCardInstanceRef = transaction.targetCardInstanceRef;
++         copy.targetSlotID = transaction.targetSlotID;
++         copy.targetPlayerID = transaction.targetPlayerID;
++         copy.powerChangeResult = transaction.powerChangeResult;
++         copy.strategicValue = transaction.strategicValue;
++         return copy;
++      }
++
++      /** "leader" or the card's net id, for the autoplay log. */
++      private function duelCardName(card:CardInstance) : String
++      {
++         return card is CardLeaderInstance ? "leader" : DuelIds.format(DuelSession.active.ids.toNet(card.instanceId));
++      }
++      
++      override public function skipTurn() : void
++      {
++         if(_stateMachine.currentState == "ChoosingCard" && this._currentZoomedHolder == null && !this.duelMoveInFlight() && (DuelSession.active == null || !DuelSession.active.ended))
++         {
++            this.passTurn();
++         }
++      }
++
++      /**
++       * The pass (vanilla skipTurn's body): in a duel S goes out first; the seat is done for the round and a picked card
++       * goes back.
++       */
++      private function passTurn() : void
++      {
++         if(DuelSession.active != null)
++         {
++            DuelSession.active.send("S",[],DuelStateHash.SCOPE_FULL);
++         }
++         currentRoundStatus = BasePlayerController.ROUND_PLAYER_STATUS_DONE;
++         _turnOver = true;
++         if(_transactionCard != null)
++         {
++            _boardRenderer.activateAllHolders(true);
++            _boardRenderer.selectCard(_transactionCard);
++            declineCardTransaction();
++         }
++         _stateMachine.ChangeState("Idle");
+       }
+       
+       override public function set cardZoomEnabled(value:Boolean) : *
+@@ -208,6 +428,10 @@ package red.game.witcher3.menus.gwint
+          var isCardEffect:Boolean = false;
+          var isGlobalEffect:Boolean = false;
+          this.on_state_about_to_update();
++         if(this.duelAutoplayTick())
++         {
++            return;
++         }
+          if(_transactionCard)
+          {
+             cardInstance = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
+@@ -313,18 +537,19 @@ package red.game.witcher3.menus.gwint
+             _decidedCardTransaction = new CardTransaction();
+             _decidedCardTransaction.targetPlayerID = playerID;
+             _decidedCardTransaction.sourceCardInstanceRef = CardManager.getInstance().getCardInstance(_transactionCard.instanceId);
+-            _stateMachine.ChangeState("ApplyingCard");
++            this.commitTransaction(_decidedCardTransaction);
+          }
+       }
+       
+       override protected function cardEffectApplying() : Boolean
+       {
+-         return Boolean(super.cardEffectApplying()) || this.mcChoiceDialog.visible;
++         return Boolean(super.cardEffectApplying()) || this.mcChoiceDialog.visible || DuelSession.active != null && (DuelSession.active.decisionOpen || DuelSession.active.effectsPending);
+       }
+       
+       override protected function state_begin_ApplyingCard() : void
+       {
+          super.state_begin_ApplyingCard();
++         this._duelMovePending = false;
+          _boardRenderer.activateAllHolders(true);
+          if(Boolean(this._handHolder) && _boardRenderer.getSelectedCardHolder() != this._handHolder)
+          {
+@@ -335,7 +560,7 @@ package red.game.witcher3.menus.gwint
+       override protected function state_update_ApplyingCard() : void
+       {
+          this.on_state_about_to_update();
+-         if(!CardTweenManager.getInstance().isAnyCardMoving() && !gameFlowControllerRef.mcMessageQueue.ShowingMessage() && !CardFXManager.getInstance().isPlayingAnyCardFX() && !this.mcChoiceDialog.visible)
++         if(!CardTweenManager.getInstance().isAnyCardMoving() && !gameFlowControllerRef.mcMessageQueue.ShowingMessage() && !CardFXManager.getInstance().isPlayingAnyCardFX() && !this.mcChoiceDialog.visible && (DuelSession.active == null || !DuelSession.active.effectsPending && !DuelSession.active.decisionOpen))
+          {
+             _turnOver = true;
+             _stateMachine.ChangeState("Idle");
+@@ -450,7 +675,7 @@ package red.game.witcher3.menus.gwint
+                      _decidedCardTransaction.targetSlotID = CardManager.CARD_LIST_LOC_INVALID;
+                      _decidedCardTransaction.targetCardInstanceRef = targetCardInstance;
+                      _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
+-                     _stateMachine.ChangeState("ApplyingCard");
++                     this.commitTransaction(_decidedCardTransaction);
+                   }
+             }
+          }
+@@ -468,7 +693,7 @@ package red.game.witcher3.menus.gwint
+             _decidedCardTransaction.targetSlotID = event.cardHolder.cardHolderID;
+             _decidedCardTransaction.targetCardInstanceRef = null;
+             _decidedCardTransaction.sourceCardInstanceRef = transCardInstance;
+-            _stateMachine.ChangeState("ApplyingCard");
++            this.commitTransaction(_decidedCardTransaction);
+          }
+       }
+       
+@@ -522,6 +747,10 @@ package red.game.witcher3.menus.gwint
+       
+       private function cancelCardTransaction(restoreSelection:Boolean = false) : void
+       {
++         if(this.duelMoveInFlight())
++         {
++            return;
++         }
+          _boardRenderer.activateAllHolders(true);
+          if(restoreSelection)
+          {

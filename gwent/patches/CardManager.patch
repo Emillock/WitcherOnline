@@ -1,0 +1,146 @@
+diff --git a/red/game/witcher3/menus/gwint/CardManager.as b/red/game/witcher3/menus/gwint/CardManager.as
+index f978575..f4fdc77 100644
+--- a/red/game/witcher3/menus/gwint/CardManager.as
++++ b/red/game/witcher3/menus/gwint/CardManager.as
+@@ -169,6 +169,10 @@ package red.game.witcher3.menus.gwint
+       {
+          this.boardRenderer.clearAllCards();
+          this._cardInstances = new Dictionary();
++         if(DuelSession.active != null)
++         {
++            DuelSession.active.ids.reset();
++         }
+          this.cardListHand = new Array();
+          this.cardListHand.push(new Vector.<CardInstance>());
+          this.cardListHand.push(new Vector.<CardInstance>());
+@@ -496,8 +500,9 @@ package red.game.witcher3.menus.gwint
+             currentCard = this.cardListWeather[0];
+             this.addCardInstanceToList(currentCard,CARD_LIST_LOC_GRAVEYARD,currentCard.owningPlayer);
+          }
+-         for(player_it = PLAYER_1; player_it <= PLAYER_2; player_it++)
++         for(var order_it:int = 0; order_it < 2; order_it++)
+          {
++            player_it = this.duelClearOrder(order_it);
+             if(allowMonsterFactionAbility)
+             {
+                cardToIgnore = this.chooseCreatureToExclude(player_it);
+@@ -513,6 +518,22 @@ package red.game.witcher3.menus.gwint
+          this.flushPendingSpawnedCards();
+       }
+       
++      /**
++       * The player clearBoard handles at a step: PLAYER_1 then PLAYER_2 outside duels (vanilla); in a duel seat A then
++       * seat B on both boards (spec 7.4), so the Monsters keep, the cards sent to the graveyards and the pending spawns
++       * (cow, Kambi) happen in the same order on both boards.
++       * @param step 0 or 1.
++       * @return The local player index.
++       */
++      private function duelClearOrder(step:int) : int
++      {
++         if(DuelSession.active == null)
++         {
++            return PLAYER_1 + step;
++         }
++         return DuelSession.active.playerOf(step == 0 ? DuelIds.SEAT_A : DuelIds.SEAT_B);
++      }
++      
+       private function sendListToGraveyard(listID:int, playerID:int, cardToIgnore:CardInstance, allowFlush:Boolean = true) : void
+       {
+          var currentCard:CardInstance = null;
+@@ -540,6 +561,26 @@ package red.game.witcher3.menus.gwint
+          }
+       }
+       
++      /**
++       * Whether the Monsters perk would keep a creature of this player at round end, without drawing (duels: the
++       * perk message check must not take from the streams; the only draw is the one in clearBoard, spec 7.3).
++       * @param playerIndex CardManager.PLAYER_1 or PLAYER_2.
++       * @return True for a Monsters deck with a non-hero creature on a row.
++       */
++      public function hasCreatureToExclude(playerIndex:int) : Boolean
++      {
++         var elligibleCardList:Vector.<CardInstance> = null;
++         if(this.playerDeckDefinitions[playerIndex].getDeckFaction() != CardTemplate.FactionId_No_Mans_Land)
++         {
++            return false;
++         }
++         elligibleCardList = new Vector.<CardInstance>();
++         this.getAllCreaturesNonHero(CARD_LIST_LOC_MELEE,playerIndex,elligibleCardList);
++         this.getAllCreaturesNonHero(CARD_LIST_LOC_RANGED,playerIndex,elligibleCardList);
++         this.getAllCreaturesNonHero(CARD_LIST_LOC_SEIGE,playerIndex,elligibleCardList);
++         return elligibleCardList.length > 0;
++      }
++
+       public function chooseCreatureToExclude(playerIndex:int) : CardInstance
+       {
+          var elligibleCardList:Vector.<CardInstance> = null;
+@@ -552,7 +593,7 @@ package red.game.witcher3.menus.gwint
+             this.getAllCreaturesNonHero(CARD_LIST_LOC_SEIGE,playerIndex,elligibleCardList);
+             if(elligibleCardList.length > 0)
+             {
+-               keepIndex = Math.min(Math.floor(Math.random() * elligibleCardList.length),elligibleCardList.length - 1);
++               keepIndex = DuelSession.randomInt(playerIndex,elligibleCardList.length,"monsters_keep");
+                return elligibleCardList[keepIndex];
+             }
+          }
+@@ -871,7 +912,7 @@ package red.game.witcher3.menus.gwint
+          var count:* = Math.min(num,enemyHandCardList.length);
+          for(var i:* = 0; i < count; i++)
+          {
+-            stolenCardIndex = Math.min(Math.floor(Math.random() * enemyHandCardList.length),enemyHandCardList.length - 1);
++            stolenCardIndex = DuelSession.randomInt(stolenPlayerId,enemyHandCardList.length,"steal");
+             stolenCardInstance = enemyHandCardList[stolenCardIndex];
+             this.removeCardInstanceFromItsList(stolenCardInstance);
+             this.addCardInstanceToList(stolenCardInstance,CARD_LIST_LOC_HAND,stealerPlayerId);
+@@ -893,9 +934,9 @@ package red.game.witcher3.menus.gwint
+          }
+          log("#AI#------------------- DECK STRENGTH --------------------");
+          log("#AI#--- PLAYER 1:");
+-         player1Deck.shuffleDeck(player2Deck.originalStength());
++         player1Deck.shuffleDeck(player2Deck.originalStength(),PLAYER_1);
+          log("#AI#--- PLAYER 2:");
+-         player2Deck.shuffleDeck(player1Deck.originalStength());
++         player2Deck.shuffleDeck(player1Deck.originalStength(),PLAYER_2);
+          log("#AI#------------------------------------------------------");
+          if(player1Leader.canBeUsed && player1Leader.templateRef.getFirstEffect() == CardTemplate.CardEffect_11th_card)
+          {
+@@ -1109,6 +1150,10 @@ package red.game.witcher3.menus.gwint
+          newInstance.owningPlayer = forPlayer;
+          newInstance.instanceId = lastInstanceID;
+          this._cardInstances[newInstance.instanceId] = newInstance;
++         if(DuelSession.active != null)
++         {
++            DuelSession.active.ids.assign(DuelSession.active.seatOf(forPlayer),newInstance.instanceId);
++         }
+          newInstance.finializeSetup();
+          if(this.boardRenderer)
+          {
+@@ -1167,6 +1212,10 @@ package red.game.witcher3.menus.gwint
+          cardInstance.clearEffectedCards();
+          this.removeCardInstanceFromItsList(cardInstance);
+          delete this._cardInstances[cardInstance.instanceId];
++         if(DuelSession.active != null)
++         {
++            DuelSession.active.ids.forget(cardInstance.instanceId);
++         }
+       }
+       
+       public function sendToGraveyard(targetInstance:CardInstance) : void
+@@ -1371,7 +1420,7 @@ package red.game.witcher3.menus.gwint
+          var leftSummonCounter:* = count;
+          while(elligibleCardListFromOpponentsGrave.length > 0 && leftSummonCounter > 0)
+          {
+-            resIndex = Math.min(Math.floor(Math.random() * elligibleCardListFromOpponentsGrave.length),elligibleCardListFromOpponentsGrave.length - 1);
++            resIndex = DuelSession.randomInt(playerID,elligibleCardListFromOpponentsGrave.length,"skellige_res");
+             ressurectInstance = elligibleCardListFromOpponentsGrave[resIndex];
+             location = CardManager.CARD_LIST_LOC_INVALID;
+             if(ressurectInstance.templateRef.isType(CardTemplate.CardType_Melee))
+@@ -1428,7 +1477,7 @@ package red.game.witcher3.menus.gwint
+                player2Affected = true;
+             }
+             this.returnCardToDeck(cardInstance);
+-            this.playerDeckDefinitions[listPlayer].readdCard(cardInstance.templateId,true);
++            this.playerDeckDefinitions[listPlayer].readdCard(cardInstance.templateId,true,listPlayer);
+          }
+          if(player1Affected)
+          {

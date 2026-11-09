@@ -1,0 +1,263 @@
+diff --git a/red/game/witcher3/menus/gwint/CardInstance.as b/red/game/witcher3/menus/gwint/CardInstance.as
+index b1187d8..3b77652 100644
+--- a/red/game/witcher3/menus/gwint/CardInstance.as
++++ b/red/game/witcher3/menus/gwint/CardInstance.as
+@@ -29,6 +29,14 @@ package red.game.witcher3.menus.gwint
+       
+       public var playSummonedFX:Boolean = false;
+       
++      /** Duel: the resurrect targets of this medic's open NUR decision. */
++      private var _duelNurseTargets:Vector.<CardInstance>;
++      
++      /** Duel: the list and side of this card's last landing whose rule effects wait in DuelSession (spec 7.4). */
++      private var _duelLandingList:int = -1;
++      
++      private var _duelLandingPlayer:int = -1;
++      
+       public var BanishInsteadOfGraveyard:Boolean = false;
+       
+       public var InstancePositioning:Boolean = false;
+@@ -940,6 +948,34 @@ package red.game.witcher3.menus.gwint
+       }
+       
+       public function onFinishedMovingIntoHolder(listID:int, playerID:int) : void
++      {
++         if(DuelSession.active != null && !DuelSession.active.ended)
++         {
++            if(this.lastListApplied != listID || this.lastListPlayerApplied != playerID)
++            {
++               this._duelLandingList = listID;
++               this._duelLandingPlayer = playerID;
++               DuelSession.active.deferEffect(this,this.duelRunLanding);
++            }
++            return;
++         }
++         this.applyFinishedMovingIntoHolder(listID,playerID);
++      }
++      
++      /**
++       * Duel (spec 7.4): the rule effects of this card's last landing, run by DuelSession in canonical order once the
++       * board has settled. Nothing happens if the card has left that list since (moved on, banished): its next landing
++       * is the one that counts.
++       */
++      private function duelRunLanding() : void
++      {
++         if(this.inList == this._duelLandingList && this.listsPlayer == this._duelLandingPlayer)
++         {
++            this.applyFinishedMovingIntoHolder(this._duelLandingList,this._duelLandingPlayer);
++         }
++      }
++      
++      private function applyFinishedMovingIntoHolder(listID:int, playerID:int) : void
+       {
+          var cardManagerRef:CardManager = null;
+          var it:int = 0;
+@@ -1354,7 +1390,11 @@ package red.game.witcher3.menus.gwint
+             {
+                if(cardManagerRef.cardEffectManager.randomResEnabled && !this.templateRef.isType(CardTemplate.CardType_Hero))
+                {
+-                  this.handleNurseChoice(copyList[Math.min(Math.floor(Math.random() * copyList.length),copyList.length - 1)].instanceId);
++                  this.handleNurseChoice(copyList[DuelSession.randomInt(this.owningPlayer,copyList.length,"random_medic")].instanceId);
++               }
++               else if(DuelSession.active != null)
++               {
++                  this.duelDecideNurse(copyList);
+                }
+                else if(gameFlowRef.playerControllers[this.listsPlayer] is AIPlayerController)
+                {
+@@ -1498,9 +1538,27 @@ package red.game.witcher3.menus.gwint
+       
+       protected function morphFXEnded(cardInstance:CardInstance) : void
+       {
++         if(DuelSession.active != null && !DuelSession.active.ended && cardInstance != null)
++         {
++            DuelSession.active.deferEffect(cardInstance,cardInstance.duelRunMorphEffects);
++            return;
++         }
+          cardInstance.updateEffectsApplied(cardInstance);
+       }
+       
++      /**
++       * Duel (spec 7.4): the effects of this card at the end of its morph FX (several berserkers morph at once under a
++       * mushroom), run by DuelSession in canonical order. Skipped if the card has left the rows meanwhile
++       * (DuelDeferred.stillOnBoard).
++       */
++      private function duelRunMorphEffects() : void
++      {
++         if(DuelDeferred.stillOnBoard(this.inList,CardManager.getInstance().getCardInstance(this.instanceId) == this))
++         {
++            this.updateEffectsApplied(this);
++         }
++      }
++      
+       protected function handleNurseChoice(instanceId:int) : void
+       {
+          var targetSlot:CardSlot = null;
+@@ -1535,6 +1593,11 @@ package red.game.witcher3.menus.gwint
+       protected function onNurseEffectEnded(cardInstance:CardInstance = null) : void
+       {
+          var cardManagerRef:CardManager = CardManager.getInstance();
++         if(cardInstance && DuelSession.active != null)
++         {
++            this.duelPlaceResurrected(cardManagerRef,cardInstance);
++            return;
++         }
+          if(cardInstance)
+          {
+             cardInstance.recalculatePowerPotential(cardManagerRef);
+@@ -1542,11 +1605,155 @@ package red.game.witcher3.menus.gwint
+          }
+       }
+       
++      /**
++       * Duel medic pick (spec 9.6, decision NUR): the seat whose row the medic is on decides which graveyard card it
++       * brings back (the local player through the vanilla dialog, the opponent through its D), in place of the AI pick
++       * or the dialog of vanilla.
++       * @param targets The resurrect targets (GetRessurectionTargets, graveyard order, the same on both boards).
++       */
++      private function duelDecideNurse(targets:Vector.<CardInstance>) : void
++      {
++         this._duelNurseTargets = targets;
++         DuelSession.active.decide("NUR",DuelSession.active.seatOf(this.listsPlayer),DuelSession.active.ids.toNet(this.instanceId),this.duelShowNurseChoice,this.duelApplyNurseChoice,this.duelAutoNurseChoice,this.duelFirstNurseChoice);
++      }
++
++      /** The vanilla medic dialog, answered through DuelSession.answer. */
++      private function duelShowNurseChoice() : void
++      {
++         GwintGameFlowController.getInstance().mcChoiceDialog.showDialogCardInstances(this._duelNurseTargets,this.duelNursePicked,null,"[[gwint_choose_card_to_ressurect]]");
++      }
++
++      private function duelNursePicked(instanceId:int) : void
++      {
++         DuelSession.active.answer("NUR",DuelSession.active.netName(instanceId));
++      }
++
++      /**
++       * Brings back the chosen card (the vanilla handleNurseChoice).
++       * @return False if the choice is not one of the targets (a desync).
++       */
++      private function duelApplyNurseChoice(choice:String) : Boolean
++      {
++         var card:CardInstance = DuelSession.active.cardOfArg(choice);
++         if(card == null || this._duelNurseTargets == null || this._duelNurseTargets.indexOf(card) < 0)
++         {
++            return false;
++         }
++         this._duelNurseTargets = null;
++         this.handleNurseChoice(card.instanceId);
++         return true;
++      }
++
++      /** The first medic target: the decision's default answer (DuelDecision.firstFn). */
++      private function duelFirstNurseChoice() : String
++      {
++         return DuelSession.active.netName(this._duelNurseTargets[0].instanceId);
++      }
++
++      /** Autoplay's medic pick: the vanilla AI's (getHigherOrLowerValueCardFromTargetGraveyard), else the first. */
++      private function duelAutoNurseChoice() : String
++      {
++         var pick:CardAndComboPoints = CardManager.getInstance().getHigherOrLowerValueCardFromTargetGraveyard(this.listsPlayer,true,true,false);
++         var card:CardInstance = this._duelNurseTargets[0];
++         if(pick != null && pick.cardInstance != null && this._duelNurseTargets.indexOf(pick.cardInstance) >= 0)
++         {
++            card = pick.cardInstance;
++         }
++         return DuelSession.active.netName(card.instanceId);
++      }
++
++      /**
++       * Duel medic placement (spec 7.3): the row vanilla gets from recalculatePowerPotential, worked out the same way
++       * but seat-relative (the side of the graveyard the card comes from, where vanilla counts PLAYER_1's rows for an
++       * agile card that improves neighbours), and a tie between melee and ranged for an agile card is broken from
++       * this medic's owner's stream instead of Math.random. recalculatePowerPotential itself stays AI-only.
++       * @param cardManagerRef The card manager.
++       * @param cardInstance The card this medic brings back, still in its graveyard.
++       */
++      private function duelPlaceResurrected(cardManagerRef:CardManager, cardInstance:CardInstance) : void
++      {
++         var side:int = cardInstance.listsPlayer;
++         var targetPlayer:int = cardInstance.templateRef.isType(CardTemplate.CardType_Spy) ? cardInstance.notListPlayer : side;
++         var targetSlot:int = CardManager.CARD_LIST_LOC_SEIGE;
++         var meleePower:int = 0;
++         var rangedPower:int = 0;
++         var rowCreatures:Vector.<CardInstance> = null;
++         if(cardInstance.templateRef.isType(CardTemplate.CardType_Melee))
++         {
++            targetSlot = CardManager.CARD_LIST_LOC_MELEE;
++         }
++         else if(cardInstance.templateRef.isType(CardTemplate.CardType_Ranged))
++         {
++            targetSlot = CardManager.CARD_LIST_LOC_RANGED;
++         }
++         if(cardInstance.templateRef.isType(CardTemplate.CardType_RangedMelee))
++         {
++            meleePower = this.duelPowerOnRow(cardManagerRef,cardInstance,CardManager.CARD_LIST_LOC_MELEE,side);
++            rangedPower = this.duelPowerOnRow(cardManagerRef,cardInstance,CardManager.CARD_LIST_LOC_RANGED,side);
++            if(cardInstance.templateRef.hasEffect(CardTemplate.CardEffect_ImproveNeighbours))
++            {
++               // the same sums as vanilla: melee power + melee creatures, ranged power + melee and ranged creatures
++               rowCreatures = new Vector.<CardInstance>();
++               cardManagerRef.getAllCreaturesNonHero(CardManager.CARD_LIST_LOC_MELEE,side,rowCreatures);
++               meleePower += rowCreatures.length;
++               cardManagerRef.getAllCreaturesNonHero(CardManager.CARD_LIST_LOC_RANGED,side,rowCreatures);
++               rangedPower += rowCreatures.length;
++            }
++            if(rangedPower > meleePower || rangedPower == meleePower && DuelSession.randomInt(this.owningPlayer,2,"medic_tie") == 1)
++            {
++               targetSlot = CardManager.CARD_LIST_LOC_RANGED;
++            }
++         }
++         DuelSession.active.log("DUEL MEDIC place " + DuelIds.format(DuelSession.active.ids.toNet(cardInstance.instanceId)) + " slot=" + targetSlot + " melee=" + meleePower + " ranged=" + rangedPower);
++         cardManagerRef.addCardInstanceToList(cardInstance,targetSlot,targetPlayer);
++      }
++
++      /**
++       * A card's power with the effects registered on one row (weather, horns, morale), as recalculatePowerPotential
++       * evaluates it; leaves the card's effectedByCardsRefList empty, as vanilla does.
++       */
++      private function duelPowerOnRow(cardManagerRef:CardManager, cardInstance:CardInstance, listID:int, playerID:int) : int
++      {
++         var power:int = 0;
++         var effects:Vector.<CardInstance> = cardManagerRef.cardEffectManager.getEffectsForList(listID,playerID);
++         cardInstance.effectedByCardsRefList.length = 0;
++         for(var i:int = 0; i < effects.length; i++)
++         {
++            if(effects[i] != cardInstance)
++            {
++               cardInstance.effectedByCardsRefList.push(effects[i]);
++            }
++         }
++         power = cardInstance.getTotalPower();
++         cardInstance.effectedByCardsRefList.length = 0;
++         return power;
++      }
++
+       protected function onScorchFXEnd(cardInstance:CardInstance) : void
+       {
++         if(DuelSession.active != null && !DuelSession.active.ended && cardInstance != null)
++         {
++            DuelSession.active.deferEffect(cardInstance,cardInstance.duelRunScorched);
++            return;
++         }
+          CardManager.getInstance().sendToGraveyard(cardInstance);
+       }
+       
++      /**
++       * Duel (spec 7.4): this card goes to the graveyard at the end of its scorch FX, run by DuelSession in canonical
++       * order (a scorch burns several cards at once; the graveyards are ordered lists). Skipped if the card has left
++       * the rows meanwhile: two scorches landing together target the same cards, and only the first graveyard move
++       * counts. This differs on purpose from vanilla, which moves such a card twice and throws on a second banish
++       * (DuelDeferred.stillOnBoard).
++       */
++      private function duelRunScorched() : void
++      {
++         if(DuelDeferred.stillOnBoard(this.inList,CardManager.getInstance().getCardInstance(this.instanceId) == this))
++         {
++            CardManager.getInstance().sendToGraveyard(this);
++         }
++      }
++      
+       protected function powerChangeSorter(element1:CardInstance, element2:CardInstance) : Number
+       {
+          if(element1.getOptimalTransaction().powerChangeResult == element2.getOptimalTransaction().powerChangeResult)

@@ -1,0 +1,3 @@
+# Patches and sources must stay LF: patches apply to FFDec output normalised to LF.
+patches/*.patch text eol=lf
+src/*.as text eol=lf

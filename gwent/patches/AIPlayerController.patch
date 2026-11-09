@@ -1,0 +1,26 @@
+diff --git a/red/game/witcher3/menus/gwint/AIPlayerController.as b/red/game/witcher3/menus/gwint/AIPlayerController.as
+index fb1d514..0907987 100644
+--- a/red/game/witcher3/menus/gwint/AIPlayerController.as
++++ b/red/game/witcher3/menus/gwint/AIPlayerController.as
+@@ -63,6 +63,21 @@ package red.game.witcher3.menus.gwint
+          _stateMachine.AddState("ApplyingCard",state_begin_ApplyingCard,state_update_ApplyingCard,null);
+       }
+       
++      /**
++       * Duel autoplay (test bots): the move this AI would make now, from the vanilla evaluation, without making it.
++       * @return The transaction, or null to pass.
++       */
++      public function duelSuggestMove() : CardTransaction
++      {
++         CardManager.getInstance().CalculateCardPowerPotentials();
++         this.ChooseAttitude();
++         if(this.attitude == TACTIC_PASS)
++         {
++            return null;
++         }
++         return this.decideWhichCardToPlay();
++      }
++      
+       override public function startTurn() : void
+       {
+          if(currentRoundStatus == BasePlayerController.ROUND_PLAYER_STATUS_DONE)

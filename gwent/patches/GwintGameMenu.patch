@@ -1,0 +1,436 @@
+diff --git a/red/game/witcher3/menus/gwint/GwintGameMenu.as b/red/game/witcher3/menus/gwint/GwintGameMenu.as
+index d420f42..b951df8 100644
+--- a/red/game/witcher3/menus/gwint/GwintGameMenu.as
++++ b/red/game/witcher3/menus/gwint/GwintGameMenu.as
+@@ -3,7 +3,9 @@ package red.game.witcher3.menus.gwint
+    import flash.events.Event;
+    import flash.events.GestureEvent;
+    import flash.events.MouseEvent;
++   import flash.events.TimerEvent;
+    import flash.geom.Point;
++   import flash.utils.Timer;
+    import red.core.constants.KeyCode;
+    import red.core.events.GameEvent;
+    import red.core.events.GestureEventEx;
+@@ -57,6 +59,35 @@ package red.game.witcher3.menus.gwint
+       
+       public var mcBoardRenderer:GwintBoardRenderer;
+       
++      /** How long a cancelled duel shows its reason before the menu closes. */
++      public static const DUEL_CLOSE_DELAY_MS:int = 4000;
++      
++      /** Test switch gwint.game.debug.autoplay: the board plays for the test bot (duels only). */
++      public var duelDebugAutoplay:Boolean = false;
++      
++      /** Test switch gwint.game.debug.mulligan: autoplay redraws at the mulligan instead of declining. */
++      public var duelDebugMulligan:Boolean = false;
++      
++      /** Test switch gwint.game.debug.leaderFirst: autoplay plays a usable leader before anything else. */
++      public var duelDebugLeaderFirst:Boolean = false;
++
++      /** Test switch gwint.game.debug.corruptAt: the outbound seq whose state the board corrupts (0: off; Task 11). */
++      public var duelDebugCorruptAt:int = 0;
++      
++      /** Test switch gwint.game.debug.forceDraw: game 0 of the duel ends as a draw (DuelSession.finalWinner). */
++      public var duelDebugForceDraw:Boolean = false;
++
++      /** Test switch gwint.game.debug.replay: on a draw, duel autoplay presses Replay instead of closing. */
++      public var duelDebugReplay:Boolean = false;
++      
++      /** Test switch gwint.game.debug.breakTemplates: the local card table hash in Hello is off by one. */
++      public var duelDebugBreakTemplates:Boolean = false;
++      
++      /** gwint.game.opponentLeft: Witcher Online's script lost the opponent (DuelSession then ends the duel). */
++      public var duelOpponentLeft:Boolean = false;
++      
++      private var _duelCloseTimer:Timer;
++      
+       public function GwintGameMenu()
+       {
+          super();
+@@ -139,6 +170,19 @@ package red.game.witcher3.menus.gwint
+          stage.addEventListener(GestureEventEx.GESTURE_PRESS,this.handleGestureOrMouseClick,false,2,true);
+          this.setupSkipButton();
+          this.mcChoiceDialog.visible = false;
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.seed",[this.setDuelSeed]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.isHost",[this.setDuelIsHost]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.isTimed",[this.setDuelIsTimed]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.opponentLeft",[this.setDuelOpponentLeft]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.remoteInput",[this.setDuelRemoteInput]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.autoplay",[this.setDuelDebugAutoplay]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.mulligan",[this.setDuelDebugMulligan]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.leaderFirst",[this.setDuelDebugLeaderFirst]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.corruptAt",[this.setDuelDebugCorruptAt]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.forceDraw",[this.setDuelDebugForceDraw]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.replay",[this.setDuelDebugReplay]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.breakTemplates",[this.setDuelDebugBreakTemplates]));
++         dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwint.game.debug.selfTest",[this.setDuelSelfTest]));
+          dispatchEvent(new GameEvent(GameEvent.CALL,"OnConfigUI"));
+          dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.spawnCardInstance",[this.onSpawnCardInstance]));
+          dispatchEvent(new GameEvent(GameEvent.REGISTER,"gwent.addCardToDeck",[this.onAddCardToDeck]));
+@@ -301,6 +345,12 @@ package red.game.witcher3.menus.gwint
+       
+       public function tryQuitGame() : void
+       {
++         if(DuelSession.active != null && DuelSession.active.waitingForReplay)
++         {
++            // a duel draw after the local Replay: leaving now is a draw without money (X), not a surrender
++            DuelSession.active.localLeave();
++            return;
++         }
+          if(this.gameFlowController.stateMachine.currentState != "ShowingFinalResult" && (!this.mcTutorials.visible || this.mcTutorials.isPaused))
+          {
+             dispatchEvent(new GameEvent(GameEvent.CALL,"OnConfirmSurrender"));
+@@ -348,8 +398,288 @@ package red.game.witcher3.menus.gwint
+          _cardManager.cardValues = cardValues as GwintCardValues;
+       }
+       
++      /**
++       * Flash value gwint.game.debug.selfTest: true runs DuelSelfTest once and reports through OnDuelLog.
++       * Only test tools set it; a normal player never runs the self-test.
++       * @param enabled Whether the script asks for the self-test.
++       */
++      public function setDuelSelfTest(enabled:Boolean) : void
++      {
++         if(enabled)
++         {
++            DuelSelfTest.start(this.duelLog);
++         }
++      }
++      
++      /**
++       * Hands one duel log line to the script (event OnDuelLog, which logs "GwentDuel: <line>").
++       * @param line The line.
++       */
++      public function duelLog(line:String) : void
++      {
++         dispatchEvent(new GameEvent(GameEvent.CALL,"OnDuelLog",[line]));
++      }
++      
++      /**
++       * Flash value gwint.game.seed: not 0 makes this match a duel (spec 9.1). Starts the DuelSession, forces the
++       * tutorial off and installs NetOpponentController as PLAYER_2. 0 is single-player Gwent (vanilla).
++       * The script sends the duel values before the decks, the debug values after them.
++       * @param seed The duel seed (a script int; its bits are the uint seed).
++       */
++      public function setDuelSeed(seed:int) : void
++      {
++         if(seed == 0)
++         {
++            DuelSession.stop();
++            return;
++         }
++         DuelSession.start(uint(seed));
++         this.forceTutorialsOff();
++         this.gameFlowController.installDuelControllers();
++      }
++      
++      /**
++       * Flash value gwint.game.isHost: the host is seat A.
++       * @param isHost Whether this client sent the challenge.
++       */
++      public function setDuelIsHost(isHost:Boolean) : void
++      {
++         if(DuelSession.active)
++         {
++            DuelSession.active.isHost = isHost;
++         }
++      }
++      
++      /**
++       * Flash value gwint.game.isTimed (Timed mode, Task 16).
++       * @param isTimed Whether turns are timed.
++       */
++      public function setDuelIsTimed(isTimed:Boolean) : void
++      {
++         if(DuelSession.active)
++         {
++            DuelSession.active.isTimed = isTimed;
++         }
++      }
++      
++      /**
++       * Flash value gwint.game.opponentLeft: Witcher Online's script lost the opponent (its game closed or it
++       * disconnected). DuelSession.update ends the duel as no contest (opponent_left) once the opponent's messages
++       * already in the window have applied; read there, not here, so the end never runs inside the script's call.
++       * @param left Whether the opponent left.
++       */
++      public function setDuelOpponentLeft(left:Boolean) : void
++      {
++         this.duelOpponentLeft = left;
++      }
++      
++      /**
++       * Flash value gwint.game.remoteInput: the opponent's latest message window.
++       * @param window Tokens joined by "~", or "none".
++       */
++      public function setDuelRemoteInput(window:String) : void
++      {
++         if(DuelSession.active)
++         {
++            DuelSession.active.onRemoteInput(window);
++         }
++      }
++      
++      /**
++       * Flash value gwint.game.debug.autoplay (test bots only).
++       * @param enabled Whether the board plays for the local player in duels.
++       */
++      public function setDuelDebugAutoplay(enabled:Boolean) : void
++      {
++         this.duelDebugAutoplay = enabled;
++      }
++      
++      /**
++       * Flash value gwint.game.debug.mulligan (test bots only).
++       * @param redraw Whether autoplay redraws two cards at the mulligan instead of declining.
++       */
++      public function setDuelDebugMulligan(redraw:Boolean) : void
++      {
++         this.duelDebugMulligan = redraw;
++      }
++      
++      /**
++       * Flash value gwint.game.debug.leaderFirst (test bots only): duel autoplay plays its leader as soon as it can be
++       * used, so the leader decisions the vanilla AI never picks (Bin2_Pick1, View_3_Enemy) are reached in tests. It
++       * only changes what autoplay chooses; autoplay itself runs only with gwint.game.debug.autoplay in a duel.
++       * @param enabled Whether autoplay plays the leader first.
++       */
++      public function setDuelDebugLeaderFirst(enabled:Boolean) : void
++      {
++         this.duelDebugLeaderFirst = enabled;
++      }
++
++      /**
++       * Flash value gwint.game.debug.corruptAt (test bots only, used from Task 11).
++       * @param seq The outbound seq to corrupt, 0 for none.
++       */
++      public function setDuelDebugCorruptAt(seq:int) : void
++      {
++         this.duelDebugCorruptAt = seq;
++      }
++      
++      /**
++       * Flash value gwint.game.debug.forceDraw (test bots only).
++       * @param enabled Whether game 0 of the duel ends as a draw.
++       */
++      public function setDuelDebugForceDraw(enabled:Boolean) : void
++      {
++         this.duelDebugForceDraw = enabled;
++      }
++
++      /**
++       * Flash value gwint.game.debug.replay (test bots only).
++       * @param enabled Whether duel autoplay presses Replay on a draw (else it closes the end screen).
++       */
++      public function setDuelDebugReplay(enabled:Boolean) : void
++      {
++         this.duelDebugReplay = enabled;
++      }
++      
++      /**
++       * Flash value gwint.game.debug.breakTemplates (test bots only).
++       * @param enabled Whether Hello carries a wrong card table hash.
++       */
++      public function setDuelDebugBreakTemplates(enabled:Boolean) : void
++      {
++         this.duelDebugBreakTemplates = enabled;
++      }
++      
++      /**
++       * Test hook (duel autoplay only): the board's close button as a click would press it (handleCloseClick), so the
++       * test bots surrender or leave through the same path as a player.
++       */
++      public function duelDebugPressClose() : void
++      {
++         if(DuelSession.active != null && this.duelDebugAutoplay)
++         {
++            this.handleCloseClick(null);
++         }
++      }
++
++      /**
++       * Hands one outbound duel message to the script (event OnMultiplayerMessage).
++       * @param token The wire token.
++       */
++      public function duelSendMessage(token:String) : void
++      {
++         dispatchEvent(new GameEvent(GameEvent.CALL,"OnMultiplayerMessage",[token]));
++      }
++      
++      /**
++       * The duel ended as no contest: tells the script (OnMultiplayerAbort, no money moves), shows the reason and
++       * closes the menu DUEL_CLOSE_DELAY_MS later.
++       * @param reason The reason (version, templates, decks, hello_timeout, stuck_wait, opponent_left, desync, ...).
++       * @param text The message shown instead of "The Gwent duel was cancelled (<reason>)." (null for that one).
++       */
++      public function duelAbort(reason:String, text:String = null) : void
++      {
++         this.duelNotifyAbort(reason);
++         if(this.mcChoiceDialog.isShown())
++         {
++            this.mcChoiceDialog.hideDialog();
++         }
++         this.mcMessageQueue.PushMessage(text != null ? text : "The Gwent duel was cancelled (" + reason + ").");
++         if(this._duelCloseTimer == null)
++         {
++            this._duelCloseTimer = new Timer(DUEL_CLOSE_DELAY_MS,1);
++            this._duelCloseTimer.addEventListener(TimerEvent.TIMER_COMPLETE,this.onDuelCloseTimer,false,0,true);
++            this._duelCloseTimer.start();
++         }
++      }
++      
++      /**
++       * The duel ended with a result, then the menu closes: a win or loss calls OnMatchResult as vanilla (the script
++       * settles the bet), a draw that is not replayed calls OnMultiplayerDraw instead (R13: no money moves; a replayed
++       * draw never comes here).
++       * @param result win, loss or draw.
++       */
++      public function duelFinish(result:String) : void
++      {
++         if(result == "draw")
++         {
++            dispatchEvent(new GameEvent(GameEvent.CALL,"OnMultiplayerDraw"));
++         }
++         else
++         {
++            dispatchEvent(new GameEvent(GameEvent.CALL,"OnMatchResult",[result == "win"]));
++         }
++         closeMenu();
++      }
++      
++      /**
++       * Called by the script after the player confirmed a surrender, before the menu closes as a forfeit. In a duel the
++       * board sends QUITGAME (DuelSession.surrender): a settled loss once Hello was done, no contest before.
++       */
++      public function onQuitConfirmed() : void
++      {
++         if(DuelSession.active != null)
++         {
++            DuelSession.active.surrender();
++         }
++      }
++      
++      /**
++       * Timed mode (R53): the local Scoia'tael choice ran out and the board answered its first option itself: the script
++       * closes its popup as answered (event OnDuelCoinTimeUp), so the popup's close answers nothing.
++       */
++      public function duelCloseCoinPopup() : void
++      {
++         dispatchEvent(new GameEvent(GameEvent.CALL,"OnDuelCoinTimeUp"));
++      }
++
++      /**
++       * Tells the script the duel game is cancelled as no contest (OnMultiplayerAbort: it settles nothing).
++       * @param reason The reason.
++       */
++      public function duelNotifyAbort(reason:String) : void
++      {
++         dispatchEvent(new GameEvent(GameEvent.CALL,"OnMultiplayerAbort",[reason]));
++      }
++      
++      /**
++       * The duel tick stops with the board.
++       */
++      override protected function closeMenu() : void
++      {
++         this.gameFlowController.stopDuelTimer();
++         super.closeMenu();
++      }
++      
++      private function onDuelCloseTimer(event:TimerEvent) : void
++      {
++         this._duelCloseTimer = null;
++         closeMenu();
++      }
++      
++      /**
++       * Tutorials never run in a duel (spec 9.1): the script may already have started one for a player who never
++       * finished it.
++       */
++      private function forceTutorialsOff() : void
++      {
++         this.tutorialsOn = false;
++         if(Boolean(this.mcTutorials) && this.mcTutorials.visible)
++         {
++            this.mcTutorials.visible = false;
++            if(this.mcMessageQueue)
++            {
++               this.mcMessageQueue.msgsEnabled = true;
++            }
++         }
++      }
++      
+       public function setAIEnabled(turnAIOn:Boolean) : void
+       {
++         if(DuelSession.active)
++         {
++            return;
++         }
+          if(turnAIOn)
+          {
+             this.gameFlowController.turnOnAI(CardManager.PLAYER_1);
+@@ -367,6 +697,12 @@ package red.game.witcher3.menus.gwint
+       
+       public function setFirstTurn(playerFirst:Boolean) : void
+       {
++         if(DuelSession.active != null)
++         {
++            // duel: the local Scoia'tael choice goes to the opponent first (D COIN), then both boards apply it
++            this.gameFlowController.duelCoinChosen(playerFirst);
++            return;
++         }
+          if(playerFirst)
+          {
+             this.mcMessageQueue.PushMessage("[[gwint_player_will_go_first_message]]");
+@@ -448,9 +784,28 @@ package red.game.witcher3.menus.gwint
+          return null;
+       }
+       
++      /**
++       * In a duel the debug console's card injection would change one board only (spec 9.9): ignored and logged.
++       * @param what The flash value the script set.
++       * @return True when a duel is running (the caller then does nothing).
++       */
++      private function duelIgnoresInjection(what:String) : Boolean
++      {
++         if(DuelSession.active == null)
++         {
++            return false;
++         }
++         DuelSession.active.log("DUEL IGNORED " + what + " (script card injection is off in duels)");
++         return true;
++      }
++      
+       private function onSpawnCardInstance(params:Array) : *
+       {
+          var newCardInstance:* = undefined;
++         if(this.duelIgnoresInjection("gwent.spawnCardInstance"))
++         {
++            return;
++         }
+          if(params.length < 3)
+          {
+             throw Error;
+@@ -464,6 +819,10 @@ package red.game.witcher3.menus.gwint
+       
+       private function onAddCardToDeck(params:Array) : *
+       {
++         if(this.duelIgnoresInjection("gwent.addCardToDeck"))
++         {
++            return;
++         }
+          if(params.length < 2)
+          {
+             throw Error;
+@@ -477,6 +836,10 @@ package red.game.witcher3.menus.gwint
+       private function onKillCard(params:Array) : *
+       {
+          var card:* = undefined;
++         if(this.duelIgnoresInjection("gwent.killCard"))
++         {
++            return;
++         }
+          if(params.length != 0)
+          {
+             throw Error;
