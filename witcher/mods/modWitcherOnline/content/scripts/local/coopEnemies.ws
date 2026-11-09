@@ -70,6 +70,24 @@ class r_CoopHostEnemy
     public var stride : r_CoopStride;
 }
 
+// a monster of the leader's that died: what it left to loot, on its way to the members
+class r_CoopDrop
+{
+    public var netId : int;
+    public var npc : CActor;
+    public var deadAt : float;
+    public var spot : Vector;
+}
+
+// the same thing arriving in a member's game, waiting for its copy's body
+class r_CoopDropHere
+{
+    public var netId : int;
+    public var heardAt : float;
+    public var items : array<name>;
+    public var counts : array<int>;
+}
+
 class r_CoopPuppet
 {
     public var npc : CNewNPC;
@@ -600,6 +618,16 @@ class r_CoopEnemies
     private var heardSpots : array<Vector>;
     private var peopleDue : bool;
     private var peopleHeardAt : float;        // when the last list came; the figures go when they stop
+    private var drops : array<r_CoopDrop>;      // the leader: deaths whose loot is not out yet
+    private var dropsHere : array<r_CoopDropHere>;  // a member: loot lists waiting for their copy's body
+    public var dropsSent : int;
+    public var dropItemsSent : int;
+    public var dropsHeard : int;
+    public var dropsGiven : int;                // bodies here filled with what the leader's monster dropped
+    public var dropItemsGiven : int;
+    public var lastDrop : string;
+    public var lastDropNames : string;          // what that drop was, as "|item|item|"
+
     public var questsBehind : int;            // quests the leader is further back on than this game
     public var lastQuestBehind : string;
     private var behindTold : array<name>;     // ...the ones already said out loud
@@ -799,6 +827,7 @@ class r_CoopEnemies
             SendJournal(now);
             SendFacts(now);
             SendNearPeople(now);
+            SendDrops(now);
             LeaderFightState(now);
             NoticeGhostDue(now);
             wasHost = true;
@@ -840,6 +869,7 @@ class r_CoopEnemies
             }
             ApplyDueHurts(now);
             SendHits(now);
+            GiveDrops(now);
             CheckMissingPeople();
             if(mirrors.Size() > 0 && now - peopleHeardAt > 8.0)
             {
@@ -941,6 +971,7 @@ class r_CoopEnemies
             if(e.deadAt < 0 && !e.npc.IsAlive())
             {
                 e.deadAt = now;
+                WatchDrop(e, now);
             }
             if((e.deadAt >= 0 && now - e.deadAt > 4.0) || (e.deadAt < 0 && now - e.lastSeenAt > 3.0))
             {
@@ -1488,6 +1519,15 @@ class r_CoopEnemies
         questsBehind = 0;
         lastQuestBehind = "";
         behindTold.Clear();
+        drops.Clear();
+        dropsHere.Clear();
+        dropsSent = 0;
+        dropItemsSent = 0;
+        dropsHeard = 0;
+        dropsGiven = 0;
+        dropItemsGiven = 0;
+        lastDrop = "";
+        lastDropNames = "";
         peopleHeard = 0;
         peopleListed = 0;
         peopleMissing = 0;
@@ -3224,6 +3264,105 @@ class r_CoopEnemies
         WO_Send(text);
     }
 
+    private function WatchDrop(e : r_CoopHostEnemy, now : float)
+    {
+        var d : r_CoopDrop;
+
+        if(GetRole() != 1)
+        {
+            return;
+        }
+        d = new r_CoopDrop in this;
+        d.netId = e.netId;
+        d.npc = e.npc;
+        d.deadAt = now;
+        d.spot = e.npc.GetWorldPosition();
+        drops.PushBack(d);
+    }
+
+    // The body in this world is lootable; the copy in a member's is not, because dropping loot is the work of the
+    // death behaviour tree and a copy has no AI of its own. So the items are read off this world's body and sent,
+    // and the member fills its copy's. The engine takes a moment over it, so each death is given four seconds
+    // before it is called empty-handed.
+    // "lt epoch netId count {item quantity}"
+    private function SendDrops(now : float)
+    {
+        var remains : W3ActorRemains;
+        var inv : CInventoryComponent;
+        var ids : array<SItemUniqueId>;
+        var items : string;
+        var d : r_CoopDrop;
+        var sent : int;
+        var i, j : int;
+
+        for(i = drops.Size() - 1; i >= 0; i -= 1)
+        {
+            d = drops[i];
+            remains = RemainsOf(d);
+            if(!remains && now - d.deadAt < 4.0)
+            {
+                continue;   // the body is not done falling over
+            }
+            sent = 0;
+            items = "";
+            lastDropNames = "|";
+            inv = NULL;
+            if(remains)
+            {
+                inv = (CInventoryComponent)remains.GetComponentByClassName('CInventoryComponent');
+            }
+            if(inv)
+            {
+                ids.Clear();
+                inv.GetAllItems(ids);
+                for(j = 0; j < ids.Size(); j += 1)
+                {
+                    if(sent >= 12)
+                    {
+                        break;
+                    }
+                    items += " " + CoopEncode(NameToString(inv.GetItemName(ids[j]))) + " " + inv.GetItemQuantity(ids[j]);
+                    lastDropNames += NameToString(inv.GetItemName(ids[j])) + "|";
+                    sent += 1;
+                }
+            }
+            WO_Send("coop lt " + epoch + " " + d.netId + " " + sent + items);
+            dropsSent += 1;
+            dropItemsSent += sent;
+            lastDrop = IntToString(d.netId) + ":" + sent;
+            LogSync("LT", d.netId, sent, "");
+            drops.Erase(i);
+        }
+    }
+
+    // the body this death left, if any: the remains the engine made for it, or any lying where it fell
+    private function RemainsOf(d : r_CoopDrop) : W3ActorRemains
+    {
+        var entities : array<CGameplayEntity>;
+        var remains : W3ActorRemains;
+        var spot : Vector;
+        var i : int;
+
+        spot = d.spot;
+        if(d.npc)
+        {
+            spot = d.npc.GetWorldPosition();
+        }
+        FindGameplayEntitiesInSphere(entities, spot, 5.0, 24, '', FLAG_ExcludePlayer);
+        for(i = 0; i < entities.Size(); i += 1)
+        {
+            remains = (W3ActorRemains)entities[i];
+            if(remains)
+            {
+                if(!d.npc || !remains.GetOwner() || remains.GetOwner() == d.npc)
+                {
+                    return remains;
+                }
+            }
+        }
+        return NULL;
+    }
+
     // Someone a player would walk up to: a character this world placed for its own reasons, not one of the
     // crowd walking past, not a monster (those are shared as copies), not another player. Remastered answers
     // GetReadableName with the entity template's path, which is what tells them apart.
@@ -3314,6 +3453,114 @@ class r_CoopEnemies
         }
         peopleListed = n;
         peopleDue = true;
+    }
+
+    private function OnDrop(sender : string, count : int)
+    {
+        var d : r_CoopDropHere;
+        var n, i, idx : int;
+
+        if(GetRole() != 2 || sender != leaderName || count < 4)
+        {
+            return;
+        }
+        dropsHeard += 1;
+        d = new r_CoopDropHere in this;
+        d.netId = StringToInt(WO_Str(2), 0);
+        d.heardAt = theGame.GetEngineTimeAsSeconds();
+        n = StringToInt(WO_Str(3), 0);
+        idx = 4;
+        for(i = 0; i < n; i += 1)
+        {
+            if(idx + 1 >= count)
+            {
+                break;
+            }
+            d.items.PushBack(WO_ToName(CoopDecode(WO_Str(idx))));
+            d.counts.PushBack(StringToInt(WO_Str(idx + 1), 1));
+            idx += 2;
+        }
+        dropsHere.PushBack(d);
+    }
+
+    // What the leader's monster dropped, put on the body of its copy here, so a member who killed it has
+    // something to loot. Waits for the copy to be dead and for its body to still be here; given up on after
+    // fifteen seconds (the copy may have been let go of, or never arrived).
+    private function GiveDrops(now : float)
+    {
+        var d : r_CoopDropHere;
+        var p : r_CoopPuppet;
+        var i : int;
+
+        for(i = dropsHere.Size() - 1; i >= 0; i -= 1)
+        {
+            d = dropsHere[i];
+            p = PuppetByNetId(d.netId);
+            if(p && p.npc && !p.alive && !p.npc.IsAlive())
+            {
+                GiveDropTo(p, d);
+                dropsHere.Erase(i);
+                continue;
+            }
+            if(now - d.heardAt > 15.0)
+            {
+                dropsHere.Erase(i);
+            }
+        }
+    }
+
+    private function GiveDropTo(p : r_CoopPuppet, d : r_CoopDropHere)
+    {
+        var inv : CInventoryComponent;
+        var remains : W3ActorRemains;
+        var body : CEntity;
+        var given : int;
+        var i : int;
+
+        dropsGiven += 1;
+        lastDropNames = "|";
+        for(i = 0; i < d.items.Size(); i += 1)
+        {
+            lastDropNames += NameToString(d.items[i]) + "|";
+        }
+        if(d.items.Size() == 0)
+        {
+            return;   // its own body held nothing either
+        }
+        inv = p.npc.GetInventory();
+        if(!inv)
+        {
+            return;
+        }
+        for(i = 0; i < d.items.Size(); i += 1)
+        {
+            inv.AddAnItem(d.items[i], Max(d.counts[i], 1), true, true);
+            given += 1;
+        }
+        // the same call the death behaviour tree makes, which a copy never runs
+        body = inv.ThrowAwayLootableItems(true);
+        remains = (W3ActorRemains)body;
+        if(remains)
+        {
+            remains.LootDropped(p.npc);
+        }
+        dropItemsGiven += given;
+        lastDrop = IntToString(d.netId) + ":" + given;
+        LogSync("LG", d.netId, given, "");
+    }
+
+    public function PuppetByNetId(netId : int) : r_CoopPuppet
+    {
+        var i : int;
+
+        for(i = 0; i < puppets.Size(); i += 1)
+        {
+            if(puppets[i].netId == netId)
+            {
+                return puppets[i];
+            }
+        }
+        return NULL;
     }
 
     // Who of the people the leader listed this world does not have. The label is the last part of the template
@@ -3521,6 +3768,10 @@ class r_CoopEnemies
         else if(WO_Str(0) == "np")
         {
             OnNearPeople(sender, count);
+        }
+        else if(WO_Str(0) == "lt")
+        {
+            OnDrop(sender, count);
         }
     }
 
