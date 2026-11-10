@@ -170,7 +170,7 @@ timer function r_showJoinMessage(dt : float, id : int)
         regionString = "regions";
     }
     
-    GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114235) + " " + total + " " + GetLocStringById(2111114236) + " " + regions + " " + regionString + GetLocStringById(2111114237));
+    GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114235) + " " + total + " " + WO_Text(2111114236) + " " + regions + " " + regionString + WO_Text(2111114237));
 }
 
 @addMethod(CR4Player) 
@@ -178,11 +178,11 @@ timer function r_showWelcome(dt : float, id : int)
 {
     if(theGame.r_getMultiplayerClient().getServerReceived())
     {
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114238) + " " + theGame.r_getMultiplayerClient().getUsername() + GetLocStringById(2111114239));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114238) + " " + theGame.r_getMultiplayerClient().getUsername() + WO_Text(2111114239));
     }
     else
     {
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114240));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114240));
     }
 }
 
@@ -635,14 +635,14 @@ function OnCloseSelectionPopup()
 {
     if(m_DataObject.wo_isReceivingTrade)
     {
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114224));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114224));
         theGame.r_getMultiplayerClient().declineTrade(true);
         mpghosts_playSound('gui_enchanting_runeword_remove');
         ClosePopup();
     }
     else if(m_DataObject.wo_isReceivingGwent)
     {
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114241));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114241));
         theGame.r_getMultiplayerClient().declineGwentRequest(false);
         mpghosts_playSound('gui_enchanting_runeword_remove');
         ClosePopup();
@@ -698,7 +698,7 @@ function OnConfigUI()
         if(m_DataObject.wo_isTrade)
         {
             UpdateData();
-            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(GetLocStringById(2111114242) + " " + m_DataObject.wo_toTrade) );
+            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(WO_Text(2111114242) + " " + m_DataObject.wo_toTrade) );
         }
         else if(m_DataObject.wo_isReceivingTrade)
         {
@@ -708,7 +708,7 @@ function OnConfigUI()
             m_tradeInventory.ignorePosition = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
-            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(m_DataObject.wo_toTrade + " " + GetLocStringById(2111114243) + " " + m_DataObject.wo_crownsAmount + " " + GetLocStringById(2111114244)) );
+            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(m_DataObject.wo_toTrade + " " + WO_Text(2111114243) + " " + m_DataObject.wo_crownsAmount + " " + WO_Text(2111114244)) );
 
             l_flashObject = m_flashValueStorage.CreateTempFlashObject();
             l_flashArray = m_flashValueStorage.CreateTempFlashArray();		
@@ -724,7 +724,7 @@ function OnConfigUI()
             m_tradeInventory.overrideQuestItemFilters = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
-            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(GetLocStringById(2111114245) + " " + m_DataObject.wo_toGwent) );
+            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(WO_Text(2111114245) + " " + m_DataObject.wo_toGwent) );
 
             l_flashObject = m_flashValueStorage.CreateTempFlashObject();
             l_flashArray = m_flashValueStorage.CreateTempFlashArray();		
@@ -740,7 +740,7 @@ function OnConfigUI()
             m_tradeInventory.overrideQuestItemFilters = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
-            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(m_DataObject.wo_toGwent + " " + GetLocStringById(2111114246) + " " + m_DataObject.wo_betAmount + " " + GetLocStringById(2111114244)) );
+            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(m_DataObject.wo_toGwent + " " + WO_Text(2111114246) + " " + m_DataObject.wo_betAmount + " " + WO_Text(2111114244)) );
 
             l_flashObject = m_flashValueStorage.CreateTempFlashObject();
             l_flashArray = m_flashValueStorage.CreateTempFlashArray();		
@@ -758,7 +758,7 @@ function OnConfigUI()
             m_tradeInventory.overrideQuestItemFilters = true;
             m_tradeInventory.SetFilterType( IFT_None );
 
-            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(GetLocStringById(2111114099)) );
+            m_fxSetCategory.InvokeSelfOneArg( FlashArgString(WO_Text(2111114099)) );
 
             l_flashObject = m_flashValueStorage.CreateTempFlashObject();
             l_flashArray = m_flashValueStorage.CreateTempFlashArray();		
@@ -801,26 +801,26 @@ function OnItemSelected( itemId : SItemUniqueId )
     {
         if(m_selectedItemCategory == 0)
         {
-            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( GetLocStringById(2111114076) ) );
+            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( WO_Text(2111114076) ) );
         }
         else if(m_selectedItemCategory == 1)
         {
-            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( GetLocStringById(2111114096)) );
+            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( WO_Text(2111114096)) );
         }
         else if(m_selectedItemCategory == 2)
         {
-            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( GetLocStringById(2111114095)) );
+            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( WO_Text(2111114095)) );
         }
     }
     else if(m_DataObject.wo_isGwent)
     {
         if(m_DataObject.targetInventory.GetItemName(itemId) == 'wo_timed_gwent')
         {
-            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( GetLocStringById(2111114074) ) );
+            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( WO_Text(2111114074) ) );
         }
         else if(m_DataObject.targetInventory.GetItemName(itemId) == 'wo_notime_gwent')
         {
-            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( GetLocStringById(2111114075) ) );
+            m_fxSetItemDescription.InvokeSelfOneArg( FlashArgString( WO_Text(2111114075) ) );
         }
     }
     else
@@ -848,7 +848,7 @@ function OnChangeCategory( id : int )
         switch(m_selectedItemCategory)
         {
             case 0:
-                locString = GetLocStringById(2111114099);
+                locString = WO_Text(2111114099);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
                 m_coopCategoryInv = m_DataObject.targetInventory;
                 m_tradeInventory.Initialize( m_coopCategoryInv );
@@ -857,7 +857,7 @@ function OnChangeCategory( id : int )
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 1:
-                locString = GetLocStringById(2111114098);
+                locString = WO_Text(2111114098);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
                 m_coopCategoryInv = theGame.r_getMultiplayerClient().getChatInventory();
                 m_tradeInventory.Initialize( m_coopCategoryInv );
@@ -866,7 +866,7 @@ function OnChangeCategory( id : int )
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 2:
-                locString = GetLocStringById(2111114097);
+                locString = WO_Text(2111114097);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
                 m_coopCategoryInv = theGame.r_getMultiplayerClient().getMorphInventory();
                 m_tradeInventory.Initialize( m_coopCategoryInv );
@@ -907,7 +907,7 @@ function OnChangeCategory( id : int )
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 1:
-                locString = GetLocStringById(2111114099);
+                locString = WO_Text(2111114099);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
                 m_coopCategoryInv = theGame.r_getMultiplayerClient().getEmoteInventory();
                 m_tradeInventory.Initialize( m_coopCategoryInv );
@@ -916,7 +916,7 @@ function OnChangeCategory( id : int )
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 2:
-                locString = GetLocStringById(2111114098);
+                locString = WO_Text(2111114098);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
                 m_coopCategoryInv = theGame.r_getMultiplayerClient().getChatInventory();
                 m_tradeInventory.Initialize( m_coopCategoryInv );
@@ -925,7 +925,7 @@ function OnChangeCategory( id : int )
                 m_tradeInventory.SetFilterType( IFT_None );
                 break;
             case 3:
-                locString = GetLocStringById(2111114097);
+                locString = WO_Text(2111114097);
                 m_tradeInventory = new W3GuiSelectItemComponent in theGame.GetGuiManager();
                 m_coopCategoryInv = theGame.r_getMultiplayerClient().getMorphInventory();
                 m_tradeInventory.Initialize( m_coopCategoryInv );
@@ -1268,7 +1268,7 @@ public function WO_RefreshCompanionHud(party : array<r_RemotePlayer>)
     {
         if(theGame.r_getMultiplayerClient().getInParty() && !party[0].inParty)
         {
-            m_fxSetNameSFF.InvokeSelfOneArg(FlashArgString(GetLocStringById(2111114270) + " " + party[0].username));
+            m_fxSetNameSFF.InvokeSelfOneArg(FlashArgString(WO_Text(2111114270) + " " + party[0].username));
         }
         else
         {
@@ -1322,7 +1322,7 @@ public function WO_RefreshCompanionHud(party : array<r_RemotePlayer>)
 
         if(theGame.r_getMultiplayerClient().getInParty() && !party[0].inParty)
         {
-            m_fxSetName2SFF.InvokeSelfOneArg(FlashArgString(GetLocStringById(2111114270) + " " + party[0].username));
+            m_fxSetName2SFF.InvokeSelfOneArg(FlashArgString(WO_Text(2111114270) + " " + party[0].username));
         }
         else
         {

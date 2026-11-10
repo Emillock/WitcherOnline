@@ -612,7 +612,7 @@ statemachine class r_MultiplayerClient
             leaderDialogAllReadyShown = false;
             leaderDialogAllReadyClearAt = -999;
 
-            text = "(" + IntToString(ready+1) + "/" + IntToString(total+1) + ") " + GetLocStringById(2111114103);
+            text = "(" + IntToString(ready+1) + "/" + IntToString(total+1) + ") " + WO_Text(2111114103);
 
             if(leaderDialogReadyText != text)
             {
@@ -628,7 +628,7 @@ statemachine class r_MultiplayerClient
             leaderDialogAllReadyShown = true;
             leaderDialogAllReadyClearAt = now + 2.0;
 
-            leaderDialogReadyText = "(" + IntToString(ready+1) + "/" + IntToString(total+1) + ") " + GetLocStringById(2111114104);
+            leaderDialogReadyText = "(" + IntToString(ready+1) + "/" + IntToString(total+1) + ") " + WO_Text(2111114104);
             showDialogPickAlert(leaderDialogReadyText, true);
 
             return;
@@ -923,7 +923,7 @@ statemachine class r_MultiplayerClient
         if(hasActiveDialogChoices() && remotePlayer.menuName == "InCutscene" && remotePlayer.dialogChoices.Size() > 0 && isRemotePlayerCloseForDialogSync(remotePlayer)
             && dialogChoicesMatch(dialogChoices, remotePlayer.dialogChoices) && !pendingSyncedDialogChoice && !(remotePlayer.lastDialogIndex >= 0 && remotePlayer.lastDialogCount > 0 && remotePlayer.lastDialogCount != remotePlayer.prevDialogCount))
         {
-            text = GetLocStringById(2111114102) + " " + joinedParty;
+            text = WO_Text(2111114102) + " " + joinedParty;
 
             if(leaderDialogReadyText != text)
             {
@@ -1467,7 +1467,7 @@ statemachine class r_MultiplayerClient
 
         if(val == "" || val == "none")
         {
-            theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114200));
+            theGame.GetGuiManager().ShowNotification(WO_Text(2111114200));
             return;
         }
 
@@ -1475,19 +1475,19 @@ statemachine class r_MultiplayerClient
 
         if(finalTarget == "" || finalTarget == "none")
         {
-            theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114200));
+            theGame.GetGuiManager().ShowNotification(WO_Text(2111114200));
             return;
         }
 
         if(finalTarget == username)
         {
-            theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114201));
+            theGame.GetGuiManager().ShowNotification(WO_Text(2111114201));
             return;
         }
 
         if(inParty && joinedParty == finalTarget)
         {
-            theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114202) + " " + finalTarget + GetLocStringById(2111114203));
+            theGame.GetGuiManager().ShowNotification(WO_Text(2111114202) + " " + finalTarget + WO_Text(2111114203));
             return;
         }
 
@@ -1499,7 +1499,7 @@ statemachine class r_MultiplayerClient
         partyTargetWasMissing = false;
         nextPartyFollowTeleportAt = -999;
 
-        theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114204) + " " + finalTarget + GetLocStringById(2111114205));
+        theGame.GetGuiManager().ShowNotification(WO_Text(2111114204) + " " + finalTarget + WO_Text(2111114205));
 
         mpghosts_playSound('gui_global_panel_open');
     }
@@ -1510,7 +1510,7 @@ statemachine class r_MultiplayerClient
 
         if(!inParty)
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114206));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114206));
             return;
         }
 
@@ -1519,7 +1519,7 @@ statemachine class r_MultiplayerClient
         inParty = false;
         joinedParty = "";
 
-        theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114207));
+        theGame.GetGuiManager().ShowNotification(WO_Text(2111114207));
 
         mpghosts_playSound('gui_global_panel_close');
     }
@@ -1611,7 +1611,7 @@ statemachine class r_MultiplayerClient
 
         cancelPendingSyncedDialogChoice();
 
-        theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114207));
+        theGame.GetGuiManager().ShowNotification(WO_Text(2111114207));
 
         mpghosts_playSound('gui_global_panel_close');
     }
@@ -1734,7 +1734,7 @@ statemachine class r_MultiplayerClient
                 {
                     if(gwentProtocolMatches(players[i]))
                     {
-                        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114211));
+                        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114211));
                         mpghosts_playSound('gui_enchanting_runeword_remove');
                     }
                     else
@@ -1804,7 +1804,7 @@ statemachine class r_MultiplayerClient
 
         if(!override)
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114212));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114212));
             mpghosts_playSound('gui_global_panel_close');
         }
     }
@@ -1987,11 +1987,11 @@ statemachine class r_MultiplayerClient
     {
         if(localPlayerWon)
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114213));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114213));
         }
         else
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114214));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114214));
         }
 
         settleGwentBet(localPlayerWon);
@@ -2095,11 +2095,11 @@ statemachine class r_MultiplayerClient
         if(localPlayerWon)
         {
             thePlayer.AddMoney(activeGwentBet);
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114215) + " " + activeGwentBet + " " + GetLocStringById(2111114216));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114215) + " " + activeGwentBet + " " + WO_Text(2111114216));
         }
         else
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114217) + " " + activeGwentBet + " " + GetLocStringById(2111114218));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114217) + " " + activeGwentBet + " " + WO_Text(2111114218));
 
             if(activeGwentBet > thePlayer.GetMoney())
             {
@@ -2142,12 +2142,12 @@ statemachine class r_MultiplayerClient
 
         if(toRequest == id)
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114219));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114219));
             return false;
         }
         else if(inGwentGame)
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114220));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114220));
             return false;
         }
 
@@ -2228,7 +2228,7 @@ statemachine class r_MultiplayerClient
     {
         if(amount > thePlayer.GetMoney())
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114221));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114221));
             clearGwentRequestState();
             inGwentGame = false;
             return;
@@ -2246,7 +2246,7 @@ statemachine class r_MultiplayerClient
             outgoingGwentRequest = E_RequestNormal;
         }
 
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114222) + " " + outgoingGwentTo);
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114222) + " " + outgoingGwentTo);
         mpghosts_playSound('gui_global_highlight');
     }
 
@@ -2435,7 +2435,7 @@ statemachine class r_MultiplayerClient
                     thePlayer.GetInventory().RemoveItemByName(outgoingTradeItem, 1);
                     thePlayer.AddMoney(outgoingTradePrice);
                     mpghosts_playSound('gui_enchanting_runeword_add');
-                    GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114223));
+                    GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114223));
                     
                     outgoingTradeFlag = -4;
                     tradeLastCompleted = theGame.GetEngineTimeAsSeconds();
@@ -2446,7 +2446,7 @@ statemachine class r_MultiplayerClient
                 else if(players[i].outgoingTradeFlag == -3)
                 {
                     // reset our outgoing trade price
-                    GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114224));
+                    GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114224));
                     mpghosts_playSound('gui_enchanting_runeword_remove');
                     
                     outgoingTradeFlag = -4;
@@ -2478,7 +2478,7 @@ statemachine class r_MultiplayerClient
             {
                 if(players[i].outgoingTradePrice > thePlayer.GetMoney())
                 {
-                    GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114225));
+                    GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114225));
                     outgoingTradeFlag = -3;
                     mpghosts_playSound('gui_enchanting_runeword_remove');
                     tradeInProgress = false;
@@ -2493,7 +2493,7 @@ statemachine class r_MultiplayerClient
 
         mpghosts_playSound('gui_enchanting_runeword_add');
 
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114223));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114223));
 
         outgoingTradeFlag = -2;
         tradeInProgress = false;
@@ -2533,7 +2533,7 @@ statemachine class r_MultiplayerClient
         
         if(!inventory.IsIdValid(ids[0]))
         {
-            GetWitcherPlayer().DisplayHudMessage(user + " " + GetLocStringById(2111114226));
+            GetWitcherPlayer().DisplayHudMessage(user + " " + WO_Text(2111114226));
             declineTrade(true);
             return false;
         }
@@ -2574,7 +2574,7 @@ statemachine class r_MultiplayerClient
 
         if(player.id == id)
         {
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114227));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114227));
             return;
         }
         else if(player.isRiding && player.ridingPlayerId == serverPlayerId)
@@ -2892,7 +2892,7 @@ statemachine class r_MultiplayerClient
     {
         outgoingTradePrice = amount;
         outgoingTradeFlag = 0;
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114228) + " " + outgoingTradeTo.username);
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114228) + " " + outgoingTradeTo.username);
         mpghosts_playSound('gui_global_highlight');
     }
 
@@ -4559,7 +4559,7 @@ statemachine class r_MultiplayerClient
 
             if(!theGame.GetInGameConfigWrapper().GetVarValue('MPGhosts_Main', 'MPGhosts_HideJoinNotis'))
             {
-                theGame.GetGuiManager().ShowNotification(gp.username + " " + GetLocStringById(2111114208));
+                theGame.GetGuiManager().ShowNotification(gp.username + " " + WO_Text(2111114208));
             }
         }
 
@@ -4879,14 +4879,14 @@ statemachine class r_MultiplayerClient
             {
                 if(!seenPartyPlayers.Contains(gp.username))
                 {
-                    theGame.GetGuiManager().ShowNotification(gp.username + " " + GetLocStringById(2111114198));
+                    theGame.GetGuiManager().ShowNotification(gp.username + " " + WO_Text(2111114198));
                     mpghosts_playSound('gui_global_panel_open');
                     seenPartyPlayers.PushBack(gp.username);
                 }
             }
             else if(gp.lastInParty && gp.lastJoinedParty == username && (!inParty || joinedParty != username))
             {
-                theGame.GetGuiManager().ShowNotification(gp.username + " " + GetLocStringById(2111114199));
+                theGame.GetGuiManager().ShowNotification(gp.username + " " + WO_Text(2111114199));
                 mpghosts_playSound('gui_global_panel_close');
 
                 for(j = 0; j < seenPartyPlayers.Size(); j+=1)
@@ -5056,7 +5056,7 @@ statemachine class r_MultiplayerClient
         {
             if(!theGame.GetInGameConfigWrapper().GetVarValue('MPGhosts_Main', 'MPGhosts_HideJoinNotis'))
             {
-                theGame.GetGuiManager().ShowNotification(gp.username + " " + GetLocStringById(2111114209));
+                theGame.GetGuiManager().ShowNotification(gp.username + " " + WO_Text(2111114209));
             }
         }
 
@@ -5126,7 +5126,7 @@ statemachine class r_MultiplayerClient
                 {
                     if(!theGame.GetInGameConfigWrapper().GetVarValue('MPGhosts_Main', 'MPGhosts_HideJoinNotis'))
                     {
-                        theGame.GetGuiManager().ShowNotification(gp.username + " " + GetLocStringById(2111114209));
+                        theGame.GetGuiManager().ShowNotification(gp.username + " " + WO_Text(2111114209));
                     }
                 }
 
@@ -5224,9 +5224,9 @@ statemachine class r_MultiplayerClient
         var messagetitle : string;
         var messagebody : string;
         
-        messagetitle = GetLocStringById(2111114249);
-        messagebody = GetLocStringById(2111114250) + " '" +usernameTakenUser + "'.<br/><br/>"
-        + GetLocStringById(2111114251);
+        messagetitle = WO_Text(2111114249);
+        messagebody = WO_Text(2111114250) + " '" +usernameTakenUser + "'.<br/><br/>"
+        + WO_Text(2111114251);
 
         tutorialPopup(messagetitle, messagebody);
     }
@@ -5236,8 +5236,8 @@ statemachine class r_MultiplayerClient
         var messagetitle : string;
         var messagebody : string;
         
-        messagetitle = GetLocStringById(2111114249);
-        messagebody = GetLocStringById(2111114252);
+        messagetitle = WO_Text(2111114249);
+        messagebody = WO_Text(2111114252);
 
         tutorialPopup(messagetitle, messagebody);
     }
@@ -5247,8 +5247,8 @@ statemachine class r_MultiplayerClient
         var messagetitle : string;
         var messagebody : string;
         
-        messagetitle = GetLocStringById(2111114249);
-        messagebody = GetLocStringById(2111114253);
+        messagetitle = WO_Text(2111114249);
+        messagebody = WO_Text(2111114253);
 
         tutorialPopup(messagetitle, messagebody);
     }
@@ -5258,8 +5258,8 @@ statemachine class r_MultiplayerClient
         var messagetitle : string;
         var messagebody : string;
         
-        messagetitle = GetLocStringById(2111114249);
-        messagebody = GetLocStringById(2111114254);
+        messagetitle = WO_Text(2111114249);
+        messagebody = WO_Text(2111114254);
 
         tutorialPopup(messagetitle, messagebody);
     }
@@ -7115,11 +7115,11 @@ exec function ride(player : string)
     if(remotePlayer && remotePlayer.ghost)
     {
         theGame.r_getMultiplayerClient().ridePlayer(remotePlayer.ghost);
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114230) + " " + remotePlayer.username + GetLocStringById(2111114231));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114230) + " " + remotePlayer.username + WO_Text(2111114231));
     }
     else
     {
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114232));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114232));
     }
 }
 
@@ -7134,7 +7134,7 @@ exec function trade(player : string)
     }
     else
     {
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114232));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114232));
     }
 }
 
@@ -7548,7 +7548,7 @@ function mpghosts_teleport(user :string)
     {
         if(players[i].username == user)
         {
-            theGame.GetGuiManager().ShowNotification(GetLocStringById(2111114210) + " " + user);
+            theGame.GetGuiManager().ShowNotification(WO_Text(2111114210) + " " + user);
             if(players[i].area == WO_CurrentAreaCode())
             {
                 thePlayer.Teleport(players[i].pos);
@@ -7757,17 +7757,17 @@ exec function list()
         playerString = "players";
     }
 
-    messagetitle = "<p align=\"center\">" + GetLocStringById(2111114255) + "<br/></p>";
+    messagetitle = "<p align=\"center\">" + WO_Text(2111114255) + "<br/></p>";
     messagebody =
     "<p align=\"center\">"
-    + finalTotal + " " + playerString + " " + GetLocStringById(2111114256) + ", " + localFinalTotal + " " + GetLocStringById(2111114257) + "<br/><br/>"
-    + whiteOrchard + " " + GetLocStringById(2111114258) + "<br/>"
-    + velen + " " + GetLocStringById(2111114259) + "<br/>"
-    + skellige + " " + GetLocStringById(2111114260) + "<br/>"
-    + kaerMorhen + " " + GetLocStringById(2111114261) + "<br/>"
-    + toussaint + " " + GetLocStringById(2111114262) + "<br/>"
-    + vizima + " " + GetLocStringById(2111114263) + "<br/>"
-    + other + " " + GetLocStringById(2111114264)
+    + finalTotal + " " + playerString + " " + WO_Text(2111114256) + ", " + localFinalTotal + " " + WO_Text(2111114257) + "<br/><br/>"
+    + whiteOrchard + " " + WO_Text(2111114258) + "<br/>"
+    + velen + " " + WO_Text(2111114259) + "<br/>"
+    + skellige + " " + WO_Text(2111114260) + "<br/>"
+    + kaerMorhen + " " + WO_Text(2111114261) + "<br/>"
+    + toussaint + " " + WO_Text(2111114262) + "<br/>"
+    + vizima + " " + WO_Text(2111114263) + "<br/>"
+    + other + " " + WO_Text(2111114264)
     + "</p>";
 
     theGame.r_getMultiplayerClient().DisplayUserMessage(WitcherOnline_PlayerNotification(messagetitle, messagebody));
@@ -7954,7 +7954,7 @@ function mpghosts_morph(type : name)
     if(theGame.r_getMultiplayerClient().isRiding() || thePlayer.IsUsingHorse(false))
     {
         mpghosts_playSound('gui_global_denied');
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114233));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114233));
         return;
     }
 
@@ -7971,13 +7971,13 @@ function mpghosts_morph(type : name)
         else
         {
             mpghosts_playSound('gui_global_denied');
-            GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114234));
+            GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114234));
         }
     }
     else
     {
         mpghosts_playSound('gui_global_denied');
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114229));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114229));
     }
 }
 exec function cat()
@@ -8036,7 +8036,7 @@ exec function join(val : string)
     }
     else
     {
-        GetWitcherPlayer().DisplayHudMessage(GetLocStringById(2111114232));
+        GetWitcherPlayer().DisplayHudMessage(WO_Text(2111114232));
     }
 }
 

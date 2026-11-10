@@ -1021,7 +1021,7 @@ statemachine class r_RemotePlayer
             pin.position = pos;
         }
 
-        pin.description = username + GetLocStringById(2111114265);
+        pin.description = username + WO_Text(2111114265);
         pin.label = username;
         pin.type = "Player";
         pin.radius = 0;
@@ -1063,7 +1063,7 @@ statemachine class r_RemotePlayer
         }
 
         pin.rotation = playerAngle;
-        pin.description = username + GetLocStringById(2111114265);
+        pin.description = username + WO_Text(2111114265);
         pin.label = username;
         pin.region = area;
     }
@@ -1766,35 +1766,35 @@ statemachine class r_RemotePlayer
         }
 
         if(menuName == "InCutscene")
-            status = GetLocStringById(2111114105);
+            status = WO_Text(2111114105);
         else if(menuName == "Teleporting")
             status = "Teleporting...";
         else if (menuName == "IngameMenu")
-            status = GetLocStringById(2111114106);
+            status = WO_Text(2111114106);
         else if (menuName == "GlossaryBestiaryMenu")
-            status = GetLocStringById(2111114107);
+            status = WO_Text(2111114107);
         else if (menuName == "GlossaryTutorialsMenu")
-            status = GetLocStringById(2111114108);
+            status = WO_Text(2111114108);
         else if (menuName == "GlossaryEncyclopediaMenu")
-            status = GetLocStringById(2111114109);
+            status = WO_Text(2111114109);
         else if (menuName == "GlossaryBooksMenu")
-            status = GetLocStringById(2111114110);
+            status = WO_Text(2111114110);
         else if (menuName == "CraftingMenu")
-            status = GetLocStringById(2111114111);
+            status = WO_Text(2111114111);
         else if (menuName == "AlchemyMenu")
-            status = GetLocStringById(2111114112);
+            status = WO_Text(2111114112);
         else if (menuName == "InventoryMenu")
-            status = GetLocStringById(2111114113);
+            status = WO_Text(2111114113);
         else if (menuName == "MapMenu")
-            status = GetLocStringById(2111114114);
+            status = WO_Text(2111114114);
         else if (menuName == "JournalQuestMenu")
-            status = GetLocStringById(2111114115);
+            status = WO_Text(2111114115);
         else if (menuName == "CharacterMenu")
-            status = GetLocStringById(2111114116);
+            status = WO_Text(2111114116);
         else if (menuName == "MeditationClockMenu")
-            status = GetLocStringById(2111114117);
+            status = WO_Text(2111114117);
         else if (menuName == "BlacksmithMenu")
-            status = GetLocStringById(2111114118);
+            status = WO_Text(2111114118);
 
         if(status == "")
         {
