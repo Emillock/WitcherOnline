@@ -13,6 +13,7 @@ class r_CoopHostEnemy
     public var netId : int;
     public var lastSeenAt : float;
     public var deadAt : float;
+    public var deadSends : int;   // snapshots that went out saying it is dead (a scene stops them: count, don't time)
     public var attackSeq : int;
     public var attackAnim : name;
     public var attackTarget : string;  // the player it attacks, for members' copies to attack the same
@@ -93,6 +94,7 @@ class r_CoopPuppet
     public var npc : CNewNPC;
     public var netId : int;
     public var seenAt : float;  // the last snapshot that named it (UpdatePuppets drops ones the leader went quiet on)
+    public var heldSince : float;  // since when its clock has been stopped for the leader's scene (0: running)
     public var hitSoundAt : float;   // when to make sure a hit of this player's was heard (0: nothing waiting)
     public var hitSoundHeavy : bool; // which of the two the base game would have played
     public var killedAt : float;  // when it was killed here (it may yet be standing: see FreeStuckPuppet)
@@ -436,6 +438,8 @@ class r_CoopEnemies
 
     // scenes and the leader's tracking (sent with the journal list)
     private var currentScene : string;
+    private var sceneIsTest : bool;        // named by SetSceneForTest: the engine knows nothing of it
+    private var sceneIdleSince : float;    // since when the engine has disagreed that a scene is playing
     private var sceneSkipSeq : int;
     private var sceneSkipValue : int;
     private var applyingSkip : bool;
@@ -793,6 +797,7 @@ class r_CoopEnemies
             sendsInWindow = 0;
             rateWindowAt = now;
         }
+        HealSceneFlag(now);
         HoldForScene(now);
         RetryFactsBaseline(now);
         SendParkedHorse(now);
@@ -973,7 +978,11 @@ class r_CoopEnemies
                 e.deadAt = now;
                 WatchDrop(e, now);
             }
-            if((e.deadAt >= 0 && now - e.deadAt > 4.0) || (e.deadAt < 0 && now - e.lastSeenAt > 3.0))
+            // 60 snapshots of "it is dead" (about 2 s of a normal fight) instead of 4 s of clock: no tick runs
+            // while this game is in a scene, and a death retired meanwhile was never told to anyone. The 30 s is
+            // for the case where nothing is going out at all.
+            if((e.deadAt >= 0 && (e.deadSends >= 60 || now - e.deadAt > 30.0))
+                || (e.deadAt < 0 && now - e.lastSeenAt > 3.0))
             {
                 hostEnemies.Erase(i);
             }
@@ -1111,6 +1120,10 @@ class r_CoopEnemies
             if(e.deadAt < 0)
             {
                 alive = 1;
+            }
+            else
+            {
+                e.deadSends += 1;
             }
 
             body += " " + e.netId + " " + tplIndex + " " + CoopEncode(NameToString(e.npc.GetAppearance()))
@@ -6470,7 +6483,26 @@ class r_CoopEnemies
                 puppets.Erase(i);
                 continue;
             }
-            if(now - p.seenAt > 5.0 && !PlayerInScene(leaderName))
+            // The leader's game sends nothing while a scene plays there. Hold the copy by stopping its clock,
+            // not by skipping the check: skipping it left the copy stale, and it went the instant the scene ended,
+            // before the snapshot that says it died could arrive. Capped, so a leader whose scene flag stuck
+            // cannot keep its monsters standing here for as long as the party lasts.
+            if(PlayerInScene(leaderName))
+            {
+                if(p.heldSince == 0)
+                {
+                    p.heldSince = now;
+                }
+                if(now - p.heldSince < 30.0)
+                {
+                    p.seenAt = now;
+                }
+            }
+            else
+            {
+                p.heldSince = 0;
+            }
+            if(now - p.seenAt > 5.0)
             {
                 puppetsTimedOut += 1;
                 LogSync("PT", p.netId, 0, FloatToStringPrec(now - p.seenAt, 1));
@@ -7459,19 +7491,56 @@ class r_CoopEnemies
         {
             currentScene = scene.GetPath();
         }
+        sceneIsTest = false;
+        sceneIdleSince = 0;
         SendSceneNow();
     }
 
     public function OnSceneEnded()
     {
         currentScene = "";
+        sceneIsTest = false;
+        sceneIdleSince = 0;
         SendSceneNow();
+    }
+
+    // A scene whose end hook never came (one interrupted, or a kind CStoryScenePlayer does not report) would leave
+    // this game saying it is in a scene for good: the others would hold copies of monsters that died here and keep
+    // being offered the chance to wait for it. This loop does not run during a scene, so finding the flag set with
+    // nothing playing means it is over - after a second of agreement, in case a scene starts between two ticks.
+    private function HealSceneFlag(now : float)
+    {
+        if(currentScene == "" || sceneIsTest)
+        {
+            sceneIdleSince = 0;
+            return;
+        }
+        if(theGame.IsDialogOrCutscenePlaying() || thePlayer.IsInNonGameplayCutscene()
+            || theGame.IsCurrentlyPlayingNonGameplayScene())
+        {
+            sceneIdleSince = 0;
+            return;
+        }
+        if(sceneIdleSince == 0)
+        {
+            sceneIdleSince = now;
+            return;
+        }
+        if(now - sceneIdleSince > 1.0)
+        {
+            LogSync("SH", 0, 0, currentScene);
+            currentScene = "";
+            sceneIdleSince = 0;
+            SendSceneNow();
+        }
     }
 
     // the bots have no quest scene to share; they name one
     public function SetSceneForTest(path : string)
     {
         currentScene = path;
+        sceneIsTest = path != "";
+        sceneIdleSince = 0;
         SendSceneNow();
     }
 
