@@ -29,6 +29,9 @@ statemachine class r_RemotePlayer
     public var lastMovementSequence : int;
     public var id      : string;
     public var lastUpdate : float;
+    public var lastTargPos : Vector;   // where we were told this player stood a third of a second ago, when that
+    public var lastTargAt : float;     // was sampled, and whether it has moved since: a ghost whose target stands
+    public var targetMoving : bool;    // still is not walking, whatever centimetre it may be short of it
     public var username      : string;
     public var idName      : name;
     public var pos     : Vector;
@@ -6340,29 +6343,43 @@ statemachine class r_RemotePlayer
             return;
         }
 
-        if (dist > 0.01f)
+        // Where we are told this player stands has not changed for a moment: its game is paused on a menu or the
+        // map, or its messages have stopped. The ghost is usually a centimetre or two short of the last position
+        // sent, and one centimetre was enough to keep a walk direction classified below - which is why a paused
+        // player was seen striding on the spot. Whether anything ARRIVES is no test: the server echoes the last
+        // position several times a second even when its game is sending nothing.
+        if(theGame.GetEngineTimeAsSeconds() - lastTargAt > 0.35)
+        {
+            // two centimetres in a third of a second: slower than anything a player can walk, and a paused game
+            // moves not at all. In three dimensions, so climbing a ladder counts as moving.
+            targetMoving = lastTargAt == 0 || VecDistance(targpos, lastTargPos) > 0.02;
+            lastTargPos = targpos;
+            lastTargAt = theGame.GetEngineTimeAsSeconds();
+        }
+
+        if (dist > 0.01f && targetMoving)
             lastMoveDir = ClassifyMoveDirRelativeToCamera(entpos, targpos, heading);
         else
             lastMoveDir = 'none';
 
-        if (dist > 0.5f)
+        if (dist > 0.5f && targetMoving)
             lastMoveDirAlt = ClassifyMoveDirRelativeToCamera(entpos, targpos, heading);
         else
             lastMoveDirAlt = 'none';
 
-        if (dist > 1.0f)
+        if (dist > 1.0f && targetMoving)
             lastMoveDirAltAlt = ClassifyMoveDirRelativeToCamera(entpos, targpos, heading);
         else
             lastMoveDirAltAlt = 'none';
 
-        if (verticalDist > 0.25f)
+        if (verticalDist > 0.25f && targetMoving)
             lastVerticalMoveDir = ClassifyVerticalMoveDir(entpos, targpos);
         else
             lastVerticalMoveDir = 'none';
 
         if(isLadder)
         {
-            if (verticalDist > 0.15f)
+            if (verticalDist > 0.15f && targetMoving)
                 lastVerticalMoveDir = ClassifyVerticalMoveDir(entpos, targpos);
             else
                 lastVerticalMoveDir = 'none';

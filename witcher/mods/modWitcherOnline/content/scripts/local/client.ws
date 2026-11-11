@@ -3300,6 +3300,10 @@ statemachine class r_MultiplayerClient
             doMove = true;
         }
 
+        if(doMove && getCoopEnemies().muteMove)
+        {
+            doMove = false;   // tests: as a paused game, which sends nothing
+        }
         if(doMove && !WO_Send("move "+wo_getMovementData()))
         {
             return;
@@ -6419,6 +6423,10 @@ statemachine class r_MultiplayerClient
         list += theGame.r_getMultiplayerClient().getQuenImpulseSeq();
         list += " ";
 
+        if(getCoopEnemies().muteMove)
+        {
+            return;   // tests: this game says nothing, as a paused one does
+        }
         WO_Send("wo "+wo_getMovementData()+list);
     }
 
@@ -6586,6 +6594,10 @@ statemachine class r_MultiplayerClient
         }
         list += " ";
 
+        if(getCoopEnemies().muteMove)
+        {
+            return;   // tests: this game says nothing, as a paused one does
+        }
         WO_Send("wo2 "+wo_getMovementData()+list);
     }
 
@@ -6649,6 +6661,10 @@ statemachine class r_MultiplayerClient
         list += WO_GwentDeckFields(deck);
         list += " ";
 
+        if(getCoopEnemies().muteMove)
+        {
+            return;   // tests: this game says nothing, as a paused one does
+        }
         WO_Send("wo3 "+wo_getMovementData()+list);
     }
 
@@ -6834,6 +6850,10 @@ statemachine class r_MultiplayerClient
         list += thePlayer.GetHealthPercents();
         list += " ";
 
+        if(getCoopEnemies().muteMove)
+        {
+            return;   // tests: this game says nothing, as a paused one does
+        }
         WO_Send("wo4 "+wo_getMovementData()+list);
     }
 

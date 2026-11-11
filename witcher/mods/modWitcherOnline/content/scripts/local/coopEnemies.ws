@@ -469,6 +469,7 @@ class r_CoopEnemies
     private var versionWarned : array<string>;  // players told about (by name: version)
     public var versionWarnings : int;
     public var muteHz : bool;               // tests: send no presence message (as an older W3Coop or server)
+    public var muteMove : bool;             // tests: send no movement at all (a game paused on a menu or the map)
     public var muteHost : bool;             // tests: send no monster snapshot (a leader that went quiet)
     public var muteWoClock : bool;          // tests: leave Witcher Online's own clock sync out of it
     private var nearUsers : array<string>;  // players near, and since when (CheckSilentPlayers)
@@ -3379,6 +3380,18 @@ class r_CoopEnemies
     // Someone a player would walk up to: a character this world placed for its own reasons, not one of the
     // crowd walking past, not a monster (those are shared as copies), not another player. Remastered answers
     // GetReadableName with the entity template's path, which is what tells them apart.
+    // Whether this person is on their feet, from how far the head is above them: about 1.6 m standing, and under
+    // half of that asleep or sitting. The figures stood in a member's world have no pose of their own, so one of
+    // these would stand where its original lies - which is what a player met, and read as a bug.
+    private function StandsUpright(npc : CNewNPC) : bool
+    {
+        var head, feet : Vector;
+
+        head = CoopBoneSpot(npc, 'head');
+        feet = npc.GetWorldPosition();
+        return head.Z - feet.Z > 1.0;
+    }
+
     private function IsSomeoneToTalkTo(actor : CActor) : bool
     {
         var npc : CNewNPC;
@@ -3401,6 +3414,10 @@ class r_CoopEnemies
         if(StrFindFirst(path, "community_npcs") >= 0 || StrFindFirst(path, "crowd_npc") >= 0)
         {
             return false;
+        }
+        if(!StandsUpright(npc))
+        {
+            return false;   // asleep, sitting, on the ground: a figure stood here would be stood wrongly
         }
         return StrFindFirst(path, "dlc_mpmod") < 0;
     }
@@ -4327,16 +4344,20 @@ class r_CoopEnemies
         }
         if(!leader || leader.area == 0)
         {
-            travelLeader = "";
-            travelJumpAt = 0;
+            // Keep where it was. A leader in a loading screen leaves the player list, or reports no area at all,
+            // and forgetting here meant its arrival elsewhere looked like a new leader instead of a journey - so
+            // nobody was ever asked to follow a fast travel, which is a loading screen by definition.
             return;
         }
         if(leader.username != travelLeader)
         {
             travelLeader = leader.username;
+            travelArea = leader.area;
+            travelPos = leader.pos;
             travelJumpAt = 0;
+            return;
         }
-        else if(leader.area != travelArea || VecDistance(leader.pos, travelPos) >= 200)
+        if(leader.area != travelArea || VecDistance(leader.pos, travelPos) >= 200)
         {
             travelJumpAt = now;
         }
