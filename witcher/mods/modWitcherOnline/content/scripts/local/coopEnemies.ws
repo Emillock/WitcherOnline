@@ -7408,6 +7408,13 @@ class r_CoopEnemies
         {
             return;
         }
+        // Nothing here is urgent - the change list carries what just happened - so it keeps out of the way of a
+        // fight, where the line this would add is a page of journal against every monster's every move.
+        if(thePlayer.IsInCombat() || thePlayer.GetHostileEnemiesCount() > 0)
+        {
+            snapAt = now;
+            return;
+        }
         snapAt = now;
         if(snapPage == 0)
         {
@@ -7963,12 +7970,12 @@ class r_CoopEnemies
             }
             return;
         }
-        if(followSkips >= 3)
+        if(followSkips >= 3 || now < followNextAt)
         {
             return;
         }
         followSkips += 1;
-        followNextAt = now + 1.0;
+        followNextAt = now + 1.0;   // a second apart, as a player pressing skip would be
         theGame.GetStorySceneSystem().SendSignal(SSST_Skip, 1);
     }
 
