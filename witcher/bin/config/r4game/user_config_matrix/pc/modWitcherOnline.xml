@@ -14,6 +14,7 @@
 				<Entry varId="MPGhosts_AutoDeclineTrade" value="false"/>
 				<Entry varId="MPGhosts_AutoDeclineGwent" value="false"/>
 				<Entry varId="MPGhosts_LocalEnemiesOnly" value="false"/>
+				<Entry varId="MPGhosts_FollowCutscenes" value="false"/>
 			</Preset>
 		</PresetsArray>
 		<VisibleVars>
@@ -49,6 +50,7 @@
 			<Var id="MPGhosts_AutoDeclineTrade" displayName="MPGhosts_AutoDeclineTrade" displayType="TOGGLE"/>
 			<Var id="MPGhosts_AutoDeclineGwent" displayName="MPGhosts_AutoDeclineGwent" displayType="TOGGLE"/>
 			<Var id="MPGhosts_LocalEnemiesOnly" displayName="MPGhosts_LocalEnemiesOnly" displayType="TOGGLE"/>
+			<Var id="MPGhosts_FollowCutscenes" displayName="MPGhosts_FollowCutscenes" displayType="TOGGLE"/>
 		</VisibleVars>
 		
 	</Group>

@@ -441,9 +441,38 @@ class r_CoopEnemies
     private var sceneIsTest : bool;        // named by SetSceneForTest: the engine knows nothing of it
     private var sceneIdleSince : float;    // since when the engine has disagreed that a scene is playing
     private var sceneSkipSeq : int;
+
+    // following the leader's scene: what it reported, which of the scene's inputs are left to try, and the
+    // counters the tests read
+    private var sceneSeq : int;                  // this game's own scene counter, sent with the path
+    private var followPath : string;
+    private var followKind : int;                // 1 a scene with gameplay, 2 a cutscene
+    private var followSeq : int;
+    private var followDone : int;                // the leader scene counter already dealt with
+    private var followInputs : array<string>;
+    private var followTry : int;
+    private var followNextAt : float;
+    private var followSince : float;             // when the leader's scene was first heard of
+    private var followEndedAt : float;           // when the leader left the scene this game followed
+    private var followedScene : string;          // the scene this game started by following, while it plays
+    public var followSkips : int;                // skips sent to leave a followed scene the leader has left
+    public var sceneFollows : int;               // scenes this game started by following its leader
+    public var sceneLines : int;                 // scene lines heard, before any of the checks below
+    private var sceneLineAt : float;             // when this game last said what scene it is in
+    private var sceneTick : int;                 // changes every send: an unchanged payload goes out once
+    private var followForced : bool;             // the tests' way past the options menu (SetFollowForTest)
+    public var sceneFollowTries : int;
+    public var lastFollowInput : string;
+    public var lastFollowFault : string;
     private var sceneSkipValue : int;
     private var applyingSkip : bool;
     private var sentTrackedQuest : name;
+    // the journal snapshot the leader pages out
+    private var snapTags : array<name>;
+    private var snapPage : int;
+    private var snapAt : float;
+    private var snapTick : int;
+    public var snapActive : int;        // how many of the snapshot's entries are active quests (the first pages)
     private var sentHighlighted : name;
     private var leaderTrackedQuest : name;
     private var leaderHighlighted : name;
@@ -701,6 +730,10 @@ class r_CoopEnemies
     public var graphAttacksRefused : int;
     public var graphEndsPlayed : int;
     public var journalApplied : int;
+    public var snapsApplied : int;      // entries taken from a snapshot page rather than the change list
+    public var snapPages : int;         // snapshot pages heard
+    public var lastSnapApplied : name;
+    public var lastSnapStatus : int;
     public var lastJournalApplied : name;
     public var journalMessages : int;   // journal lists accepted from the leader
     public var journalMissing : int;    // entries this game could not find
@@ -830,7 +863,12 @@ class r_CoopEnemies
             {
                 lastJournalSend = -999;
             }
+            if(currentScene != "" && now - sceneLineAt > 1.0)
+            {
+                SendSceneLine();   // again: a member listening only now can still follow this cutscene
+            }
             SendJournal(now);
+            SendJournalSnapshot(now);
             SendFacts(now);
             SendNearPeople(now);
             SendDrops(now);
@@ -877,6 +915,7 @@ class r_CoopEnemies
             SendHits(now);
             GiveDrops(now);
             CheckMissingPeople();
+            FollowLeaderScene(now);
             if(mirrors.Size() > 0 && now - peopleHeardAt > 8.0)
             {
                 SendEveryoneAway();   // the leader went quiet: nobody is left standing for it
@@ -3787,6 +3826,14 @@ class r_CoopEnemies
         {
             OnFacts(sender, count);
         }
+        else if(WO_Str(0) == "sc")
+        {
+            OnScenePlay(sender, count);
+        }
+        else if(WO_Str(0) == "jn")
+        {
+            OnJournalSnapshot(sender, count);
+        }
         else if(WO_Str(0) == "hz")
         {
             OnParkedHorse(sender);
@@ -4118,6 +4165,10 @@ class r_CoopEnemies
         {
             return;
         }
+        if(followPath != "" && p.username == leaderName && FollowCutscenesOn())
+        {
+            return;   // this game is about to play that scene itself
+        }
         if(VecDistance(p.pos, thePlayer.GetWorldPosition()) > 60)
         {
             return;
@@ -4183,6 +4234,16 @@ class r_CoopEnemies
         waitingFor = "";
         waitingUntil = 0;
         thePlayer.BlockAllActions('W3CoopWait', false);
+    }
+
+    public function SceneNow() : string
+    {
+        return currentScene;
+    }
+
+    public function LeaderSceneSeen() : string
+    {
+        return leaderSceneSeen;
     }
 
     public function WaitingForScene() : string
@@ -7335,6 +7396,118 @@ class r_CoopEnemies
         lastJournalSend = now;
     }
 
+    // "jn epoch tick page pages count {tag status}": one page of every quest this game knows and their
+    // objectives, in turn. A cycle takes a minute or so on a late save; nothing here is urgent, the change
+    // list carries what just happened.
+    private function SendJournalSnapshot(now : float)
+    {
+        var text : string;
+        var pages, first, last, i : int;
+
+        if(now - snapAt < 1.5)
+        {
+            return;
+        }
+        snapAt = now;
+        if(snapPage == 0)
+        {
+            // Only what this game has reached: an entry that is still inactive here can advance nobody, and
+            // most of a journal is inactive objectives of quests not come to yet. What is active goes in the
+            // first pages, every cycle - that is the part a member needs to see the same world - and what is
+            // already done or failed follows, which on a long save is most of the list.
+            BuildJournalIndex();
+            snapTags.Clear();
+            for(i = 0; i < journalIndexTags.Size(); i += 1)
+            {
+                if(JournalStatusOf(journalIndexTags[i]) == (int)JS_Active)
+                {
+                    snapTags.PushBack(journalIndexTags[i]);
+                }
+            }
+            snapActive = snapTags.Size();
+            for(i = 0; i < journalIndexTags.Size(); i += 1)
+            {
+                if(JournalStatusOf(journalIndexTags[i]) > (int)JS_Active)
+                {
+                    snapTags.PushBack(journalIndexTags[i]);
+                }
+            }
+        }
+        if(snapTags.Size() == 0)
+        {
+            return;
+        }
+        first = snapPage * 32;
+        if(first >= snapTags.Size())
+        {
+            snapPage = 0;
+            return;   // the cycle starts again on the next send, with the journal walked afresh
+        }
+        last = Min(first + 32, snapTags.Size());
+        pages = (snapTags.Size() + 31) / 32;
+        snapTick += 1;
+        text = "coop jn " + epoch + " " + snapTick + " " + snapPage + " " + pages + " " + (last - first);
+        for(i = first; i < last; i += 1)
+        {
+            text += " " + CoopEncode(NameToString(snapTags[i])) + " " + JournalStatusOf(snapTags[i]);
+        }
+        snapPage += 1;
+        WO_Send(text);
+    }
+
+    // Forward only, like the change list, and quiet: a snapshot says what the leader's journal holds, which on
+    // a save that is further along than the leader's would otherwise report every old quest as "behind".
+    private function OnJournalSnapshot(sender : string, count : int)
+    {
+        var manager : CWitcherJournalManager;
+        var journalEntry : CJournalBase;
+        var tag : name;
+        var status, current, n, i, idx : int;
+
+        if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 6
+            || StringToInt(WO_Str(1), 0) != leaderEpoch)
+        {
+            return;
+        }
+        manager = theGame.GetJournalManager();
+        snapPages += 1;
+        n = StringToInt(WO_Str(5), 0);
+        idx = 6;
+        for(i = 0; i < n && idx + 1 < count; i += 1)
+        {
+            tag = WO_NameAt(idx);
+            status = StringToInt(WO_Str(idx + 1), 0);
+            idx += 2;
+
+            journalEntry = FindJournalEntry(tag);
+            if(!journalEntry)
+            {
+                journalMissing += 1;
+            }
+            else
+            {
+                current = (int)manager.GetEntryStatus(journalEntry);
+                if(JournalAdvances(current, status))
+                {
+                    applyingJournal = true;
+                    manager.ActivateEntry(journalEntry, (EJournalStatus)status, true, true);
+                    applyingJournal = false;
+                    snapsApplied += 1;
+                    lastSnapApplied = tag;
+                    lastSnapStatus = status;
+                }
+            }
+        }
+    }
+
+    // the bots have no second save to join with: this drops the change list, leaving the snapshot as the only
+    // way the leader's progress can reach a member
+    public function ClearJournalChangesForTest()
+    {
+        journalTags.Clear();
+        journalStatus.Clear();
+    }
+
     private function OnJournal(sender : string, count : int)
     {
         var manager : CWitcherJournalManager;
@@ -7514,7 +7687,9 @@ class r_CoopEnemies
         }
         sceneIsTest = false;
         sceneIdleSince = 0;
+        sceneSeq += 1;
         SendSceneNow();
+        SendSceneLine();
     }
 
     public function OnSceneEnded()
@@ -7523,12 +7698,285 @@ class r_CoopEnemies
         sceneIsTest = false;
         sceneIdleSince = 0;
         SendSceneNow();
+        SendSceneLine();
+    }
+
+    // "sc epoch seq path kind": the scene this game just entered or left, sent from the scene hook itself so a
+    // member hears it at once (the leader's own tick keeps running during a scene, but a second of waiting is a
+    // second of the cutscene). Only a leader sends it: a member follows its leader, not the other way about.
+    private function SendSceneLine()
+    {
+        var kind : int;
+
+        if(GetRole() != 1)
+        {
+            return;
+        }
+        if(currentScene != "")
+        {
+            kind = 1;
+            if(theGame.IsCurrentlyPlayingNonGameplayScene() || thePlayer.IsInNonGameplayCutscene())
+            {
+                kind = 2;
+            }
+        }
+        sceneLineAt = theGame.GetEngineTimeAsSeconds();
+        sceneTick += 1;
+        WO_Send("coop sc " + epoch + " " + sceneTick + " " + sceneSeq + " " + CoopEncode(currentScene)
+            + " " + kind);
+    }
+
+    private function OnScenePlay(sender : string, count : int)
+    {
+        var path : string;
+        var seq : int;
+
+        sceneLines += 1;
+        if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 6
+            || StringToInt(WO_Str(1), 0) != leaderEpoch)
+        {
+            return;
+        }
+        seq = StringToInt(WO_Str(3), 0);
+        path = CoopDecode(WO_Str(4));
+        if(path == "")
+        {
+            // the leader's scene is over: a scene this game followed should end with it
+            if(followEndedAt == 0 && currentScene != "" && followedScene != ""
+                && StrLower(currentScene) == StrLower(followedScene))
+            {
+                followEndedAt = theGame.GetEngineTimeAsSeconds();
+            }
+            followPath = "";
+            followInputs.Clear();
+            return;
+        }
+        if(seq == followDone || seq == followSeq)
+        {
+            return;
+        }
+        followSeq = seq;
+        followPath = path;
+        followKind = StringToInt(WO_Str(5), 0);
+        followTry = 0;
+        followEndedAt = 0;
+        followSkips = 0;
+        followInputs.Clear();
+        followSince = theGame.GetEngineTimeAsSeconds();
+        followNextAt = followSince + 0.3;
+    }
+
+    // Whether the leader says it is in a cutscene rather than a scene with gameplay. The kind that rides with
+    // the path is what the engine knew the instant the scene began, which can still be "gameplay"; the
+    // presence flag in the leader's own snapshot is read while the scene plays, so it settles the matter.
+    private function LeaderInCutscene() : bool
+    {
+        var p : r_RemotePlayer;
+
+        if(followKind == 2)
+        {
+            return true;
+        }
+        p = mpghosts_getPlayer(leaderName);
+        return p && p.inCutscene;
+    }
+
+    public function FollowCutscenesOn() : bool
+    {
+        if(followForced)
+        {
+            return true;
+        }
+        return theGame.GetInGameConfigWrapper().GetVarValue('MPGhosts_Main', 'MPGhosts_FollowCutscenes');
+    }
+
+    // the bots have no options menu: a changed option does not survive the config being applied again
+    public function SetFollowForTest(on : bool)
+    {
+        followForced = on;
+    }
+
+    // The scene's inputs, the likeliest first: the editor's default name, then the ones that lead straight
+    // into a cinematic section (the table marks those with a '*'), then the rest in the order the scene lists
+    // them. A scene with one input is the common case; the tries stop well before a dialogue hub's dozens.
+    private function FollowInputsFor(path : string) : array<string>
+    {
+        var named, cinematic, rest, ordered : array<string>;
+        var pieces : array<string>;
+        var piece : string;
+        var i : int;
+
+        pieces = StrSplit(WO_SceneInputs(path), "|");
+        for(i = 0; i < pieces.Size(); i += 1)
+        {
+            piece = pieces[i];
+            if(StrEndsWith(piece, "*"))
+            {
+                cinematic.PushBack(StrLeft(piece, StrLen(piece) - 1));
+            }
+            else if(piece == "Input")
+            {
+                named.PushBack(piece);
+            }
+            else if(piece != "")
+            {
+                rest.PushBack(piece);
+            }
+        }
+        for(i = 0; i < named.Size(); i += 1)
+        {
+            ordered.PushBack(named[i]);
+        }
+        for(i = 0; i < cinematic.Size(); i += 1)
+        {
+            ordered.PushBack(cinematic[i]);
+        }
+        for(i = 0; i < rest.Size(); i += 1)
+        {
+            ordered.PushBack(rest[i]);
+        }
+        return ordered;
+    }
+
+    // One try every 1.5 s while the leader is in the scene, at most four: PlayScene is silent when the input
+    // is not the leader's or when the scene's people are missing here, so there is nothing to undo.
+    private function FollowLeaderScene(now : float)
+    {
+        var scene : CStoryScene;
+        var input : string;
+
+        if(followEndedAt > 0)
+        {
+            LetFollowedSceneGo(now);
+        }
+        if(followPath == "")
+        {
+            return;
+        }
+        if(StrLower(currentScene) == StrLower(followPath))
+        {
+            sceneFollows += 1;
+            lastFollowFault = "";
+            followedScene = currentScene;
+            LogSync("CF", followTry, 0, lastFollowInput);
+            followDone = followSeq;
+            followPath = "";
+            followInputs.Clear();
+            return;
+        }
+        if(now - followSince > 30.0)
+        {
+            lastFollowFault = "gave up waiting";
+            followDone = followSeq;
+            followPath = "";
+            followInputs.Clear();
+            return;
+        }
+
+        // reasons that can pass while this cutscene still runs: hold the scene and try again later
+        lastFollowFault = "";
+        if(!FollowCutscenesOn())
+        {
+            lastFollowFault = "switched off";
+        }
+        else if(currentScene != "")
+        {
+            lastFollowFault = "in a scene already";
+        }
+        else if(!thePlayer.IsAlive())
+        {
+            lastFollowFault = "dead";
+        }
+        else if(thePlayer.IsInCombat())
+        {
+            lastFollowFault = "in combat";
+        }
+        else if(!LeaderNear())
+        {
+            lastFollowFault = "the leader is not near";
+        }
+        if(lastFollowFault != "")
+        {
+            return;
+        }
+        if(!LeaderInCutscene())
+        {
+            // a scene with gameplay, or the kind not settled yet: dialogues are each player's own, and their
+            // choices already follow the leader's
+            if(now - followSince > 2.5)
+            {
+                lastFollowFault = "not a cutscene";
+                followDone = followSeq;
+                followPath = "";
+            }
+            return;
+        }
+        if(now < followNextAt)
+        {
+            return;
+        }
+        if(followTry == 0)
+        {
+            followInputs = FollowInputsFor(followPath);
+            if(followInputs.Size() == 0)
+            {
+                lastFollowFault = "no inputs in the table";
+                followDone = followSeq;
+                followPath = "";
+                return;
+            }
+        }
+        if(followTry >= followInputs.Size() || followTry >= 4)
+        {
+            lastFollowFault = "tried " + followTry + " inputs, none played";
+            followDone = followSeq;
+            followPath = "";
+            followInputs.Clear();
+            return;
+        }
+        scene = (CStoryScene)LoadResource(followPath, true);
+        if(!scene)
+        {
+            lastFollowFault = "the scene did not load";
+            followDone = followSeq;
+            followPath = "";
+            return;
+        }
+        input = followInputs[followTry];
+        lastFollowInput = input;
+        followTry += 1;
+        sceneFollowTries += 1;
+        followNextAt = now + 1.5;
+        theGame.GetStorySceneSystem().PlayScene(scene, input);
+    }
+
+    // The leader's scene ended while this game was still in the one it followed: give it a few seconds of its
+    // own (the two scenes rarely run exactly together), then skip out, as a player would.
+    private function LetFollowedSceneGo(now : float)
+    {
+        if(currentScene == "" || now - followEndedAt < 6.0)
+        {
+            if(currentScene == "")
+            {
+                followEndedAt = 0;
+                followedScene = "";
+            }
+            return;
+        }
+        if(followSkips >= 3)
+        {
+            return;
+        }
+        followSkips += 1;
+        followNextAt = now + 1.0;
+        theGame.GetStorySceneSystem().SendSignal(SSST_Skip, 1);
     }
 
     // A scene whose end hook never came (one interrupted, or a kind CStoryScenePlayer does not report) would leave
     // this game saying it is in a scene for good: the others would hold copies of monsters that died here and keep
-    // being offered the chance to wait for it. This loop does not run during a scene, so finding the flag set with
-    // nothing playing means it is over - after a second of agreement, in case a scene starts between two ticks.
+    // being offered the chance to wait for it. The flag standing while the engine says nothing is playing means it
+    // is over - after a second of agreement, in case a scene starts between two ticks. (This loop does keep running
+    // during a scene, measured at its usual 30 a second, which is what lets a member follow and skip along.)
     private function HealSceneFlag(now : float)
     {
         if(currentScene == "" || sceneIsTest)
@@ -7553,6 +8001,7 @@ class r_CoopEnemies
             currentScene = "";
             sceneIdleSince = 0;
             SendSceneNow();
+            SendSceneLine();
         }
     }
 
@@ -7562,7 +8011,12 @@ class r_CoopEnemies
         currentScene = path;
         sceneIsTest = path != "";
         sceneIdleSince = 0;
+        if(path != "")
+        {
+            sceneSeq += 1;
+        }
         SendSceneNow();
+        SendSceneLine();
     }
 
     // The leader skipped a line or cutscene: members in the same scene skip with it.

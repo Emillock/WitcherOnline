@@ -501,6 +501,80 @@ namespace wo_native
 		ReturnString(frame, result, text);
 	}
 
+	// ---------------------------------------------------------------- scene inputs
+
+	// A game knows the path of the scene it is watching (CStoryScene.GetPath) but not which of the scene's
+	// inputs it entered at, and PlayScene needs one by name. Input names are written by hand
+	// ("in_first_body", "Input", ...), so a game that wants to play the same scene cannot guess them:
+	// scene_inputs.py reads them out of the game's own bundles into scene_inputs.txt, and this hands a
+	// scene's inputs to the scripts, cinematic ones marked with a trailing '*'.
+	static std::unordered_map<std::string, std::string> g_sceneInputs;
+	static bool g_sceneInputsLoaded = false;
+
+	static std::string NormalisePath(std::string path)
+	{
+		std::replace(path.begin(), path.end(), '/', '\\');
+		std::transform(path.begin(), path.end(), path.begin(),
+		               [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+		return path;
+	}
+
+	// <game>\mods\modWitcherOnline\<name>, from the running exe in <game>\bin\x64_dx12
+	static std::string ModFile(const char *name)
+	{
+		char exe[MAX_PATH]{};
+		if (GetModuleFileNameA(nullptr, exe, MAX_PATH) == 0)
+			return std::string();
+		std::string path(exe);
+		for (int up = 0; up < 3; ++up)
+		{
+			const size_t slash = path.find_last_of("\\/");
+			if (slash == std::string::npos)
+				return std::string();
+			path.resize(slash);
+		}
+		return path + "\\mods\\modWitcherOnline\\" + name;
+	}
+
+	static void LoadSceneInputs()
+	{
+		g_sceneInputsLoaded = true;
+		const std::string file = ModFile("scene_inputs.txt");
+		std::ifstream in(file);
+		if (!in)
+		{
+			DebugLog("scene inputs: no table at " + file + " (following another player's scene is off)");
+			return;
+		}
+		std::string line;
+		while (std::getline(in, line))
+		{
+			if (!line.empty() && line.back() == '\r')
+				line.pop_back();
+			const size_t tab = line.find('\t');
+			if (line.empty() || line[0] == '#' || tab == std::string::npos)
+				continue;
+			g_sceneInputs.emplace(NormalisePath(line.substr(0, tab)), line.substr(tab + 1));
+		}
+		DebugLog("scene inputs: " + std::to_string(g_sceneInputs.size()) + " scenes from " + file);
+	}
+
+	static void WO_SceneInputs(void *, void *frame, void *result)
+	{
+		WNB_String text{};
+		const int size = WNB_ReadStringParameter(frame, &text);
+
+		if (!g_sceneInputsLoaded)
+			LoadSceneInputs();
+		if (size <= 0)
+		{
+			ReturnString(frame, result, "");
+			return;
+		}
+		const auto found = g_sceneInputs.find(NormalisePath(NarrowPayload(text)));
+		ReturnString(frame, result, found == g_sceneInputs.end() ? std::string() : found->second);
+	}
+
 	static void WO_Send(void *, void *frame, void *result)
 	{
 		WNB_String text{};
@@ -745,6 +819,7 @@ namespace wo_native
 		const NativeRegistration registrations[] = {
 		    {"WO_Send", &WO_Send}, {"WO_Poll", &WO_Poll}, {"WO_Tick", &WO_Tick}, {"WO_Str", &WO_Str}, {"WO_NameAt", &WO_NameAt}, {"WO_ToName", &WO_ToName}, {"WO_ClockMs", &WO_ClockMs},
 		    {"WO_FactsBaseline", &WO_FactsBaseline}, {"WO_FactsPage", &WO_FactsPage},
+		    {"WO_SceneInputs", &WO_SceneInputs},
 		};
 
 		int registeredCount = 0;
