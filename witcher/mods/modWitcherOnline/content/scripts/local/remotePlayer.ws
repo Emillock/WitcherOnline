@@ -81,6 +81,7 @@ statemachine class r_RemotePlayer
     public var shownEffects : array<int>;  // this player's effects that show, put on their character here (coopEnemies)
     public var shownOn : CActor;           // ...that character (Witcher Online makes a new one when it comes near again)
     public var aimingCrossbow : bool;
+    public var aimStarts : int;         // times this ghost began raising its crossbow
     public var lastAimingCrossbow : bool;
     public var lastMovement : bool;
     public var smoothNext : bool;
@@ -4676,6 +4677,7 @@ statemachine class r_RemotePlayer
         {
             if(!lastAimingCrossbow)
             {
+                aimStarts += 1;
                 ids = inv.GetItemsByName(eq_crossbow);
                 if (ids.Size() > 0)
                 {

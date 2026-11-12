@@ -2647,38 +2647,43 @@ statemachine class r_MultiplayerClient
             return;
         }
 
-        if(thePlayer.HasAttachment())
+        // carried and attached to nothing: the horse was destroyed, or a scene or a teleport tore it away.
+        // Forget what we were riding, so the chain below puts us back on whatever the rider is on now - it
+        // used to run only while we were attached, which left a dropped passenger riding nothing for good.
+        if(!thePlayer.HasAttachment())
         {
-            if(ridingPlayer.isSailing && !ridingPlayer.isMounted && lastRidingType != "boat")
+            lastRidingType = "none";
+        }
+
+        if(ridingPlayer.isSailing && !ridingPlayer.isMounted && lastRidingType != "boat")
+        {
+            detachRiderSafe(thePlayer, false);
+            attachRiderBoat(thePlayer, ridingPlayer.ghost);
+            lastRidingType = "boat";
+            mpghosts_emote(30);
+        }
+        else if(ridingPlayer.isMounted && !ridingPlayer.isSailing && lastRidingType != "horse" && ridingPlayer.horse)
+        {
+            detachRiderSafe(thePlayer, false);
+            if(attachRiderHorse(thePlayer, ridingPlayer.horse))
             {
-                detachRiderSafe(thePlayer, false);
-                attachRiderBoat(thePlayer, ridingPlayer.ghost);
-                lastRidingType = "boat";
-                mpghosts_emote(30);
+                lastRidingType = "horse";
+                mpghosts_emote(31);
             }
-            else if(ridingPlayer.isMounted && !ridingPlayer.isSailing && lastRidingType != "horse" && ridingPlayer.horse)
-            {
-                detachRiderSafe(thePlayer, false);
-                if(attachRiderHorse(thePlayer, ridingPlayer.horse))
-                {
-                    lastRidingType = "horse";
-                    mpghosts_emote(31);
-                }
-            }
-            else if(!ridingPlayer.isSailing && !ridingPlayer.isMounted && ridingPlayer.lastMountType == "horse" && lastRidingType != "playerhorse")
-            {
-                detachRiderSafe(thePlayer, false);
-                attachRider(thePlayer, ridingPlayer.ghost, true);
-                lastRidingType = "playerhorse";
-                mpghosts_emote(29);
-            }
-            else if(!ridingPlayer.isSailing && !ridingPlayer.isMounted && ridingPlayer.lastMountType != "horse" && lastRidingType != "player")
-            {
-                detachRiderSafe(thePlayer, false);
-                attachRider(thePlayer, ridingPlayer.ghost);
-                lastRidingType = "player";
-                mpghosts_emote(29);
-            }
+        }
+        else if(!ridingPlayer.isSailing && !ridingPlayer.isMounted && ridingPlayer.lastMountType == "horse" && lastRidingType != "playerhorse")
+        {
+            detachRiderSafe(thePlayer, false);
+            attachRider(thePlayer, ridingPlayer.ghost, true);
+            lastRidingType = "playerhorse";
+            mpghosts_emote(29);
+        }
+        else if(!ridingPlayer.isSailing && !ridingPlayer.isMounted && ridingPlayer.lastMountType != "horse" && lastRidingType != "player")
+        {
+            detachRiderSafe(thePlayer, false);
+            attachRider(thePlayer, ridingPlayer.ghost);
+            lastRidingType = "player";
+            mpghosts_emote(29);
         }
         
     }
