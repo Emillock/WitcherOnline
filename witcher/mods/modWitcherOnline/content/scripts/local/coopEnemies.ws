@@ -8280,7 +8280,7 @@ class r_CoopEnemies
 // this build's W3Coop version (package/build_package.py checks it against the version it packages)
 function CoopVersion() : string
 {
-    return "0.6.0";
+    return "0.6.1";
 }
 
 // what a puppet keeps of a hit, so the vanilla hit reaction runs (its health is the leader's anyway)
