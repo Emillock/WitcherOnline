@@ -530,7 +530,8 @@ public class WitcherServer
         return true;
     }
 
-    private static void handleMessage(DatagramSocket socket, ClientEndpoint sender, String msg) throws Exception
+    // Serialize session changes with timeout cleanup and console kicks.
+    private static synchronized void handleMessage(DatagramSocket socket, ClientEndpoint sender, String msg) throws Exception
     {
         String[] parts = msg.split("\t", -1);
 
@@ -1219,7 +1220,7 @@ public class WitcherServer
         dbg("Unknown command: %s (type 'help')\n\n", line);
     }
 
-    private static void kickPlayer(DatagramSocket socket, PlayerSession victim, String kickText)
+    private static synchronized void kickPlayer(DatagramSocket socket, PlayerSession victim, String kickText)
     {
         String usernameKey = normalizeUsernameKey(victim.username);
 
@@ -1788,9 +1789,10 @@ public class WitcherServer
         return username == null ? "" : username.trim().toLowerCase(Locale.ROOT);
     }
 
-    private static boolean reserveTimedOutPlayer(String usernameKey, PlayerSession session, long now)
+    private static synchronized boolean reserveTimedOutPlayer(String usernameKey, PlayerSession session, long now)
     {
-        if (!players.remove(usernameKey, session))
+        // A packet may have refreshed the session since the cleanup loop checked lastSeen.
+        if ((now - session.lastSeen) <= PLAYER_TIMEOUT_NANOS || !players.remove(usernameKey, session))
         {
             return false;
         }
