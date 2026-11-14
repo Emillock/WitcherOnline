@@ -24,7 +24,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Properties;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -53,6 +55,19 @@ public class WitcherServer
     private static final int MAX_COOP_CHANNELS = 16;  // en, hit, hurt, jr, fx, hz (a horse where it was left), pt (bombs and shots), np (the people of this world), lt (what a kill dropped), sc (the scene a player is in), jn (the journal, paged out), dm (how a monster came apart) - room for four more
     private static final Set<String> coopChannelsDropped = ConcurrentHashMap.newKeySet();  // said once each
     private static final long COOP_REPEAT_NANOS = 100_000_000L;
+
+    // A TEST-ONLY impaired link: what the server broadcasts waits its delay (plus up to jitter) and some of it is
+    // thrown away, so a run on one PC can feel like a run over the internet - where packets arrive late, arrive out
+    // of order and go missing, which is where co-op faults live that a local run can never show. Off unless asked.
+    private static final int SIM_DELAY_MS = envInt("W3_SIM_DELAY_MS");
+    private static final int SIM_JITTER_MS = envInt("W3_SIM_JITTER_MS");
+    private static final int SIM_LOSS_PCT = envInt("W3_SIM_LOSS_PCT");
+    private static final boolean SIM_LINK = SIM_DELAY_MS > 0 || SIM_JITTER_MS > 0 || SIM_LOSS_PCT > 0;
+    private static final Random simRandom = new Random();
+    private static final PriorityQueue<long[]> simDue = new PriorityQueue<>((a, b) -> Long.compare(a[0], b[0]));
+    private static final List<DatagramPacket> simHeld = new ArrayList<>();
+    private static final AtomicLong simDelayed = new AtomicLong();
+    private static final AtomicLong simDropped = new AtomicLong();
 
     private static final int DEFAULT_PORT = 40000;
     private static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -88,6 +103,7 @@ public class WitcherServer
         dbgNotime("Launching Witcher Online for The Witcher 3: Wild Hunt...\n");
         dbgNotime("Author: rejuvenate7 - Github: https://github.com/rejuvenate7\n");
         dbg("Starting Witcher Online server on *:%d\n", port);
+        startSimLink(socket);
 
         if (svgEnabled)
         {
@@ -930,7 +946,7 @@ public class WitcherServer
                         client.address,
                         client.port
                 );
-                socket.send(packet);
+                linkSend(socket, packet);
                 sent++;
             }
             catch (Exception e)
@@ -1296,6 +1312,110 @@ public class WitcherServer
         {
             server.stop(0);
             statusServer = null;
+        }
+    }
+
+    private static int envInt(String name)
+    {
+        try
+        {
+            return Math.max(0, Integer.parseInt(trim(System.getenv(name))));
+        }
+        catch (Exception e)
+        {
+            return 0;
+        }
+    }
+
+    // One broadcast packet over the imitated link: thrown away, or held until its due time (simLinkThread sends it).
+    // simHeld holds the packets themselves; simDue holds (dueAt, index), so a late one can overtake an earlier one,
+    // which is the reordering a real link does and the one co-op has to survive.
+    private static void linkSend(DatagramSocket socket, DatagramPacket packet) throws Exception
+    {
+        long due;
+        int slot;
+
+        if (!SIM_LINK)
+        {
+            socket.send(packet);
+            return;
+        }
+        if (SIM_LOSS_PCT > 0 && simRandom.nextInt(100) < SIM_LOSS_PCT)
+        {
+            simDropped.incrementAndGet();
+            return;
+        }
+        due = System.nanoTime() + (SIM_DELAY_MS + (SIM_JITTER_MS > 0 ? simRandom.nextInt(SIM_JITTER_MS + 1) : 0))
+                * 1_000_000L;
+        synchronized (simDue)
+        {
+            simHeld.add(packet);
+            slot = simHeld.size() - 1;
+            simDue.add(new long[] { due, slot });
+        }
+        simDelayed.incrementAndGet();
+    }
+
+    // Sends held packets as they come due, every millisecond, so the delay the run feels is the one that was asked
+    // for and not the broadcast tick's.
+    private static void startSimLink(DatagramSocket socket)
+    {
+        Thread t;
+
+        if (!SIM_LINK)
+        {
+            return;
+        }
+        dbg("TEST LINK: broadcasts delayed %d ms (+ up to %d ms jitter), %d%% thrown away\n",
+                SIM_DELAY_MS, SIM_JITTER_MS, SIM_LOSS_PCT);
+        t = new Thread(() ->
+        {
+            while (true)
+            {
+                try
+                {
+                    sendDuePackets(socket);
+                    Thread.sleep(1);
+                }
+                catch (InterruptedException e)
+                {
+                    return;
+                }
+                catch (Exception e)
+                {
+                    // a failed send is counted like any other
+                    totalSendFailures.incrementAndGet();
+                }
+            }
+        }, "sim-link");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static void sendDuePackets(DatagramSocket socket) throws Exception
+    {
+        List<DatagramPacket> ready = new ArrayList<>();
+        long now = System.nanoTime();
+        long[] head;
+
+        synchronized (simDue)
+        {
+            while (!simDue.isEmpty() && simDue.peek()[0] <= now)
+            {
+                head = simDue.poll();
+                ready.add(simHeld.set((int) head[1], null));
+            }
+            if (simDue.isEmpty())
+            {
+                simHeld.clear();   // nothing is waiting: the slots can go
+            }
+        }
+        for (DatagramPacket packet : ready)
+        {
+            if (packet != null)
+            {
+                socket.send(packet);
+            }
         }
     }
 
