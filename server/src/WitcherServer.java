@@ -50,7 +50,8 @@ public class WitcherServer
     private static final long PLAYER_TIMEOUT_NANOS = 5_000_000_000L;
     private static final long USERNAME_HOLD_NANOS = 60_000_000_000L;
     private static final long BROADCAST_HEARTBEAT_NANOS = 60_000_000_000L;
-    private static final int MAX_COOP_CHANNELS = 16;  // en, hit, hurt, jr, fx, hz (a horse where it was left), pt (bombs and shots), np (the people of this world) - room for the ones after them
+    private static final int MAX_COOP_CHANNELS = 16;  // en, hit, hurt, jr, fx, hz (a horse where it was left), pt (bombs and shots), np (the people of this world), lt (what a kill dropped), sc (the scene a player is in), jn (the journal, paged out), dm (how a monster came apart) - room for four more
+    private static final Set<String> coopChannelsDropped = ConcurrentHashMap.newKeySet();  // said once each
     private static final long COOP_REPEAT_NANOS = 100_000_000L;
 
     private static final int DEFAULT_PORT = 40000;
@@ -741,6 +742,14 @@ public class WitcherServer
                 int sent = broadcastChunk(socket, snapshotRecipients(), current, "COOP", frozenFields);
                 totalPacketsSent.addAndGet(sent);
                 current.coopForwardedAt.put(channel, System.nanoTime());
+            }
+            else if (!channel.isEmpty() && coopChannelsDropped.add(channel))
+            {
+                // dropping it in silence reads like a mod that sends nothing: name it, once
+                dbg("Co-op channel %s dropped (%s): nobody will receive it\n", channel,
+                        channel.length() > 8
+                                ? "a channel name may be 8 characters at most"
+                                : current.coopFields.size() + " channels already in use, the limit is " + MAX_COOP_CHANNELS);
             }
             return;
         }
