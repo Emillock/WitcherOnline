@@ -144,6 +144,9 @@ class r_CoopPuppet
     public var wasInHitAnim : bool;
     public var wasDodging : bool;
     public var targetSpeed : float;   // how fast the leader's monster moves (m/s, smoothed), for its locomotion
+    public var targetVel : Vector;    // ...and which way (m/s, smoothed), to aim where it will be (PuppetAim)
+    public var velAgree : float;      // how steadily it keeps that direction (1 straight on, 0 turning): the lead
+                                      // is only worth taking on a monster that is going somewhere
     public var lastTargetAt : float;
     public var stride : r_CoopStride;
     public var reactUntil : float;  // forced idle lifted until then, so the AI plays the hit reaction
@@ -363,6 +366,7 @@ class r_CoopHurt
     public var netId : int;
     public var hitReaction : int;
     public var attackSeq : int;     // the attack that landed it, to line it up with the puppet's swing
+    public var waiting : bool;      // member: its swing had not arrived yet, so it waits for it (RetimeHurt)
     public var hitAnimTime : float;
     public var due : float;         // member: when to apply it
     public var receivedAt : float;
@@ -397,6 +401,12 @@ class r_CoopEnemies
     private var hurts : array<r_CoopHurt>;
     private var nextHurtSeq : int;
     private var woundTick : int;       // changes every send: an unchanged payload goes out once
+    // the round trip to the leader and back, measured on this game's own clock (pg out, pr back)
+    private var pingBase : float;      // this game's clock when it first pinged (stamps are ms since then)
+    private var nextPingAt : float;
+    private var pingUsers : array<string>;   // leader: each member's last stamp, echoed back to all of them
+    private var pingStamps : array<int>;
+    private var pingEchoDue : bool;          // ...a stamp changed, so the echo is worth building
     private var lastHurtSentCount : int;
     private var armedGhosts : array<CActor>;
     private var wasHost : bool;
@@ -643,6 +653,10 @@ class r_CoopEnemies
     public var hitEffectsSent : int;     // member: effects its hits carried
     public var ownEffectsSent : int;     // member: effects it put straight on puppets (Axii, Yrden), sent alone
     public var hurtsDroppedDead : int;   // leader: hurts not sent, their member dead; member: hurts dropped while dead
+    public var linkRtt : float;          // member: the round trip to its leader (s, smoothed; 0 until measured)
+    public var pingsHeard : int;         // member: echoes of its own pings that came back
+    public var hurtsNoSwing : int;       // member: hits that arrived before the swing they belong to
+    public var hurtsRetimed : int;       // ...of those, the ones whose swing came in time to land them on it
     public var hurtsExpired : int;       // leader: hurts too old to mean anything by the time they could be sent
     public var hitSoundsPlayed : int;    // member: hit sounds the copies would not have made themselves
     public var fightStates : int;        // leader: times its game was put into combat for a member's fight
@@ -720,6 +734,9 @@ class r_CoopEnemies
     public var puppetMaxSwing : float;  // stride of puppets while their leader's monster moves
     public var strideBone : string;
     public var puppetLocomotion : bool;  // off: puppets only slide (the glide baseline for the stride tests)
+    public var puppetLead : bool;        // off: copies chase the position they were told, with no lead (tests)
+    public var hurtWait : float;         // how long a hit waits for the swing it belongs to (0: land it at once)
+    public var pingLead : float;         // at most this much of the measured trip is led by (0: lead on staleness only)
     public var hurtEffectsApplied : int;
     public var directEffectsSent : int;     // leader: effects its monsters' tasks put straight on members' ghosts
     public var directEffectsApplied : int;  // member: ...applied to this player
@@ -756,6 +773,9 @@ class r_CoopEnemies
     public var lastJournalAppliedStatus : int;
 
     default puppetLocomotion = true;
+    default puppetLead = true;
+    default hurtWait = 0.2;
+    default pingLead = 0.15;
     default sendInterval = 0.0333;
     default snapPeriod = 0.1;
     default lastSnapshotAt = -999;
@@ -883,6 +903,7 @@ class r_CoopEnemies
             SendNearPeople(now);
             SendDrops(now);
             SendWounds();
+            SendPingEcho();
             LeaderFightState(now);
             NoticeGhostDue(now);
             wasHost = true;
@@ -924,6 +945,7 @@ class r_CoopEnemies
             }
             ApplyDueHurts(now);
             SendHits(now);
+            SendPing(now);
             GiveDrops(now);
             CheckMissingPeople();
             FollowLeaderScene(now);
@@ -1635,6 +1657,13 @@ class r_CoopEnemies
         puppetMaxSwing = 0;
         strideBone = "";
         puppetLocomotion = true;
+        puppetLead = true;
+        hurtWait = 0.2;
+        pingLead = 0.15;
+        linkRtt = 0;
+        pingsHeard = 0;
+        hurtsNoSwing = 0;
+        hurtsRetimed = 0;
         hurtEffectsApplied = 0;
         directEffectsSent = 0;
         directEffectsApplied = 0;
@@ -1664,6 +1693,17 @@ class r_CoopEnemies
     public function SetPuppetLocomotion(on : bool)
     {
         puppetLocomotion = on;
+    }
+
+    // the tests measure both ways round: no lead and no waiting is what a copy used to do
+    public function SetSyncLeadForTest(lead : bool, wait : float)
+    {
+        puppetLead = lead;
+        hurtWait = wait;
+        if(!lead)
+        {
+            pingLead = 0;
+        }
     }
 
     private function MeasureHostStrides(now : float)
@@ -3385,6 +3425,105 @@ class r_CoopEnemies
     // "lt epoch netId count {item quantity}"
     // "dm epoch tick count {netId wound}": what the leader's monsters came apart with. Sent for 30 ticks after
     // a wound appears, so a member that missed a packet still hears it; nothing goes out while there are none.
+    // A member asks how long the trip takes: the stamp is its own clock (ms since its first ping), so only this
+    // game ever reads it and no clocks have to agree. "pg epoch stamp", twice a second.
+    private function SendPing(now : float)
+    {
+        if(GetRole() != 2 || leaderName == "")
+        {
+            return;
+        }
+        if(pingBase == 0)
+        {
+            pingBase = now;
+        }
+        if(!DueNow(now, nextPingAt, 0.5))
+        {
+            return;
+        }
+        WO_Send("coop pg " + epoch + " " + (int)((now - pingBase) * 1000.0));
+    }
+
+    private function OnPing(sender : string, count : int)
+    {
+        var i : int;
+
+        if(GetRole() != 1 || count < 3 || !IsMyPartyMember(sender))
+        {
+            return;
+        }
+        for(i = 0; i < pingUsers.Size(); i += 1)
+        {
+            if(pingUsers[i] == sender)
+            {
+                if(pingStamps[i] != StringToInt(WO_Str(2), 0))
+                {
+                    pingStamps[i] = StringToInt(WO_Str(2), 0);
+                    pingEchoDue = true;
+                }
+                return;
+            }
+        }
+        pingUsers.PushBack(sender);
+        pingStamps.PushBack(StringToInt(WO_Str(2), 0));
+        pingEchoDue = true;
+    }
+
+    // The leader hands every member's last stamp back, all in one line: "pr epoch count {user stamp}".
+    private function SendPingEcho()
+    {
+        var line : string;
+        var i : int;
+
+        if(!pingEchoDue || pingUsers.Size() < 1)
+        {
+            return;   // nothing new to hand back (and an unchanged line would go nowhere anyway)
+        }
+        pingEchoDue = false;
+        for(i = 0; i < pingUsers.Size() && i < 4; i += 1)
+        {
+            line += " " + CoopEncode(pingUsers[i]) + " " + pingStamps[i];
+        }
+        WO_Send("coop pr " + epoch + " " + Min(pingUsers.Size(), 4) + line);
+    }
+
+    private function OnPingEcho(sender : string, count : int)
+    {
+        var rtt, now : float;
+        var n, i, idx : int;
+
+        if(GetRole() != 2 || sender != leaderName || count < 4 || pingBase == 0)
+        {
+            return;
+        }
+        now = theGame.GetEngineTimeAsSeconds();
+        n = StringToInt(WO_Str(2), 0);
+        idx = 3;
+        for(i = 0; i < n && idx + 1 < count; i += 1)
+        {
+            if(CoopDecode(WO_Str(idx)) == theGame.r_getMultiplayerClient().getUsername())
+            {
+                rtt = (now - pingBase) - ((float)StringToInt(WO_Str(idx + 1), 0)) / 1000.0;
+                // an echo of a stamp already answered comes back again (the channel repeats): only a fresh,
+                // sane measurement counts
+                if(rtt > 0.001 && rtt < 2.0)
+                {
+                    pingsHeard += 1;
+                    if(linkRtt <= 0)
+                    {
+                        linkRtt = rtt;
+                    }
+                    else
+                    {
+                        linkRtt = linkRtt * 0.7 + rtt * 0.3;
+                    }
+                }
+                return;
+            }
+            idx += 2;
+        }
+    }
+
     private function SendWounds()
     {
         var e : r_CoopHostEnemy;
@@ -3979,6 +4118,14 @@ class r_CoopEnemies
         else if(WO_Str(0) == "dm")
         {
             OnWounds(sender, count);
+        }
+        else if(WO_Str(0) == "pg")
+        {
+            OnPing(sender, count);
+        }
+        else if(WO_Str(0) == "pr")
+        {
+            OnPingEcho(sender, count);
         }
     }
 
@@ -5193,6 +5340,18 @@ class r_CoopEnemies
                     {
                         h.due = MaxF(now, p.attackPlayedAt + MinF(h.hitAnimTime, 1.5));
                     }
+                    else if(p && p.alive)
+                    {
+                        // The swing it belongs to has not arrived. It travels in another channel and can be
+                        // overtaken, so landing it now is damage out of nowhere: it waits a moment for the swing
+                        // (RetimeHurt lands it on that swing the instant it arrives) and lands anyway if none comes.
+                        hurtsNoSwing += 1;
+                        if(hurtWait > 0)
+                        {
+                            h.waiting = true;
+                            h.due = now + hurtWait;
+                        }
+                    }
                     if(thePlayer.IsAlive() && now >= hurtGraceUntil)
                     {
                         delayedHurts.PushBack(h);
@@ -5207,6 +5366,20 @@ class r_CoopEnemies
             idx = effectsAt + 1 + effectCount;
         }
         leaderListsMyHurts = listed;
+    }
+
+    // A waiting hit whose swing has since arrived lands on that swing's own hit, as if it had come in order.
+    private function RetimeHurt(h : r_CoopHurt, now : float)
+    {
+        var p : r_CoopPuppet;
+
+        p = FindPuppet(h.netId);
+        if(p && p.alive && p.attackSeq == h.attackSeq && p.attackPlayedAt > 0)
+        {
+            h.waiting = false;
+            h.due = MaxF(now, p.attackPlayedAt + MinF(h.hitAnimTime, 1.5));
+            hurtsRetimed += 1;
+        }
     }
 
     private function ApplyDueHurts(now : float)
@@ -5224,6 +5397,10 @@ class r_CoopEnemies
 
         for(i = 0; i < delayedHurts.Size(); i += 1)
         {
+            if(delayedHurts[i].waiting)
+            {
+                RetimeHurt(delayedHurts[i], now);
+            }
             if(delayedHurts[i].due <= now)
             {
                 lastHurtDelay = now - delayedHurts[i].receivedAt;
@@ -5342,7 +5519,8 @@ class r_CoopEnemies
         var p : r_CoopPuppet;
         var npc : CNewNPC;
         var spawned, played : bool;
-        var now : float;
+        var fresh : Vector;
+        var now, step : float;
 
         now = theGame.GetEngineTimeAsSeconds();
         p = FindPuppet(netId);
@@ -5452,7 +5630,22 @@ class r_CoopEnemies
 
         if(p.lastTargetAt > 0 && now - p.lastTargetAt > 0.02)
         {
-            p.targetSpeed = 0.5 * p.targetSpeed + 0.5 * VecDistance2D(pos, p.target) / (now - p.lastTargetAt);
+            step = VecDistance2D(pos, p.target);
+            p.targetSpeed = 0.5 * p.targetSpeed + 0.5 * step / (now - p.lastTargetAt);
+            if(step > 3.0)
+            {
+                p.targetVel = Vector(0, 0, 0);   // a leap or a teleport is no direction to carry on in
+            }
+            else
+            {
+                fresh = (pos - p.target) * (1.0 / (now - p.lastTargetAt));
+                if(VecLength2D(fresh) > 0.5 && VecLength2D(p.targetVel) > 0.5)
+                {
+                    p.velAgree = p.velAgree * 0.7
+                        + ClampF(VecDot2D(VecNormalize2D(fresh), VecNormalize2D(p.targetVel)), 0, 1) * 0.3;
+                }
+                p.targetVel = p.targetVel * 0.8 + fresh * 0.2;
+            }
         }
         p.lastTargetAt = now;
         p.target = pos;
@@ -6957,14 +7150,40 @@ class r_CoopEnemies
         agent.SetGameplayRelativeMoveSpeed(speed);
     }
 
+    // Where to send the copy. The monster is not where this world was told any more: the word took a trip to get
+    // here and the slide takes longer still, so the copy carries the monster's velocity on from the position it
+    // was given. Standing still, or being placed by an animation, it aims at that position itself. The lead is
+    // capped in time and in metres, so a monster that stops is overshot by little and put right by the next word.
+    private function PuppetAim(p : r_CoopPuppet, now : float, slide : float) : Vector
+    {
+        var ahead : float;
+
+        if(!puppetLead || p.targetSpeed < 0.5 || now - p.slotAnimAt < 1.2)
+        {
+            return p.target;
+        }
+        // A steady lead, not the staleness of this one position: with jitter that figure jumps about by as much
+        // as the gap between snapshots, and the aim jumped with it. Half the (smoothed) gap is the average
+        // staleness, and half the measured round trip is the trip itself, capped so an overshoot stays small.
+        ahead = ClampF(snapPeriod * 0.5 + MinF(linkRtt * 0.5, pingLead), 0, 0.4);
+        ahead = MinF(ahead, 2.5 / MaxF(p.targetSpeed, 0.1));
+        // a monster that is turning is not going where it was going: leading one of those only makes it wobble
+        return p.target + p.targetVel * (ahead * p.velAgree);
+    }
+
     private function MovePuppet(p : r_CoopPuppet)
     {
         var adjustor : CMovementAdjustor;
         var ticket : SMovementAdjustmentRequestTicket;
         var rot : EulerAngles;
-        var dist : float;
+        var aim : Vector;
+        var dist, slide, now : float;
 
-        // (an invisible one goes straight there: it reappears where the leader's did)
+        now = theGame.GetEngineTimeAsSeconds();
+        slide = ClampF(snapPeriod * 1.5, 0.05, 0.3);
+        aim = PuppetAim(p, now, slide);
+        // (an invisible one goes straight there: it reappears where the leader's did. The jump is judged on the
+        // position this world was told, never on the aim, so a lead can never teleport anything)
         dist = VecDistance(p.npc.GetWorldPosition(), p.target);
         if(dist > 12 || (p.hidden && dist > 1))
         {
@@ -6973,7 +7192,7 @@ class r_CoopEnemies
             p.npc.TeleportWithRotation(p.target, rot);
             return;
         }
-        if(dist < 0.1 && AbsF(AngleDistance(p.yaw, p.npc.GetHeading())) < 3)
+        if(VecDistance(p.npc.GetWorldPosition(), aim) < 0.1 && AbsF(AngleDistance(p.yaw, p.npc.GetHeading())) < 3)
         {
             return;
         }
@@ -6981,11 +7200,11 @@ class r_CoopEnemies
         adjustor = p.npc.GetMovingAgentComponent().GetMovementAdjustor();
         adjustor.Cancel(adjustor.GetRequest('w3coop_puppet'));
         ticket = adjustor.CreateNewRequest('w3coop_puppet');
-        adjustor.AdjustmentDuration(ticket, ClampF(snapPeriod * 1.5, 0.05, 0.3));
+        adjustor.AdjustmentDuration(ticket, slide);
         adjustor.AdjustLocationVertically(ticket, true);
         adjustor.ScaleAnimationLocationVertically(ticket, true);
         adjustor.RotateTo(ticket, p.yaw);
-        adjustor.SlideTo(ticket, p.target);
+        adjustor.SlideTo(ticket, aim);
     }
 
     private function KillPuppet(p : r_CoopPuppet)
