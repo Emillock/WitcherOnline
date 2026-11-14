@@ -407,6 +407,8 @@ class r_CoopEnemies
     private var pingUsers : array<string>;   // leader: each member's last stamp, echoed back to all of them
     private var pingStamps : array<int>;
     private var pingEchoDue : bool;          // ...a stamp changed, so the echo is worth building
+    private var rttUsers : array<string>;    // the round trip to each player whose party this game shares
+    private var rttValues : array<float>;
     private var lastHurtSentCount : int;
     private var armedGhosts : array<CActor>;
     private var wasHost : bool;
@@ -737,6 +739,7 @@ class r_CoopEnemies
     public var puppetLead : bool;        // off: copies chase the position they were told, with no lead (tests)
     public var hurtWait : float;         // how long a hit waits for the swing it belongs to (0: land it at once)
     public var pingLead : float;         // at most this much of the measured trip is led by (0: lead on staleness only)
+    public var leadMetres : float;       // ...and at most this far ahead of the position it was told, whatever the speed
     public var hurtEffectsApplied : int;
     public var directEffectsSent : int;     // leader: effects its monsters' tasks put straight on members' ghosts
     public var directEffectsApplied : int;  // member: ...applied to this player
@@ -776,6 +779,7 @@ class r_CoopEnemies
     default puppetLead = true;
     default hurtWait = 0.2;
     default pingLead = 0.15;
+    default leadMetres = 2.5;
     default sendInterval = 0.0333;
     default snapPeriod = 0.1;
     default lastSnapshotAt = -999;
@@ -903,6 +907,7 @@ class r_CoopEnemies
             SendNearPeople(now);
             SendDrops(now);
             SendWounds();
+            SendPing(now);
             SendPingEcho();
             LeaderFightState(now);
             NoticeGhostDue(now);
@@ -946,6 +951,7 @@ class r_CoopEnemies
             ApplyDueHurts(now);
             SendHits(now);
             SendPing(now);
+            SendPingEcho();
             GiveDrops(now);
             CheckMissingPeople();
             FollowLeaderScene(now);
@@ -1660,6 +1666,7 @@ class r_CoopEnemies
         puppetLead = true;
         hurtWait = 0.2;
         pingLead = 0.15;
+        leadMetres = 2.5;
         linkRtt = 0;
         pingsHeard = 0;
         hurtsNoSwing = 0;
@@ -1704,6 +1711,13 @@ class r_CoopEnemies
         {
             pingLead = 0;
         }
+    }
+
+    // the two caps on the lead, measured against each other: seconds of the trip, and metres of overshoot
+    public function SetLeadCapsForTest(seconds : float, metres : float)
+    {
+        pingLead = seconds;
+        leadMetres = metres;
     }
 
     private function MeasureHostStrides(now : float)
@@ -3429,7 +3443,7 @@ class r_CoopEnemies
     // game ever reads it and no clocks have to agree. "pg epoch stamp", twice a second.
     private function SendPing(now : float)
     {
-        if(GetRole() != 2 || leaderName == "")
+        if(GetRole() == 0)
         {
             return;
         }
@@ -3448,7 +3462,7 @@ class r_CoopEnemies
     {
         var i : int;
 
-        if(GetRole() != 1 || count < 3 || !IsMyPartyMember(sender))
+        if(GetRole() == 0 || count < 3 || !SharesMyParty(sender))
         {
             return;
         }
@@ -3492,7 +3506,7 @@ class r_CoopEnemies
         var rtt, now : float;
         var n, i, idx : int;
 
-        if(GetRole() != 2 || sender != leaderName || count < 4 || pingBase == 0)
+        if(GetRole() == 0 || count < 4 || pingBase == 0 || !SharesMyParty(sender))
         {
             return;
         }
@@ -3509,19 +3523,54 @@ class r_CoopEnemies
                 if(rtt > 0.001 && rtt < 2.0)
                 {
                     pingsHeard += 1;
-                    if(linkRtt <= 0)
+                    NoteRtt(sender, rtt);
+                    if(sender == leaderName)
                     {
-                        linkRtt = rtt;
-                    }
-                    else
-                    {
-                        linkRtt = linkRtt * 0.7 + rtt * 0.3;
+                        // the one the lead is built on
+                        linkRtt = linkRtt <= 0 ? rtt : linkRtt * 0.7 + rtt * 0.3;
                     }
                 }
                 return;
             }
             idx += 2;
         }
+    }
+
+    // The leader's members, and a member's leader: everyone this game shares a party with.
+    private function SharesMyParty(user : string) : bool
+    {
+        return user == leaderName || IsMyPartyMember(user);
+    }
+
+    private function NoteRtt(user : string, rtt : float)
+    {
+        var i : int;
+
+        for(i = 0; i < rttUsers.Size(); i += 1)
+        {
+            if(rttUsers[i] == user)
+            {
+                rttValues[i] = rttValues[i] * 0.7 + rtt * 0.3;
+                return;
+            }
+        }
+        rttUsers.PushBack(user);
+        rttValues.PushBack(rtt);
+    }
+
+    // The round trip to that player in milliseconds, 0 when it has not been measured (the party HUD shows it).
+    public function RttMsTo(user : string) : int
+    {
+        var i : int;
+
+        for(i = 0; i < rttUsers.Size(); i += 1)
+        {
+            if(rttUsers[i] == user)
+            {
+                return (int)(rttValues[i] * 1000.0);
+            }
+        }
+        return 0;
     }
 
     private function SendWounds()
@@ -7166,7 +7215,7 @@ class r_CoopEnemies
         // as the gap between snapshots, and the aim jumped with it. Half the (smoothed) gap is the average
         // staleness, and half the measured round trip is the trip itself, capped so an overshoot stays small.
         ahead = ClampF(snapPeriod * 0.5 + MinF(linkRtt * 0.5, pingLead), 0, 0.4);
-        ahead = MinF(ahead, 2.5 / MaxF(p.targetSpeed, 0.1));
+        ahead = MinF(ahead, leadMetres / MaxF(p.targetSpeed, 0.1));
         // a monster that is turning is not going where it was going: leading one of those only makes it wobble
         return p.target + p.targetVel * (ahead * p.velAgree);
     }
