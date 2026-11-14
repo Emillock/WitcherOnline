@@ -378,6 +378,7 @@ class r_CoopAck
     public var user : string;
     public var session : int;
     public var lastSeq : int;
+    public var retiredSessions : array<int>;
 }
 
 class r_CoopEnemies
@@ -1715,6 +1716,12 @@ class r_CoopEnemies
             {
                 if(acks[i].session != memberSession)
                 {
+                    // Session ids are random, not ordered. A late packet must not revive an old session.
+                    if(acks[i].retiredSessions.Contains(memberSession))
+                    {
+                        return NULL;
+                    }
+                    acks[i].retiredSessions.PushBack(acks[i].session);
                     acks[i].session = memberSession;
                     acks[i].lastSeq = 0;
                 }
@@ -1746,8 +1753,12 @@ class r_CoopEnemies
             return;
         }
 
-        PruneHurts(sender, StringToInt(WO_Str(4), 0));
         ack = FindAck(sender, StringToInt(WO_Str(3), 0));
+        if(!ack)
+        {
+            return;
+        }
+        PruneHurts(sender, StringToInt(WO_Str(4), 0));
         n = StringToInt(WO_Str(5), 0);
         idx = 6;
         // "seq netId frac effectCount {effect}" per hit; an effect put on without a hit is "effect:seconds"
