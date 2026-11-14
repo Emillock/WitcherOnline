@@ -14,6 +14,8 @@ class r_CoopHostEnemy
     public var lastSeenAt : float;
     public var deadAt : float;
     public var deadSends : int;   // snapshots that went out saying it is dead (a scene stops them: count, don't time)
+    public var wound : name;      // the wound it came apart with (a cut-off head, a halved body)
+    public var woundSends : int;
     public var attackSeq : int;
     public var attackAnim : name;
     public var attackTarget : string;  // the player it attacks, for members' copies to attack the same
@@ -98,6 +100,9 @@ class r_CoopPuppet
     public var hitSoundAt : float;   // when to make sure a hit of this player's was heard (0: nothing waiting)
     public var hitSoundHeavy : bool; // which of the two the base game would have played
     public var killedAt : float;  // when it was killed here (it may yet be standing: see FreeStuckPuppet)
+    public var wound : name;        // the wound its monster came apart with in the leader's world
+    public var woundAt : float;     // when that was heard of
+    public var woundApplied : bool;
     public var spawned : bool;  // created here (destroyed on release) or a local twin (AI given back on release)
     public var aiId : int;
     public var target : Vector;
@@ -391,6 +396,7 @@ class r_CoopEnemies
     private var acks : array<r_CoopAck>;
     private var hurts : array<r_CoopHurt>;
     private var nextHurtSeq : int;
+    private var woundTick : int;       // changes every send: an unchanged payload goes out once
     private var lastHurtSentCount : int;
     private var armedGhosts : array<CActor>;
     private var wasHost : bool;
@@ -543,6 +549,10 @@ class r_CoopEnemies
     public var puppetsKilled : int;  // puppets that died with the leader's monster
     public var puppetsTimedOut : int;  // puppets dropped because the leader stopped sending them
     public var puppetsFreed : int;     // puppets killed here that stayed standing and were let go
+    public var woundsSeen : int;       // monsters that came apart here, for members' copies to come apart too
+    public var woundsSent : int;
+    public var woundsApplied : int;    // copies made to come apart the same way
+    public var woundsUnknown : int;    // a wound this world's own monster does not define
     public var clocksFollowed : int;   // times this game's clock was set to the party leader's
     public var signGestures : int;     // sign casts played on another player's character here
     public var signHands : int;        // cast effects shown in another player's character's hand
@@ -872,6 +882,7 @@ class r_CoopEnemies
             SendFacts(now);
             SendNearPeople(now);
             SendDrops(now);
+            SendWounds();
             LeaderFightState(now);
             NoticeGhostDue(now);
             wasHost = true;
@@ -1018,6 +1029,7 @@ class r_CoopEnemies
                 e.deadAt = now;
                 WatchDrop(e, now);
             }
+            WatchWound(e, now);
             // 60 snapshots of "it is dead" (about 2 s of a normal fight) instead of 4 s of clock: no tick runs
             // while this game is in a scene, and a death retired meanwhile was never told to anyone. The 30 s is
             // for the case where nothing is going out at all.
@@ -3317,6 +3329,39 @@ class r_CoopEnemies
         WO_Send(text);
     }
 
+    // A monster that came apart here: the engine picks one of its template's wounds and the dismemberment
+    // component shows it. A member's copy dies by script and shows none, so the name is read here and sent on.
+    // A wound only ever appears in a hit or a death animation, so nothing is read while the monster is up and
+    // unhurt.
+    private function WatchWound(e : r_CoopHostEnemy, now : float)
+    {
+        var dc : CDismembermentComponent;
+        var w : name;
+
+        if(e.wound != '' || !e.npc)
+        {
+            return;
+        }
+        if(e.deadAt < 0 && now - e.lastHitAt > 2.0)
+        {
+            return;
+        }
+        dc = (CDismembermentComponent)e.npc.GetComponentByClassName('CDismembermentComponent');
+        if(!dc)
+        {
+            return;
+        }
+        w = dc.GetVisibleWoundName();
+        if(w == '')
+        {
+            return;
+        }
+        e.wound = w;
+        e.woundSends = 0;
+        woundsSeen += 1;
+        LogSync("DM", e.netId, 0, NameToString(w));
+    }
+
     private function WatchDrop(e : r_CoopHostEnemy, now : float)
     {
         var d : r_CoopDrop;
@@ -3338,6 +3383,33 @@ class r_CoopEnemies
     // and the member fills its copy's. The engine takes a moment over it, so each death is given four seconds
     // before it is called empty-handed.
     // "lt epoch netId count {item quantity}"
+    // "dm epoch tick count {netId wound}": what the leader's monsters came apart with. Sent for 30 ticks after
+    // a wound appears, so a member that missed a packet still hears it; nothing goes out while there are none.
+    private function SendWounds()
+    {
+        var e : r_CoopHostEnemy;
+        var line : string;
+        var n, i : int;
+
+        for(i = 0; i < hostEnemies.Size() && n < 12; i += 1)
+        {
+            e = hostEnemies[i];
+            if(e.wound != '' && e.woundSends < 30)
+            {
+                e.woundSends += 1;
+                line += " " + e.netId + " " + NameToString(e.wound);
+                n += 1;
+            }
+        }
+        if(n < 1)
+        {
+            return;
+        }
+        woundTick += 1;
+        woundsSent += 1;
+        WO_Send("coop dm " + epoch + " " + woundTick + " " + n + line);
+    }
+
     private function SendDrops(now : float)
     {
         var remains : W3ActorRemains;
@@ -3522,6 +3594,60 @@ class r_CoopEnemies
         }
         peopleListed = n;
         peopleDue = true;
+    }
+
+    // The wounds the leader's monsters came apart with, for their copies here: a copy is the same monster
+    // template, so the wound chosen there is defined here as well (IsWoundDefined says so). A copy still on its
+    // feet keeps the wound until it dies, which is when the engine's own death path would have applied one.
+    private function OnWounds(sender : string, count : int)
+    {
+        var p : r_CoopPuppet;
+        var w : name;
+        var n, i, idx : int;
+
+        if(GetRole() != 2 || sender != leaderName || leaderEpoch == 0 || count < 6
+            || StringToInt(WO_Str(1), 0) != leaderEpoch)
+        {
+            return;
+        }
+        n = StringToInt(WO_Str(3), 0);
+        idx = 4;
+        for(i = 0; i < n && idx + 1 < count; i += 1)
+        {
+            p = FindPuppet(StringToInt(WO_Str(idx), 0));
+            w = WO_ToName(WO_Str(idx + 1));
+            if(p && p.npc && !p.woundApplied && p.wound != w)
+            {
+                p.wound = w;
+                p.woundAt = theGame.GetEngineTimeAsSeconds();
+                if(!p.alive)
+                {
+                    FireWound(p);
+                }
+            }
+            idx += 2;
+        }
+    }
+
+    // The game's own order: the wound and the direction it flies in, the behaviour variable that picks the death
+    // animation, then the component shows it a frame later (DelayedDismemberTimer, which drops its gear as well).
+    private function FireWound(p : r_CoopPuppet)
+    {
+        if(p.woundApplied || p.wound == '' || !p.npc)
+        {
+            return;
+        }
+        p.woundApplied = true;
+        if(!p.npc.IsWoundDefined(p.wound))
+        {
+            woundsUnknown += 1;
+            return;
+        }
+        p.npc.SetDismembermentInfo(p.wound, p.npc.GetWorldPosition() - thePlayer.GetWorldPosition(), false);
+        p.npc.SetBehaviorVariable('dismemberAnim', 1.0);
+        p.npc.AddTimer('DelayedDismemberTimer', 0.05);
+        woundsApplied += 1;
+        LogSync("DA", p.netId, 0, NameToString(p.wound));
     }
 
     private function OnDrop(sender : string, count : int)
@@ -3849,6 +3975,10 @@ class r_CoopEnemies
         else if(WO_Str(0) == "lt")
         {
             OnDrop(sender, count);
+        }
+        else if(WO_Str(0) == "dm")
+        {
+            OnWounds(sender, count);
         }
     }
 
@@ -6584,6 +6714,11 @@ class r_CoopEnemies
             {
                 p.heldSince = 0;
             }
+            // a wound heard for a copy still on its feet: its monster is dead there, so this one comes apart too
+            if(p.wound != '' && !p.woundApplied && now - p.woundAt > 1.5)
+            {
+                FireWound(p);
+            }
             if(now - p.seenAt > 5.0)
             {
                 puppetsTimedOut += 1;
@@ -6881,6 +7016,7 @@ class r_CoopEnemies
             p.npc.Kill('W3Coop', true);
         }
         applyingHostState = false;
+        FireWound(p);   // it came apart in the leader's world, so it comes apart here as it dies
     }
 
     // a copy that outlived its death here: a spawned one has nothing left to do in this world, a local twin is
