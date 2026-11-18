@@ -561,6 +561,8 @@ class r_CoopEnemies
     public var puppetsKilled : int;  // puppets that died with the leader's monster
     public var puppetsTimedOut : int;  // puppets dropped because the leader stopped sending them
     public var puppetsFreed : int;     // puppets killed here that stayed standing and were let go
+    public var charmedShared : int;    // leader: ticks a charmed monster was kept in the shared list
+    public var charmedHurtsDropped : int;  // ...and hits of its own that were not sent on to the party
     public var woundsSeen : int;       // monsters that came apart here, for members' copies to come apart too
     public var woundsSent : int;
     public var woundsApplied : int;    // copies made to come apart the same way
@@ -1058,6 +1060,15 @@ class r_CoopEnemies
                 WatchDrop(e, now);
             }
             WatchWound(e, now);
+            // Charmed by this Geralt (Axii's puppet): it is hostile to nobody now, and the search that finds
+            // monsters to share looks for hostility, so it would fall out of this list and its copies would time
+            // out - in a member's world its own monster would get its AI back and come for the member again. It is
+            // the same monster the members are watching, so it stays here while the charm lasts.
+            if(e.deadAt < 0 && e.npc.HasBuff(EET_AxiiGuardMe) && NearAnyMember(e.npc.GetWorldPosition(), 60))
+            {
+                e.lastSeenAt = now;
+                charmedShared += 1;
+            }
             // 60 snapshots of "it is dead" (about 2 s of a normal fight) instead of 4 s of clock: no tick runs
             // while this game is in a scene, and a death retired meanwhile was never told to anyone. The 30 s is
             // for the case where nothing is going out at all.
@@ -1670,6 +1681,12 @@ class r_CoopEnemies
         linkRtt = 0;
         pingsHeard = 0;
         hurtsNoSwing = 0;
+        charmedShared = 0;
+        charmedHurtsDropped = 0;
+        woundsSeen = 0;
+        woundsSent = 0;
+        woundsApplied = 0;
+        woundsUnknown = 0;
         hurtsRetimed = 0;
         hurtEffectsApplied = 0;
         directEffectsSent = 0;
@@ -2198,6 +2215,14 @@ class r_CoopEnemies
         var h : r_CoopHurt;
         var i : int;
 
+        // A monster this Geralt has charmed fights for the party, so it does not get to hurt the party: its
+        // swing can still catch a member's character standing in the way (the game lets an attack hit a charmed
+        // actor's friends), and that used to be sent on as damage the member had no idea the cause of.
+        if(e.npc && e.npc.HasBuff(EET_AxiiGuardMe))
+        {
+            charmedHurtsDropped += 1;
+            return;
+        }
         h = new r_CoopHurt in this;
         h.viaHorse = viaHorse;
         act.GetEffectTypes(effects);
@@ -3387,6 +3412,24 @@ class r_CoopEnemies
     // component shows it. A member's copy dies by script and shows none, so the name is read here and sent on.
     // A wound only ever appears in a hit or a death animation, so nothing is read while the monster is up and
     // unhurt.
+    // Whether any party member's character is within `range` of there.
+    private function NearAnyMember(pos : Vector, range : float) : bool
+    {
+        var players : array<r_RemotePlayer>;
+        var i : int;
+
+        players = theGame.r_getMultiplayerClient().getPlayers();
+        for(i = 0; i < players.Size(); i += 1)
+        {
+            if(players[i] && players[i].ghost && IsMyPartyMember(players[i].username)
+                && VecDistance(players[i].ghost.GetWorldPosition(), pos) < range)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private function WatchWound(e : r_CoopHostEnemy, now : float)
     {
         var dc : CDismembermentComponent;
@@ -8811,6 +8854,7 @@ function CoopShowsEffect(type : EEffectType) : bool
         case EET_SlowdownFrost :
         case EET_SlowdownAxii :
         case EET_SilverDust :
+        case EET_AxiiGuardMe :    // Axii's puppet: a copy charmed where it came from is charmed here
             return true;
         default :
             return false;
