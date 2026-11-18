@@ -100,6 +100,12 @@ class r_CoopPuppet
     public var hitSoundAt : float;   // when to make sure a hit of this player's was heard (0: nothing waiting)
     public var hitSoundHeavy : bool; // which of the two the base game would have played
     public var killedAt : float;  // when it was killed here (it may yet be standing: see FreeStuckPuppet)
+    public var stepFrom : Vector; // where it stood at the last tick, to measure how fast it moves (puppetStep)
+    public var stepAt : float;
+    public var stepDt : float;    // ...and how long that tick was, for how far it may be moved in the next
+        default stepDt = 0.033;
+    public var stepTarget : Vector;  // where its monster was then, to tell a copy catching up from one carried
+    public var driveSpeed : float;   // the locomotion speed it was last given (DrivePuppetLocomotion)
     public var wound : name;        // the wound its monster came apart with in the leader's world
     public var woundAt : float;     // when that was heard of
     public var woundApplied : bool;
@@ -176,6 +182,16 @@ class r_CoopPuppet
     public var graphPoses : int;
     public var graphPending : string;   // ...to be raised then (after its slot swing blends out)
     public var graphDueAt : float;
+}
+
+// A copy that died, watched for a moment afterwards. The copy itself is dropped as soon as the leader stops
+// naming its monster, which is sooner than a body takes to fall.
+class r_CoopBody
+{
+    public var npc : CNewNPC;
+    public var netId : int;
+    public var killedAt : float;
+    public var laidDown : bool;
 }
 
 // Feet swinging along the actor's facing over 1.5 s windows while it moves: a walking stride swings a foot tens of
@@ -430,6 +446,7 @@ class r_CoopEnemies
     private var hostSeq : int;
 
     private var puppets : array<r_CoopPuppet>;
+    private var bodies : array<r_CoopBody>;   // ...and the bodies of ones that died (WatchBodies)
     private var suppressed : array<r_CoopSuppressed>;
     private var leaderName : string;
     private var leaderListsEffects : bool;  // its game lists its monsters' effects (a newer version: it sends its own with "hz")
@@ -561,6 +578,12 @@ class r_CoopEnemies
     public var puppetsKilled : int;  // puppets that died with the leader's monster
     public var puppetsTimedOut : int;  // puppets dropped because the leader stopped sending them
     public var puppetsFreed : int;     // puppets killed here that stayed standing and were let go
+    public var puppetsLaidDown : int;  // dead copies that kept their feet and were put down (LayBodyDown)
+    public var bodiesSettled : int;    // dead copies whose body was on the ground when it was looked at
+    public var bodiesLeftStanding : int;  // ...and ones still on their feet, which no one should ever see
+    public var puppetsSnapped : int;   // copies put where their monster is, too far behind to walk it off
+    public var puppetStep : float;     // the fastest a copy was carried, m/s (diagnostics)
+    public var puppetAnimStep : float; // ...and the fastest one of its monster's animations moved it
     public var charmedShared : int;    // leader: ticks a charmed monster was kept in the shared list
     public var charmedHurtsDropped : int;  // ...and hits of its own that were not sent on to the party
     public var woundsSeen : int;       // monsters that came apart here, for members' copies to come apart too
@@ -950,6 +973,7 @@ class r_CoopEnemies
                 ArmLeaderGhost();
                 UpdatePuppets(now);
             }
+            WatchBodies(now);
             ApplyDueHurts(now);
             SendHits(now);
             SendPing(now);
@@ -1643,6 +1667,12 @@ class r_CoopEnemies
         killsCredited = 0;
         puppetsTimedOut = 0;
         puppetsFreed = 0;
+        puppetsLaidDown = 0;
+        bodiesSettled = 0;
+        bodiesLeftStanding = 0;
+        puppetsSnapped = 0;
+        puppetStep = 0;
+        puppetAnimStep = 0;
         clocksFollowed = 0;
         signGestures = 0;
         signHands = 0;
@@ -3727,11 +3757,30 @@ class r_CoopEnemies
     // these would stand where its original lies - which is what a player met, and read as a bug.
     private function StandsUpright(npc : CNewNPC) : bool
     {
+        return UprightBy(npc) > 1.0;
+    }
+
+    // how far the head is above the feet: a body on the ground keeps its head within a few tens of centimetres
+    private function UprightBy(npc : CNewNPC) : float
+    {
         var head, feet : Vector;
 
         head = CoopBoneSpot(npc, 'head');
         feet = npc.GetWorldPosition();
-        return head.Z - feet.Z > 1.0;
+        return head.Z - feet.Z;
+    }
+
+    // what this world makes of a body, for the log when one will not go down
+    private function BodyState(npc : CNewNPC) : string
+    {
+        var mpac : CMovingPhysicalAgentComponent;
+
+        mpac = (CMovingPhysicalAgentComponent)npc.GetMovingAgentComponent();
+        return "up=" + FloatToStringPrec(UprightBy(npc), 2) + " alive=" + npc.IsAlive()
+            + " isDead=" + npc.isDead + " ragdolled=" + npc.IsRagdolled()
+            + " hasRagdoll=" + (mpac && mpac.HasRagdoll()) + " deathAnim=" + npc.ShouldPlayDeathAnim()
+            + " weight=" + FloatToStringPrec(npc.GetBehaviorVariable('Ragdoll_Weight'), 1)
+            + " agony=" + npc.IsInAgony();
     }
 
     private function IsSomeoneToTalkTo(actor : CActor) : bool
@@ -3875,10 +3924,53 @@ class r_CoopEnemies
             return;
         }
         p.npc.SetDismembermentInfo(p.wound, p.npc.GetWorldPosition() - thePlayer.GetWorldPosition(), false);
-        p.npc.SetBehaviorVariable('dismemberAnim', 1.0);
         p.npc.AddTimer('DelayedDismemberTimer', 0.05);
+        p.npc.SetBehaviorVariable('dismemberAnim', 1.0);
+        // which limb went: the graph picks the death animation from this, and a body that came apart without it
+        // had none to play and kept its feet
+        p.npc.SetBehaviorVariable('FinisherDeathType', (int)DeathTypeOfWound(p.npc, p.wound));
         woundsApplied += 1;
         LogSync("DA", p.netId, 0, NameToString(p.wound));
+    }
+
+    // the game's own reading of a wound (ProcessDismembermentDeathAnim): which limb went
+    private function DeathTypeOfWound(npc : CNewNPC, wound : name) : EFinisherDeathType
+    {
+        var dc : CDismembermentComponent;
+        var curve : name;
+
+        dc = (CDismembermentComponent)npc.GetComponentByClassName('CDismembermentComponent');
+        if(!dc)
+        {
+            return EFDT_None;
+        }
+        curve = dc.GetMainCurveName(wound);
+        if(curve == 'head')
+        {
+            npc.SoundEvent("grunt_vo_death_stop", 'head');
+            return EFDT_Head;
+        }
+        if(curve == 'torso' || curve == 'torso_left' || curve == 'torso_right')
+        {
+            return EFDT_Torso;
+        }
+        if(curve == 'arm_left')
+        {
+            return EFDT_ArmLeft;
+        }
+        if(curve == 'arm_right')
+        {
+            return EFDT_ArmRight;
+        }
+        if(curve == 'leg_left')
+        {
+            return EFDT_LegLeft;
+        }
+        if(curve == 'leg_right')
+        {
+            return EFDT_LegRight;
+        }
+        return EFDT_None;
     }
 
     private function OnDrop(sender : string, count : int)
@@ -5723,13 +5815,15 @@ class r_CoopEnemies
         if(p.lastTargetAt > 0 && now - p.lastTargetAt > 0.02)
         {
             step = VecDistance2D(pos, p.target);
-            p.targetSpeed = 0.5 * p.targetSpeed + 0.5 * step / (now - p.lastTargetAt);
             if(step > 3.0)
             {
-                p.targetVel = Vector(0, 0, 0);   // a leap or a teleport is no direction to carry on in
+                // a leap or a teleport: no direction to carry on in, and no speed either - taken for one it
+                // would let the copy cross the ground as fast as the jump did
+                p.targetVel = Vector(0, 0, 0);
             }
             else
             {
+                p.targetSpeed = 0.5 * p.targetSpeed + 0.5 * step / (now - p.lastTargetAt);
                 fresh = (pos - p.target) * (1.0 / (now - p.lastTargetAt));
                 if(VecLength2D(fresh) > 0.5 && VecLength2D(p.targetVel) > 0.5)
                 {
@@ -6849,8 +6943,10 @@ class r_CoopEnemies
         var p : r_CoopPuppet;
 
         p = FindPuppetByNpc(npc);
-        if(!p)
+        if(!p || !p.alive)
         {
+            // a copy that died plays its own death, like any other monster: that animation is what turns the
+            // ragdoll on, and holding it back left the body standing among the corpses
             return true;
         }
         return p.moveKind != "" && theGame.GetEngineTimeAsSeconds() < p.moveUntil;
@@ -7227,6 +7323,7 @@ class r_CoopEnemies
         if(!puppetLocomotion || p.targetSpeed < 0.4 || now - p.slotAnimAt < 1.2 || now - p.lastTargetAt > 0.5)
         {
             agent.SetGameplayRelativeMoveSpeed(0);
+            p.driveSpeed = 0;
             return;
         }
         speed = 1;
@@ -7240,6 +7337,7 @@ class r_CoopEnemies
         }
         agent.SetGameplayMoveDirection(VecHeading(p.target - p.npc.GetWorldPosition()));
         agent.SetGameplayRelativeMoveSpeed(speed);
+        p.driveSpeed = speed;
     }
 
     // Where to send the copy. The monster is not where this world was told any more: the word took a trip to get
@@ -7263,31 +7361,58 @@ class r_CoopEnemies
         return p.target + p.targetVel * (ahead * p.velAgree);
     }
 
+    // As far along the way to `aim` as a run would carry the copy before the next tick. Beyond that it would
+    // be seen to appear rather than to travel, which is what the ground between them is for.
+    private function WithinReach(p : r_CoopPuppet, here : Vector, aim : Vector) : Vector
+    {
+        var gap, reach : float;
+
+        gap = VecDistance(here, aim);
+        reach = CatchUpSpeed(p) * ClampF(p.stepDt, 0.016, 0.1);
+        if(gap <= reach || gap <= 0.001)
+        {
+            return aim;
+        }
+        return here + (aim - here) * (reach / gap);
+    }
+
     private function MovePuppet(p : r_CoopPuppet)
     {
         var adjustor : CMovementAdjustor;
         var ticket : SMovementAdjustmentRequestTicket;
         var rot : EulerAngles;
-        var aim : Vector;
+        var here, aim : Vector;
         var dist, slide, now : float;
 
         now = theGame.GetEngineTimeAsSeconds();
+        here = p.npc.GetWorldPosition();
+        MeasureStep(p, here, now);
         slide = ClampF(snapPeriod * 1.5, 0.05, 0.3);
         aim = PuppetAim(p, now, slide);
         // (an invisible one goes straight there: it reappears where the leader's did. The jump is judged on the
         // position this world was told, never on the aim, so a lead can never teleport anything)
-        dist = VecDistance(p.npc.GetWorldPosition(), p.target);
+        dist = VecDistance(here, p.target);
         if(dist > 12 || (p.hidden && dist > 1))
         {
+            if(!p.hidden)
+            {
+                puppetsSnapped += 1;   // (a hidden one is meant to appear; this is the one that looks wrong)
+            }
+            LogSync("PJ", p.netId, 0, FloatToStringPrec(dist, 1) + "/hidden=" + p.hidden);
             rot = p.npc.GetWorldRotation();
             rot.Yaw = p.yaw;
             p.npc.TeleportWithRotation(p.target, rot);
+            p.stepAt = 0;   // it was put there: no stride of its own to measure across that
             return;
         }
-        if(VecDistance(p.npc.GetWorldPosition(), aim) < 0.1 && AbsF(AngleDistance(p.yaw, p.npc.GetHeading())) < 3)
+        if(VecDistance(here, aim) < 0.1 && AbsF(AngleDistance(p.yaw, p.npc.GetHeading())) < 3)
         {
             return;
         }
+        // A gap is covered at a speed the monster could have run, not in one go whatever its length. The
+        // adjustor does not spread a slide evenly over the time it is given, so the limit has to be the
+        // distance itself: no further this tick than a run would carry it, and the rest on the ticks after.
+        aim = WithinReach(p, here, aim);
 
         adjustor = p.npc.GetMovingAgentComponent().GetMovementAdjustor();
         adjustor.Cancel(adjustor.GetRequest('w3coop_puppet'));
@@ -7299,12 +7424,65 @@ class r_CoopEnemies
         adjustor.SlideTo(ticket, aim);
     }
 
+    // How fast a copy may close a gap: above its monster's own speed, so it does catch up, and never so fast
+    // that the ground goes by in a blink. A standing monster's copy still corrects briskly.
+    private function CatchUpSpeed(p : r_CoopPuppet) : float
+    {
+        return ClampF(p.targetSpeed * 2.0, 6.0, 14.0);
+    }
+
+    // how fast a copy is seen to move in this world, for the tests that judge whether it walks or appears
+    private function MeasureStep(p : r_CoopPuppet, here : Vector, now : float)
+    {
+        var dt, step, speed : float;
+
+        // Shorter than a frame and the engine has not moved the body since the last look: counting that as a
+        // speed turns a frame's step into several times the figure. Whole frames only.
+        dt = now - p.stepAt;
+        if(p.stepAt > 0 && dt > 0.02 && dt < 0.5)
+        {
+            step = VecDistance(p.stepFrom, here);
+            speed = step / dt;
+            // An animation of its monster's playing here moves the body itself (an attack lunges), which is the
+            // monster's own movement and not this world carrying the copy about. The two are told apart: only
+            // being carried can look like a teleport.
+            if(now - p.slotAnimAt < 1.2)
+            {
+                puppetAnimStep = MaxF(puppetAnimStep, speed);
+            }
+            else if(speed > puppetStep)
+            {
+                puppetStep = speed;
+                if(speed > 8.0)
+                {
+                    LogSync("PS", p.netId, 0, FloatToStringPrec(step, 2) + "m/" + FloatToStringPrec(dt, 3)
+                        + "s=" + FloatToStringPrec(speed, 1) + " off=" + FloatToStringPrec(VecDistance(here, p.target), 2)
+                        + " ownSpeed=" + FloatToStringPrec(p.targetSpeed, 1)
+                        + " tgtStep=" + FloatToStringPrec(VecDistance(p.stepTarget, p.target), 2)
+                        + " move='" + p.moveKind + "' locomotion=" + FloatToStringPrec(p.driveSpeed, 0)
+                        + " slotAge=" + FloatToStringPrec(now - p.slotAnimAt, 2));
+                }
+            }
+        }
+        if(p.stepAt > 0)
+        {
+            p.stepDt = dt;   // (after a snap there is no last tick to measure, and the default stands)
+        }
+        p.stepTarget = p.target;
+        p.stepFrom = here;
+        p.stepAt = now;
+    }
+
+    // Its monster died on the leader, so this copy dies too - and plays its own death doing it, which is what
+    // turns the ragdoll on. Everything the mirroring had hold of is let go first.
     private function KillPuppet(p : r_CoopPuppet)
     {
         p.alive = false;
         p.killedAt = theGame.GetEngineTimeAsSeconds();
         puppetsKilled += 1;
         StopSlotAttack(p);
+        ClearSlotAnim(p);   // whatever is on the slot, the death animation needs the body back
+        StopSliding(p);     // ...and the slide that has been holding it upright and facing the leader's way
         if(p.animAiId != 0)
         {
             p.npc.CancelAIBehavior(p.animAiId);
@@ -7315,6 +7493,10 @@ class r_CoopEnemies
             p.npc.CancelAIBehavior(p.aiId);
             p.aiId = 0;
         }
+        // It came apart in the leader's world, so it comes apart here - and the wound goes on before the kill, as
+        // the game's own damage puts one on a victim before it dies. Put on afterwards there is no death animation
+        // left for it to join.
+        FireWound(p);
         applyingHostState = true;
         // one this player hit dies as its kill (experience as for its own; otherwise only within 20 m, as for anyone's)
         if(p.myHits > 0)
@@ -7327,7 +7509,99 @@ class r_CoopEnemies
             p.npc.Kill('W3Coop', true);
         }
         applyingHostState = false;
-        FireWound(p);   // it came apart in the leader's world, so it comes apart here as it dies
+        WatchBody(p);
+    }
+
+    // The copy is carried to its monster's position by a movement adjustment made afresh every tick, which also
+    // holds its rotation; left running over a death it would pull at the body as it falls.
+    private function StopSliding(p : r_CoopPuppet)
+    {
+        var adjustor : CMovementAdjustor;
+
+        adjustor = p.npc.GetMovingAgentComponent().GetMovementAdjustor();
+        if(adjustor)
+        {
+            adjustor.CancelByName('w3coop_puppet');
+        }
+    }
+
+    // The slot cleared of whatever is playing on it. StopSlotAttack leaves an old animation alone (it has nothing
+    // to stop in the ordinary case), but one still playing over a death holds the body upright.
+    private function ClearSlotAnim(p : r_CoopPuppet)
+    {
+        if(p.npc.GetRootAnimatedComponent())
+        {
+            p.npc.GetRootAnimatedComponent().PlaySlotAnimationAsync('', attackSlot);
+        }
+    }
+
+    // A copy that died goes on the watch list: its body has a moment to fall before anyone looks at it.
+    private function WatchBody(p : r_CoopPuppet)
+    {
+        var b : r_CoopBody;
+
+        b = new r_CoopBody in this;
+        b.npc = p.npc;
+        b.netId = p.netId;
+        b.killedAt = theGame.GetEngineTimeAsSeconds();
+        bodies.PushBack(b);
+    }
+
+    // Each body is given 1.2 s to come off its feet by itself; one that has not is put down the game's own way,
+    // and one still standing 2.5 s after it died is counted, because that is what a player would be looking at.
+    private function WatchBodies(now : float)
+    {
+        var b : r_CoopBody;
+        var i : int;
+
+        for(i = bodies.Size() - 1; i >= 0; i -= 1)
+        {
+            b = bodies[i];
+            if(!b.npc || b.npc.IsAlive())
+            {
+                bodies.Erase(i);   // gone from this world, or never really died (FreeStuckPuppet has that one)
+                continue;
+            }
+            if(!b.laidDown && now - b.killedAt > 1.2)
+            {
+                b.laidDown = true;
+                LayBodyDown(b.npc, b.netId);
+            }
+            if(now - b.killedAt > 2.5)
+            {
+                if(StandsUpright(b.npc) && !b.npc.IsRagdolled())
+                {
+                    bodiesLeftStanding += 1;
+                    LogSync("PU", b.netId, 0, BodyState(b.npc));
+                }
+                else
+                {
+                    bodiesSettled += 1;
+                }
+                bodies.Erase(i);
+            }
+        }
+    }
+
+    // Dead here and still on its feet: whatever the death animation was meant to do, it did not take the body.
+    // The game's own way of putting one down, and the only way left once the animation has been missed.
+    private function LayBodyDown(npc : CNewNPC, netId : int)
+    {
+        var mpac : CMovingPhysicalAgentComponent;
+
+        if(!StandsUpright(npc) || npc.IsRagdolled())
+        {
+            return;
+        }
+        mpac = (CMovingPhysicalAgentComponent)npc.GetMovingAgentComponent();
+        if(!mpac || !mpac.HasRagdoll())
+        {
+            return;
+        }
+        puppetsLaidDown += 1;
+        // TurnOnRagdoll's own pair, with the event forced: a graph left in some other state refuses the plain one
+        npc.SetBehaviorVariable('Ragdoll_Weight', 1.0);
+        LogSync("PD", netId, 0, BodyState(npc) + " raised=" + npc.RaiseForceEvent('Ragdoll'));
     }
 
     // a copy that outlived its death here: a spawned one has nothing left to do in this world, a local twin is
@@ -7400,6 +7674,7 @@ class r_CoopEnemies
             ReleasePuppet(puppets[i]);
         }
         puppets.Clear();
+        bodies.Clear();
         delayedHurts.Clear();
 
         for(i = suppressed.Size() - 1; i >= 0; i -= 1)
@@ -8701,6 +8976,12 @@ class r_CoopEnemies
     public function PuppetSpawned(i : int) : bool
     {
         return puppets[i].spawned;
+    }
+
+    // what this world makes of any body, for the tests (the same reading the body watch logs)
+    public function BodyStateOf(npc : CNewNPC) : string
+    {
+        return BodyState(npc);
     }
 
     public function PuppetTarget(i : int) : Vector
