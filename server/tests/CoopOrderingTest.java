@@ -89,9 +89,11 @@ public class CoopOrderingTest
             String channel = "c" + i;
             check(player.forwardCoop(channel, List.of(channel), 16, fields -> 1) == 1, "channel rejected");
         }
-        check(player.forwardCoop("c16", List.of("c16"), 16, fields -> 1) == 0, "capacity not enforced");
+        check(player.forwardCoop("c16", List.of("c16"), 16, fields -> 1) == PlayerSession.COOP_REFUSED,
+                "capacity not enforced");
         check(player.forwardCoop("en", fresh, 16, fields -> 1) == 1, "update at capacity rejected");
-        check(player.forwardCoop("toolongname", List.of("toolongname"), 16, fields -> 1) == 0, "overlong name accepted");
+        check(player.forwardCoop("toolongname", List.of("toolongname"), 16, fields -> 1) == PlayerSession.COOP_REFUSED,
+                "overlong name accepted");
         System.out.println("PASS: co-op forwarding order, repeat and capacity");
     }
 }

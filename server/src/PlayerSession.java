@@ -28,6 +28,15 @@ public class PlayerSession
         return Collections.unmodifiableSet(coopFields.keySet());
     }
 
+    // forwardCoop takes no channel it has no room for, or whose name is too long. It says so rather than
+    // returning a count, because dropping one in silence reads like a mod that sends nothing: the caller names it.
+    public static final int COOP_REFUSED = -1;
+
+    public synchronized int coopChannelCount()
+    {
+        return coopFields.size();
+    }
+
     // Keep publishing and repeating a channel ordered on this session's monitor.
     public synchronized int forwardCoop(String channel, List<String> fields, int maxChannels,
             ToIntFunction<List<String>> forward)
@@ -35,7 +44,7 @@ public class PlayerSession
         if (channel.isEmpty() || channel.length() > 8
                 || (!coopFields.containsKey(channel) && coopFields.size() >= maxChannels))
         {
-            return 0;
+            return COOP_REFUSED;
         }
 
         coopFields.put(channel, fields);

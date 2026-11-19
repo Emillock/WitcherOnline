@@ -1255,6 +1255,26 @@ public function WO_HideCompanionHud()
     m_fxSetVitality2SFF.InvokeSelfOneArg(FlashArgNumber(0.0));
 }
 
+// The name under a party member's portrait: who they are, or that they have not joined, and - once it has been
+// measured - how long the trip to them takes. The figure is the round trip, the one the copies of shared
+// monsters are led by.
+@addMethod(CR4HudModuleCompanion)
+public function WO_PartyLabel(p : r_RemotePlayer, mayLack : bool) : string
+{
+    var ms : int;
+
+    if(mayLack && theGame.r_getMultiplayerClient().getInParty() && !p.inParty)
+    {
+        return WO_Text(2111114270) + " " + p.username;
+    }
+    ms = theGame.r_getMultiplayerClient().getCoopEnemies().RttMsTo(p.username);
+    if(ms > 0)
+    {
+        return p.username + "  " + ms + " ms";
+    }
+    return p.username;
+}
+
 @addMethod(CR4HudModuleCompanion)
 public function WO_RefreshCompanionHud(party : array<r_RemotePlayer>)
 {
@@ -1266,14 +1286,7 @@ public function WO_RefreshCompanionHud(party : array<r_RemotePlayer>)
     
     if(party.Size() == 1)
     {
-        if(theGame.r_getMultiplayerClient().getInParty() && !party[0].inParty)
-        {
-            m_fxSetNameSFF.InvokeSelfOneArg(FlashArgString(WO_Text(2111114270) + " " + party[0].username));
-        }
-        else
-        {
-            m_fxSetNameSFF.InvokeSelfOneArg(FlashArgString(party[0].username));
-        }
+        m_fxSetNameSFF.InvokeSelfOneArg(FlashArgString(WO_PartyLabel(party[0], true)));
         
         m_fxSetVitalitySFF.InvokeSelfOneArg(FlashArgNumber(party[0].health));
 
@@ -1300,7 +1313,7 @@ public function WO_RefreshCompanionHud(party : array<r_RemotePlayer>)
     }
     else if(party.Size() > 1)
     {
-        m_fxSetNameSFF.InvokeSelfOneArg(FlashArgString(party[1].username));
+        m_fxSetNameSFF.InvokeSelfOneArg(FlashArgString(WO_PartyLabel(party[1], false)));
         m_fxSetVitalitySFF.InvokeSelfOneArg(FlashArgNumber(party[1].health));
 
         if(party[1].cpcPlayerType == ENR_PlayerCiri)
@@ -1320,14 +1333,7 @@ public function WO_RefreshCompanionHud(party : array<r_RemotePlayer>)
             m_fxSetPortraitSFF.InvokeSelfOneArg(FlashArgString("icons/characters/journal_geralt.png"));
         }
 
-        if(theGame.r_getMultiplayerClient().getInParty() && !party[0].inParty)
-        {
-            m_fxSetName2SFF.InvokeSelfOneArg(FlashArgString(WO_Text(2111114270) + " " + party[0].username));
-        }
-        else
-        {
-            m_fxSetName2SFF.InvokeSelfOneArg(FlashArgString(party[0].username));
-        }
+        m_fxSetName2SFF.InvokeSelfOneArg(FlashArgString(WO_PartyLabel(party[0], true)));
 
         m_fxSetVitality2SFF.InvokeSelfOneArg(FlashArgNumber(party[0].health));
 
