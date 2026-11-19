@@ -76,6 +76,25 @@ statemachine class r_RemotePlayer
     public var inCutscene : bool;      // ...and it is the kind nobody can act in, not a conversation
     public var putBacks : int;         // times its character here was put back where its game says it stands
     private var offPlaceSince : float; // since when it has been away from there (0: it is where it belongs)
+    public var carryStep : float;      // the fastest its character was seen to move here, m/s
+    public var carryJumps : int;       // ...times one frame of that went faster than its own travel explains
+    public var carryFar : float;       // and the longest single frame of all that, m
+    private var carryFrom : Vector;    // where that character stood a frame ago
+    private var carryTold : Vector;    // ...and where its game said it stood, to tell a catch-up from a jump
+    private var toldJumpFar : float;   // the last such jump its own game made, and when it was heard of
+    private var toldJumpAt : float;
+    private var carryAt : float;
+    private var carryDt : float;       // how long the last frame was, for how far it may be carried in the next
+    default carryDt = 0.033;
+    public var carryReach : float;     // how much of the allowance the reach is (tests: W3T_CARRY_REACH)
+    default carryReach = 0.75;
+    public var carrySlide : float;     // ...and how long the slide that delivers it is given, in frames
+    default carrySlide = 1.0;
+    private var carryOwn : float;      // how fast its player has lately been going, falling off like a rider
+    private var carryBody : CEntity;   // which character that was: getting on a horse is not a jump
+    public var posPeriod : float;      // smoothed gap between the positions its game sends, s
+    private var posSeen : Vector;
+    private var posSeenAt : float;
     public var sceneAt : float;        // when that last changed
     public var dismountedAt : float;
     public var shownEffects : array<int>;  // this player's effects that show, put on their character here (coopEnemies)
@@ -377,12 +396,9 @@ statemachine class r_RemotePlayer
     default chillOutNPCCleanupAt = -999;
     default chillOutNPCCleanupInterval = 1.0;
 
-    protected var npcAdjustorDelay : float;
-    default npcAdjustorDelay = 0.4;
-
-    protected var horseAdjustorDelay : float;
-    default horseAdjustorDelay = 0.4;
-
+    // A boat and a polymorph still slide the old way: a long slide re-issued every frame, which lands only
+    // part of itself and leaves the copy creeping or lurching. On foot and on a horse that is measured and
+    // bounded instead (carryDuration, withinReach); nothing here measures a boat, so nothing here changes it.
     protected var boatAdjustorDelay : float;
     default boatAdjustorDelay = 0.4;
 
@@ -1513,6 +1529,7 @@ statemachine class r_RemotePlayer
         updateCPC();
 
         checkRidingAttachment();
+        measureCarry();
         moveEntity(ghost, pos);
 
         updatePin();
@@ -6437,14 +6454,148 @@ statemachine class r_RemotePlayer
         adjustor.Cancel(adjustor.GetRequest('w3mp_ghost'));
         ticket = adjustor.CreateNewRequest('w3mp_ghost');
 
-        adjustor.AdjustmentDuration(ticket, npcAdjustorDelay);
+        adjustor.AdjustmentDuration(ticket, carryDuration());
         adjustor.AdjustLocationVertically(ticket, true);
         adjustor.ScaleAnimationLocationVertically(ticket, true);
         adjustor.RotateTo(ticket, heading); 
-        adjustor.SlideTo(ticket, targpos);
+        adjustor.SlideTo(ticket, withinReach(entpos, targpos));
         
         if(!lastDiving && dist > 200) 
             teleport(entity, targpos);
+    }
+
+    // How far this player's character is carried here in one frame, and how often that is faster than its own
+    // travel can account for. A copy has to close a gap quicker than the player makes it, or it never catches
+    // up at all, so twice the speed its game reports is allowed; above that it is seen to appear rather than
+    // to ride, which is the teleport a friend sees. Below a floor nothing counts: a copy standing still may
+    // still be tidied by a few centimetres.
+    public function measureCarry()
+    {
+        var body : CEntity;
+        var here : Vector;
+        var now, dt, step, rate, gap : float;
+
+        now = theGame.GetEngineTimeAsSeconds();
+        body = ghost;
+        if(isMounted && horse)
+        {
+            body = horse;
+        }
+        if(!body)
+        {
+            carryAt = 0;
+            return;
+        }
+        if(body != carryBody)
+        {
+            carryBody = body;
+            carryAt = 0;
+        }
+
+        // how often this player's game is heard from, for the lead a slide is given
+        if(VecDistance(pos, posSeen) > 0.001)
+        {
+            gap = now - posSeenAt;
+            if(posSeenAt > 0 && gap > 0.001 && gap < 1.0)
+            {
+                posPeriod = posPeriod <= 0 ? gap : posPeriod * 0.8 + gap * 0.2;
+            }
+            posSeen = pos;
+            posSeenAt = now;
+        }
+
+        // its own game put it somewhere else: fast travel, a quest, a test lifting a wedged horse out
+        if(carryAt > 0 && VecDistance(carryTold, pos) > 1.0)
+        {
+            toldJumpFar = VecDistance(carryTold, pos);
+            toldJumpAt = now;
+        }
+
+        here = body.GetWorldPosition();
+        dt = now - carryAt;
+        // what its player is doing, falling off no faster than a horse pulls up
+        carryOwn = MaxF(MaxF(speed, horseSpeed), carryOwn - ClampF(dt, 0, 0.5) * 6.0);
+        // whole frames only: within one the engine has not moved the body since the last look
+        if(carryAt > 0 && dt > 0.02 && dt < 0.5)
+        {
+            step = VecDistance(carryFrom, here);
+            rate = step / dt;
+            if(rate > carryStep)
+            {
+                carryStep = rate;
+            }
+            if(step > carryFar)
+            {
+                carryFar = step;
+            }
+            // A character whose own game put it somewhere else has to appear here too, and the position
+            // this world was told moved just as far. The body follows a frame or two behind the word of it,
+            // so the two are matched over a moment rather than within the one frame.
+            if(step > 0.2 && rate > CarryAllowed()
+                && step > VecDistance(carryTold, pos) * 1.5 + 0.1
+                && (now - toldJumpAt > 0.5 || step > toldJumpFar * 1.5 + 1.0))
+            {
+                carryJumps += 1;
+                theGame.r_getMultiplayerClient().getCoopEnemies().LogSync("RJ", carryJumps, 0,
+                    FloatToStringPrec(step, 2) + "m/" + FloatToStringPrec(dt, 3) + "s=" + FloatToStringPrec(rate, 1)
+                    + " allowed=" + FloatToStringPrec(CarryAllowed(), 1) + " mounted=" + isMounted
+                    + " off=" + FloatToStringPrec(VecDistance(here, pos), 2)
+                    + " ownSpeed=" + FloatToStringPrec(MaxF(speed, horseSpeed), 1)
+                    + " told=" + FloatToStringPrec(VecDistance(carryTold, pos), 2)
+                    + "/" + FloatToStringPrec(toldJumpFar, 1) + " " + FloatToStringPrec(now - toldJumpAt, 2) + "s ago"
+                    + " heard=" + FloatToStringPrec(posPeriod, 3));
+            }
+        }
+        if(carryAt > 0 && dt > 0.02 && dt < 0.5)
+        {
+            carryDt = dt;
+        }
+        carryFrom = here;
+        carryTold = pos;
+        carryAt = now;
+    }
+
+    // The fastest a copy may be carried: twice what its player has lately been doing, and never less than a
+    // brisk walk. Lately, not this instant - a horse reined in drops from a gallop to a trot between one
+    // frame and the next, while the copy still has the gallop's ground to make up.
+    public function CarryAllowed() : float
+    {
+        return MaxF(carryOwn * 2.0, 6.0);
+    }
+
+    // As far along the way to `aim` as this player's own riding would carry it before the next frame, and no
+    // further. The movement adjustor does not spread a slide over the time it is given, so a gap handed to it
+    // whole is covered in one frame, and a copy a metre or two behind - which is all that jitter or a lost
+    // packet costs - is seen to leap rather than to ride. Three quarters of what the tests forgive, so the
+    // ground it does cover is never the ground they complain about.
+    // how long to give a bounded slide: the frame it was bounded for. A slide handed a longer time than
+    // that lands only part of itself before the next frame cancels it and asks again, and the copy creeps.
+    public function carryDuration() : float
+    {
+        return ClampF(carryDt * carrySlide, 0.016, 0.4);
+    }
+
+    public function withinReach(here : Vector, aim : Vector) : Vector
+    {
+        var gap, reach : float;
+
+        gap = VecDistance(here, aim);
+        reach = CarryAllowed() * carryReach * ClampF(carryDt, 0.016, 0.1);
+        if(gap <= reach || gap <= 0.001)
+        {
+            return aim;
+        }
+        return here + (aim - here) * (reach / gap);
+    }
+
+    // the tests measure a stretch of riding, not the attaching and streaming that came before it
+    public function clearCarry()
+    {
+        carryStep = 0;
+        carryJumps = 0;
+        carryFar = 0;
+        carryAt = 0;
+        putBacks = 0;
     }
 
     private function setHeading(entity:CActor , targpos:Vector)
@@ -6827,6 +6978,7 @@ state WO_UpdateCPC in r_RemotePlayer
         var adjustor : CMovementAdjustor; 
         var ticket : SMovementAdjustmentRequestTicket; 
         var targpos, entpos: Vector;
+        var rot : EulerAngles;
         var toRide : CActor;
 
         if(!parent.horse || !parent.ghost)
@@ -6842,18 +6994,28 @@ state WO_UpdateCPC in r_RemotePlayer
         }
 
         targpos = parent.pos;
-        entpos = parent.ghost.GetWorldPosition();
+        entpos = toRide.GetWorldPosition();
+
+        // Far enough behind that no ride could close it: its rider has travelled, and the horse is meant to
+        // appear where they now are rather than gallop the length of Velen to catch up.
+        if(VecDistance(entpos, targpos) > 30.0)
+        {
+            rot = toRide.GetWorldRotation();
+            rot.Yaw = parent.heading;
+            toRide.TeleportWithRotation(targpos, rot);
+            return;
+        }
 
         adjustor = parent.horse.GetMovingAgentComponent().GetMovementAdjustor();
         
         adjustor.Cancel(adjustor.GetRequest('w3mp_horsesync'));
         ticket = adjustor.CreateNewRequest('w3mp_horsesync');
 
-        adjustor.AdjustmentDuration(ticket, parent.horseAdjustorDelay);
+        adjustor.AdjustmentDuration(ticket, parent.carryDuration());
         adjustor.AdjustLocationVertically(ticket, true);
         adjustor.ScaleAnimationLocationVertically(ticket, true);
         adjustor.RotateTo(ticket, parent.heading); 
-        adjustor.SlideTo(ticket, targpos);
+        adjustor.SlideTo(ticket, parent.withinReach(entpos, targpos));
 
         if(!parent.horse.GetVisibility())
         {

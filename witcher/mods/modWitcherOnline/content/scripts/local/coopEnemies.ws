@@ -6919,7 +6919,7 @@ class r_CoopEnemies
     }
 
     // tests: one attack-sync event; at most 400 kept until the test bot drains them
-    private function LogSync(kind : string, netId : int, seq : int, what : string, optional wall : int)
+    public function LogSync(kind : string, netId : int, seq : int, what : string, optional wall : int)
     {
         if(syncLog.Size() >= 400)
         {
