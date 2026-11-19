@@ -656,9 +656,6 @@ class r_CoopEnemies
     private var peopleHeardAt : float;        // when the last list came; the figures go when they stop
     private var drops : array<r_CoopDrop>;      // the leader: deaths whose loot is not out yet
     private var dropsHere : array<r_CoopDropHere>;  // a member: loot lists waiting for their copy's body
-    private var givenDropLeader : string;
-    private var givenDropEpoch : int;
-    private var givenDropIds : array<int>;  // consumed loot lists in this leader epoch
     public var dropsSent : int;
     public var dropItemsSent : int;
     public var dropsHeard : int;
@@ -3545,17 +3542,6 @@ class r_CoopEnemies
         {
             return;
         }
-        if(givenDropLeader == sender && givenDropEpoch == dropEpoch && givenDropIds.Contains(netId))
-        {
-            return;
-        }
-        for(i = 0; i < dropsHere.Size(); i += 1)
-        {
-            if(dropsHere[i].leader == sender && dropsHere[i].epoch == dropEpoch && dropsHere[i].netId == netId)
-            {
-                return;
-            }
-        }
         dropsHeard += 1;
         d = new r_CoopDropHere in this;
         d.leader = sender;
@@ -3585,13 +3571,6 @@ class r_CoopEnemies
         var p : r_CoopPuppet;
         var i : int;
 
-        if(givenDropLeader != leaderName || givenDropEpoch != leaderEpoch)
-        {
-            givenDropLeader = leaderName;
-            givenDropEpoch = leaderEpoch;
-            givenDropIds.Clear();
-        }
-
         for(i = dropsHere.Size() - 1; i >= 0; i -= 1)
         {
             d = dropsHere[i];
@@ -3609,16 +3588,10 @@ class r_CoopEnemies
                 }
                 continue;
             }
-            if(givenDropIds.Contains(d.netId))
-            {
-                dropsHere.Erase(i);
-                continue;
-            }
             p = PuppetByNetId(d.netId);
             if(p && p.npc && !p.alive && !p.npc.IsAlive())
             {
                 GiveDropTo(p, d);
-                givenDropIds.PushBack(d.netId);
                 dropsHere.Erase(i);
                 continue;
             }
