@@ -85,6 +85,8 @@ class r_CoopDrop
 // the same thing arriving in a member's game, waiting for its copy's body
 class r_CoopDropHere
 {
+    public var leader : string;
+    public var epoch : int;
     public var netId : int;
     public var heardAt : float;
     public var items : array<name>;
@@ -403,6 +405,7 @@ class r_CoopAck
     public var user : string;
     public var session : int;
     public var lastSeq : int;
+    public var retiredSessions : array<int>;
 }
 
 class r_CoopEnemies
@@ -451,6 +454,7 @@ class r_CoopEnemies
     private var leaderName : string;
     private var leaderListsEffects : bool;  // its game lists its monsters' effects (a newer version: it sends its own with "hz")
     private var leaderEpoch : int;
+    private var lastSnapshotSeq : int;
     private var lastSnapshotAt : float;
     private var pendingHits : array<r_CoopHit>;
     private var lastPuppetAction : W3DamageAction;  // this player's last damaging hit on a puppet, and its claim
@@ -958,6 +962,7 @@ class r_CoopEnemies
                 leaderName = client.getJoinedParty();
                 leaderListsEffects = false;
                 leaderEpoch = 0;
+                lastSnapshotSeq = 0;
                 hurtAck = 0;
                 delayedHurts.Clear();
             }
@@ -1828,6 +1833,12 @@ class r_CoopEnemies
             {
                 if(acks[i].session != memberSession)
                 {
+                    // Session ids are random, not ordered. A late packet must not revive an old session.
+                    if(acks[i].retiredSessions.Contains(memberSession))
+                    {
+                        return NULL;
+                    }
+                    acks[i].retiredSessions.PushBack(acks[i].session);
                     acks[i].session = memberSession;
                     acks[i].lastSeq = 0;
                 }
@@ -1859,8 +1870,12 @@ class r_CoopEnemies
             return;
         }
 
-        PruneHurts(sender, StringToInt(WO_Str(4), 0));
         ack = FindAck(sender, StringToInt(WO_Str(3), 0));
+        if(!ack)
+        {
+            return;
+        }
+        PruneHurts(sender, StringToInt(WO_Str(4), 0));
         n = StringToInt(WO_Str(5), 0);
         idx = 6;
         // "seq netId frac effectCount {effect}" per hit; an effect put on without a hit is "effect:seconds"
@@ -3976,17 +3991,25 @@ class r_CoopEnemies
     private function OnDrop(sender : string, count : int)
     {
         var d : r_CoopDropHere;
-        var n, i, idx : int;
+        var dropEpoch, netId, n, i, idx : int;
 
         if(GetRole() != 2 || sender != leaderName || count < 4)
         {
             return;
         }
+        dropEpoch = StringToInt(WO_Str(1), 0);
+        netId = StringToInt(WO_Str(2), 0);
+        n = StringToInt(WO_Str(3), 0);
+        if(dropEpoch == 0 || netId <= 0 || n < 0 || n > (count - 4) / 2)
+        {
+            return;
+        }
         dropsHeard += 1;
         d = new r_CoopDropHere in this;
-        d.netId = StringToInt(WO_Str(2), 0);
+        d.leader = sender;
+        d.epoch = dropEpoch;
+        d.netId = netId;
         d.heardAt = theGame.GetEngineTimeAsSeconds();
-        n = StringToInt(WO_Str(3), 0);
         idx = 4;
         for(i = 0; i < n; i += 1)
         {
@@ -4013,6 +4036,20 @@ class r_CoopEnemies
         for(i = dropsHere.Size() - 1; i >= 0; i -= 1)
         {
             d = dropsHere[i];
+            if(d.leader != leaderName)
+            {
+                dropsHere.Erase(i);
+                continue;
+            }
+            // The loot list may reach us before the snapshot that introduces this epoch.
+            if(leaderEpoch == 0 || d.epoch != leaderEpoch)
+            {
+                if(now - d.heardAt > 15.0)
+                {
+                    dropsHere.Erase(i);
+                }
+                continue;
+            }
             p = PuppetByNetId(d.netId);
             if(p && p.npc && !p.alive && !p.npc.IsAlive())
             {
@@ -5240,7 +5277,7 @@ class r_CoopEnemies
         var attackAnimAt, moveAt : float;
         var animTime, moveAnimText, cutText, attackFx, attackGraph : string;
         var attackCut : bool;
-        var snapshotEpoch, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, moveParam, projSeq, projIndex : int;
+        var snapshotEpoch, snapshotSeq, n, i, idx, netId, tplIndex, attackSeq, hitSeq, hitReaction, moveSeq, moveParam, projSeq, projIndex : int;
         var hp, yaw, projAngle, projSpeed, projRange : float;
         var projFrom, projTo : Vector;
         var alive : bool;
@@ -5252,13 +5289,24 @@ class r_CoopEnemies
             return;
         }
 
+        snapshotEpoch = StringToInt(WO_Str(1), 0);
+        snapshotSeq = StringToInt(WO_Str(2), 0);
+        if(snapshotEpoch == leaderEpoch)
+        {
+            // a delayed snapshot must not undo newer state (or release puppets from an old area)
+            if(snapshotSeq < lastSnapshotSeq)
+            {
+                return;
+            }
+            lastSnapshotSeq = snapshotSeq;
+        }
+
         if(StringToInt(WO_Str(3), 0) != WO_CurrentAreaCode() || !LeaderNear())
         {
             ReleaseAll();
             return;
         }
 
-        snapshotEpoch = StringToInt(WO_Str(1), 0);
         if(snapshotEpoch != leaderEpoch)
         {
             // the leader restarted: its enemy ids and hit acknowledgements start over
@@ -5266,6 +5314,7 @@ class r_CoopEnemies
             pendingHits.Clear();
             hurtAck = 0;
             leaderEpoch = snapshotEpoch;
+            lastSnapshotSeq = snapshotSeq;
         }
         now = theGame.GetEngineTimeAsSeconds();
         gap = now - lastSnapshotAt;
