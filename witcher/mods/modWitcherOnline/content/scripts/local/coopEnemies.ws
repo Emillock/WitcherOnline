@@ -85,6 +85,8 @@ class r_CoopDrop
 // the same thing arriving in a member's game, waiting for its copy's body
 class r_CoopDropHere
 {
+    public var leader : string;
+    public var epoch : int;
     public var netId : int;
     public var heardAt : float;
     public var items : array<name>;
@@ -3854,17 +3856,25 @@ class r_CoopEnemies
     private function OnDrop(sender : string, count : int)
     {
         var d : r_CoopDropHere;
-        var n, i, idx : int;
+        var dropEpoch, netId, n, i, idx : int;
 
         if(GetRole() != 2 || sender != leaderName || count < 4)
         {
             return;
         }
+        dropEpoch = StringToInt(WO_Str(1), 0);
+        netId = StringToInt(WO_Str(2), 0);
+        n = StringToInt(WO_Str(3), 0);
+        if(dropEpoch == 0 || netId <= 0 || n < 0 || n > (count - 4) / 2)
+        {
+            return;
+        }
         dropsHeard += 1;
         d = new r_CoopDropHere in this;
-        d.netId = StringToInt(WO_Str(2), 0);
+        d.leader = sender;
+        d.epoch = dropEpoch;
+        d.netId = netId;
         d.heardAt = theGame.GetEngineTimeAsSeconds();
-        n = StringToInt(WO_Str(3), 0);
         idx = 4;
         for(i = 0; i < n; i += 1)
         {
@@ -3891,6 +3901,20 @@ class r_CoopEnemies
         for(i = dropsHere.Size() - 1; i >= 0; i -= 1)
         {
             d = dropsHere[i];
+            if(d.leader != leaderName)
+            {
+                dropsHere.Erase(i);
+                continue;
+            }
+            // The loot list may reach us before the snapshot that introduces this epoch.
+            if(leaderEpoch == 0 || d.epoch != leaderEpoch)
+            {
+                if(now - d.heardAt > 15.0)
+                {
+                    dropsHere.Erase(i);
+                }
+                continue;
+            }
             p = PuppetByNetId(d.netId);
             if(p && p.npc && !p.alive && !p.npc.IsAlive())
             {
