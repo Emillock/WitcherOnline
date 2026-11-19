@@ -75,10 +75,15 @@ statemachine class r_RemotePlayer
     public var inScene : bool;         // its game is in a cutscene or dialogue (coopEnemies SetScenePresence)
     public var inCutscene : bool;      // ...and it is the kind nobody can act in, not a conversation
     public var putBacks : int;         // times its character here was put back where its game says it stands
+    public var toldFollows : int;      // ...of which this many followed its own game putting it somewhere else
     private var offPlaceSince : float; // since when it has been away from there (0: it is where it belongs)
     public var carryStep : float;      // the fastest its character was seen to move here, m/s
     public var carryJumps : int;       // ...times one frame of that went faster than its own travel explains
     public var carryFar : float;       // and the longest single frame of all that, m
+    public var carryRun : float;       // the fastest it was carried over a quarter of a second, m/s
+    private var runStep : float;       // ...the window that is measured over
+    private var runDt : float;
+    private var runTold : float;
     private var carryFrom : Vector;    // where that character stood a frame ago
     private var carryTold : Vector;    // ...and where its game said it stood, to tell a catch-up from a jump
     private var toldJumpFar : float;   // the last such jump its own game made, and when it was heard of
@@ -6430,6 +6435,18 @@ statemachine class r_RemotePlayer
             setMoveType(entity, 0);
         }
         
+        // Its own game put it somewhere else - fast travel, a quest - and its character belongs there now.
+        // Waiting out the off-place second below first means a friend watches it stand still and then snap: a
+        // second was measured, every time, over a whole suite run.
+        if(dist > 3.0 && toldJumped(4.5, 0.4))
+        {
+            offPlaceSince = 0;
+            toldFollows += 1;
+            putBacks += 1;
+            teleport(entity, targpos);
+            return;
+        }
+
         // Off its place and staying there: a slide cannot climb back out of the water under a pier, so after a
         // second it is simply put where its player stands.
         if(!lastDiving && (dist > 3.0 || verticalDist > 1.5))
@@ -6474,6 +6491,7 @@ statemachine class r_RemotePlayer
         var body : CEntity;
         var here : Vector;
         var now, dt, step, rate, gap : float;
+        var jumped : bool;
 
         now = theGame.GetEngineTimeAsSeconds();
         body = ghost;
@@ -6492,7 +6510,7 @@ statemachine class r_RemotePlayer
             carryAt = 0;
         }
 
-        // how often this player's game is heard from, for the lead a slide is given
+        // how often this player's game is heard from at all, which is what a lag is read against
         if(VecDistance(pos, posSeen) > 0.001)
         {
             gap = now - posSeenAt;
@@ -6528,16 +6546,38 @@ statemachine class r_RemotePlayer
             {
                 carryFar = step;
             }
-            // A character whose own game put it somewhere else has to appear here too, and the position
-            // this world was told moved just as far. The body follows a frame or two behind the word of it,
-            // so the two are matched over a moment rather than within the one frame.
-            if(step > 0.2 && rate > CarryAllowed()
-                && step > VecDistance(carryTold, pos) * 1.5 + 0.1
-                && (now - toldJumpAt > 0.5 || step > toldJumpFar * 1.5 + 1.0))
+            // Judged over a quarter of a second, not one frame. A frame is not what an eye catches, and
+            // the per-frame step swings by its own width for reasons that are not this world's doing: the
+            // positions arrive every 40 ms while frames come every 31, and the body's own gallop animation
+            // moves it in strides. What shows is either an outright appearance - no horse covers a metre in
+            // a frame - or a quarter second of being carried faster than the ride explains.
+            runStep += step;
+            runDt += dt;
+            runTold += VecDistance(carryTold, pos);
+            if(runDt >= 0.25)
+            {
+                if(runStep / runDt > carryRun)
+                {
+                    carryRun = runStep / runDt;
+                }
+                jumped = runStep / runDt > CarryAllowed() && runStep > runTold * 1.5 + 0.2;
+                runStep = 0;
+                runDt = 0;
+                runTold = 0;
+            }
+            if(step > 1.0)
+            {
+                jumped = true;
+            }
+            // a character whose own game put it somewhere else has to appear here too, and is not charged for
+            // following; the body follows a frame or two behind the word of it, so the two are matched over a
+            // moment rather than within the one frame
+            if(jumped && (now - toldJumpAt > 2.0 || step > toldJumpFar * 1.5 + 1.0))
             {
                 carryJumps += 1;
                 theGame.r_getMultiplayerClient().getCoopEnemies().LogSync("RJ", carryJumps, 0,
                     FloatToStringPrec(step, 2) + "m/" + FloatToStringPrec(dt, 3) + "s=" + FloatToStringPrec(rate, 1)
+                    + " over a quarter second=" + FloatToStringPrec(carryRun, 1)
                     + " allowed=" + FloatToStringPrec(CarryAllowed(), 1) + " mounted=" + isMounted
                     + " off=" + FloatToStringPrec(VecDistance(here, pos), 2)
                     + " ownSpeed=" + FloatToStringPrec(MaxF(speed, horseSpeed), 1)
@@ -6545,14 +6585,17 @@ statemachine class r_RemotePlayer
                     + "/" + FloatToStringPrec(toldJumpFar, 1) + " " + FloatToStringPrec(now - toldJumpAt, 2) + "s ago"
                     + " heard=" + FloatToStringPrec(posPeriod, 3));
             }
-        }
-        if(carryAt > 0 && dt > 0.02 && dt < 0.5)
-        {
             carryDt = dt;
         }
         carryFrom = here;
         carryTold = pos;
         carryAt = now;
+    }
+
+    // whether this player's own game put it somewhere else, that far and that recently
+    public function toldJumped(metres : float, within : float) : bool
+    {
+        return toldJumpFar >= metres && theGame.GetEngineTimeAsSeconds() - toldJumpAt <= within;
     }
 
     // The fastest a copy may be carried: twice what its player has lately been doing, and never less than a
@@ -6563,11 +6606,6 @@ statemachine class r_RemotePlayer
         return MaxF(carryOwn * 2.0, 6.0);
     }
 
-    // As far along the way to `aim` as this player's own riding would carry it before the next frame, and no
-    // further. The movement adjustor does not spread a slide over the time it is given, so a gap handed to it
-    // whole is covered in one frame, and a copy a metre or two behind - which is all that jitter or a lost
-    // packet costs - is seen to leap rather than to ride. Three quarters of what the tests forgive, so the
-    // ground it does cover is never the ground they complain about.
     // how long to give a bounded slide: the frame it was bounded for. A slide handed a longer time than
     // that lands only part of itself before the next frame cancels it and asks again, and the copy creeps.
     public function carryDuration() : float
@@ -6575,6 +6613,11 @@ statemachine class r_RemotePlayer
         return ClampF(carryDt * carrySlide, 0.016, 0.4);
     }
 
+    // As far along the way to `aim` as this player's own riding would carry it before the next frame, and no
+    // further. The movement adjustor does not spread a slide over the time it is given, so a gap handed to it
+    // whole is covered in one frame, and a copy a metre or two behind - which is all that jitter or a lost
+    // packet costs - is seen to leap rather than to ride. Three quarters of what the tests forgive, so the
+    // ground it does cover is never the ground they complain about.
     public function withinReach(here : Vector, aim : Vector) : Vector
     {
         var gap, reach : float;
@@ -6594,8 +6637,13 @@ statemachine class r_RemotePlayer
         carryStep = 0;
         carryJumps = 0;
         carryFar = 0;
+        carryRun = 0;
+        runStep = 0;
+        runDt = 0;
+        runTold = 0;
         carryAt = 0;
         putBacks = 0;
+        toldFollows = 0;
     }
 
     private function setHeading(entity:CActor , targpos:Vector)
@@ -6996,9 +7044,11 @@ state WO_UpdateCPC in r_RemotePlayer
         targpos = parent.pos;
         entpos = toRide.GetWorldPosition();
 
-        // Far enough behind that no ride could close it: its rider has travelled, and the horse is meant to
-        // appear where they now are rather than gallop the length of Velen to catch up.
-        if(VecDistance(entpos, targpos) > 30.0)
+        // Far enough behind that no ride could close it, or its own game has just put it somewhere else: its
+        // rider has travelled, and the horse is meant to appear where they now are rather than gallop the
+        // length of Velen to catch up.
+        if(VecDistance(entpos, targpos) > 30.0
+            || (VecDistance(entpos, targpos) > 3.0 && parent.toldJumped(4.5, 0.4)))
         {
             rot = toRide.GetWorldRotation();
             rot.Yaw = parent.heading;
