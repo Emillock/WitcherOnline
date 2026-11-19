@@ -77,6 +77,7 @@ statemachine class r_RemotePlayer
     public var putBacks : int;         // times its character here was put back where its game says it stands
     public var toldFollows : int;      // ...of which this many followed its own game putting it somewhere else
     private var offPlaceSince : float; // since when it has been away from there (0: it is where it belongs)
+    private var moveFromPos : Vector;  // where its game said it stood a window ago, for which way it travels
     public var carryStep : float;      // the fastest its character was seen to move here, m/s
     public var carryJumps : int;       // ...times one frame of that went faster than its own travel explains
     public var carryFar : float;       // and the longest single frame of all that, m
@@ -6352,7 +6353,7 @@ statemachine class r_RemotePlayer
 
     private function moveEntity(entity:CActor , targpos:Vector)
     {
-        var dist, verticalDist, waterLevel : float;
+        var dist, verticalDist, waterLevel, told, toldVertical : float;
         var entpos : Vector;
         var adjustor : CMovementAdjustor; 
         var ticket : SMovementAdjustmentRequestTicket; 
@@ -6377,34 +6378,52 @@ statemachine class r_RemotePlayer
             // two centimetres in a third of a second: slower than anything a player can walk, and a paused game
             // moves not at all. In three dimensions, so climbing a ladder counts as moving.
             targetMoving = lastTargAt == 0 || VecDistance(targpos, lastTargPos) > 0.02;
+            if(lastTargAt == 0)
+            {
+                moveFromPos = targpos;   // nothing to compare the first window with
+            }
+            else
+            {
+                moveFromPos = lastTargPos;   // where its game said it stood a window ago
+            }
             lastTargPos = targpos;
             lastTargAt = theGame.GetEngineTimeAsSeconds();
         }
 
-        if (dist > 0.01f && targetMoving)
-            lastMoveDir = ClassifyMoveDirRelativeToCamera(entpos, targpos, heading);
+        // Which way this player is travelling, read off the positions its own game sends rather than off how
+        // far its character here has fallen behind them. The lag used to stand in for the travel - a ghost
+        // trailing its target by a centimetre meant walking, half a metre meant running - and that only worked
+        // while the slide left a lag to read. Now that the character keeps up (withinReach), the lag is
+        // sometimes nothing at all even at a run, and a ghost was seen sliding about with no walk on it.
+        told = VecDistance(moveFromPos, targpos);
+        toldVertical = AbsF(targpos.Z - moveFromPos.Z);
+
+        if (told > 0.01f && targetMoving)
+            lastMoveDir = ClassifyMoveDirRelativeToCamera(moveFromPos, targpos, heading);
         else
             lastMoveDir = 'none';
 
-        if (dist > 0.5f && targetMoving)
-            lastMoveDirAlt = ClassifyMoveDirRelativeToCamera(entpos, targpos, heading);
+        // and how fast, for the cycles that only suit a real run: what its own game reports, which is the
+        // plainest statement of it there is
+        if (speed > 1.0f && targetMoving)
+            lastMoveDirAlt = ClassifyMoveDirRelativeToCamera(moveFromPos, targpos, heading);
         else
             lastMoveDirAlt = 'none';
 
-        if (dist > 1.0f && targetMoving)
-            lastMoveDirAltAlt = ClassifyMoveDirRelativeToCamera(entpos, targpos, heading);
+        if (speed > 3.0f && targetMoving)
+            lastMoveDirAltAlt = ClassifyMoveDirRelativeToCamera(moveFromPos, targpos, heading);
         else
             lastMoveDirAltAlt = 'none';
 
-        if (verticalDist > 0.25f && targetMoving)
-            lastVerticalMoveDir = ClassifyVerticalMoveDir(entpos, targpos);
+        if (toldVertical > 0.25f && targetMoving)
+            lastVerticalMoveDir = ClassifyVerticalMoveDir(moveFromPos, targpos);
         else
             lastVerticalMoveDir = 'none';
 
         if(isLadder)
         {
-            if (verticalDist > 0.15f && targetMoving)
-                lastVerticalMoveDir = ClassifyVerticalMoveDir(entpos, targpos);
+            if (toldVertical > 0.15f && targetMoving)
+                lastVerticalMoveDir = ClassifyVerticalMoveDir(moveFromPos, targpos);
             else
                 lastVerticalMoveDir = 'none';
         }
