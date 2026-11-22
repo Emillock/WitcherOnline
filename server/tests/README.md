@@ -14,7 +14,7 @@ python3 server/tests/udp_review_test.py server/build/test
 The timeout regression exercises stale cleanup decisions with synthetic timestamps.
 The co-op test checks channel ordering and the existing channel-capacity behavior.
 The session-lock test pauses one player's UDP send and verifies that another player
-can send and that a kick waits for the first player's in-flight update.
+can send, that a console kick for another player proceeds, and that a kick for the\nfirst player waits for its in-flight update.
 The UDP test runs the real Java server with three loopback clients; one disconnects
 and rejoins with its original ID while the others keep exchanging updates.
 

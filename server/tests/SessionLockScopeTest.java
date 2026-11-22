@@ -83,6 +83,11 @@ public class SessionLockScopeTest
 
         Map<String, PlayerSession> players = players();
         players.clear();
+        // The production console has its own thread. Register Bob before pausing Alice's send.
+        try (DatagramSocket initial = new DatagramSocket())
+        {
+            move(handler, initial, "Bob", 32002);
+        }
         try (BlockingSocket socket = new BlockingSocket())
         {
             FutureTask<Void> alice = new FutureTask<>(() -> {
@@ -109,6 +114,18 @@ public class SessionLockScopeTest
                 bob.get(3, TimeUnit.SECONDS); // Bob must not wait for Alice's slow send.
                 check(players.containsKey("bob"), "another player could not update");
 
+                // A real console kick for Bob must not wait for Alice's blocked UDP send.
+                PlayerSession unrelated = players.get("bob");
+                FutureTask<Void> otherKick = new FutureTask<>(() -> {
+                    kick.invoke(null, socket, unrelated, "KICK\tTest");
+                    return null;
+                });
+                Thread otherRemover = new Thread(otherKick, "kick-other-player");
+                otherRemover.setDaemon(true);
+                otherRemover.start();
+                otherKick.get(3, TimeUnit.SECONDS);
+                check(!players.containsKey("bob"), "unrelated player's kick was blocked");
+
                 PlayerSession victim = players.get("alice");
                 check(victim != null, "Alice is missing");
                 FutureTask<Void> removal = new FutureTask<>(() -> {
@@ -129,8 +146,8 @@ public class SessionLockScopeTest
                 socket.release.countDown();
                 alice.get(5, TimeUnit.SECONDS);
                 removal.get(5, TimeUnit.SECONDS);
-                check(!players.containsKey("alice") && players.containsKey("bob"),
-                        "kicking one player changed another session");
+                check(!players.containsKey("alice") && !players.containsKey("bob"),
+                        "console kicks left active sessions behind");
             }
             finally
             {
@@ -138,6 +155,6 @@ public class SessionLockScopeTest
                 alice.get(5, TimeUnit.SECONDS);
             }
         }
-        System.out.println("PASS: slow send does not hold registry lock; kick waits per player");
+        System.out.println("PASS: slow send leaves other console kicks unblocked; own kick waits");
     }
 }
