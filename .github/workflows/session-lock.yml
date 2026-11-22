@@ -1,0 +1,43 @@
+name: Session lock regression
+
+on:
+  push:
+    branches:
+      - fix/narrow-session-lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile full Java server and tests
+        run: |
+          mkdir -p server/build/test
+          javac -encoding UTF-8 -Xlint:all -d server/build/test server/src/*.java server/tests/*.java
+      - name: Run regressions
+        run: |
+          java -cp server/build/test SessionTimeoutTest
+          java -cp server/build/test CoopOrderingTest
+          java -cp server/build/test SessionLockScopeTest
+      - name: Confirm the lock test fails against upstream
+        run: |
+          mkdir -p server/build/baseline
+          git show origin/main:server/src/WitcherServer.java > server/build/baseline/WitcherServer.java
+          javac -encoding UTF-8 -d server/build/baseline             server/build/baseline/WitcherServer.java             server/src/ClientEndpoint.java server/src/PlayerSession.java             server/src/UsernameReservation.java server/tests/SessionLockScopeTest.java
+          if java -cp server/build/baseline SessionLockScopeTest; then
+            echo "Expected the original global-lock implementation to fail" >&2
+            exit 1
+          fi
+      - name: Exercise real server with three UDP clients
+        run: python3 server/tests/udp_review_test.py server/build/test
