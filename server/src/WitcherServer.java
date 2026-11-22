@@ -602,15 +602,15 @@ public class WitcherServer
         synchronized (WitcherServer.class)
         {
             current = players.get(usernameKey);
-    
+
             if (current != null)
             {
                 String currentIp = normalizeIp(current.endpoint.address.getHostAddress());
-    
+
                 boolean sameEndpoint = current.endpoint.equals(sender);
                 boolean sameIp = currentIp.equals(senderIp);
                 boolean expired = (now - current.lastSeen) > PLAYER_TIMEOUT_NANOS;
-    
+
                 if (sameEndpoint)
                 {
                     // normal packet from same endpoint
@@ -624,16 +624,16 @@ public class WitcherServer
                 else if (expired)
                 {
                     boolean reserved = reserveTimedOutPlayer(usernameKey, current, now);
-    
+
                     if (reserved)
                     {
                         dbg("Rejected %s from %s because username is reserved for previous IP\n", username, sender);
                         safeSend(socket, sender, "ERROR\tUSERNAME_TAKEN");
                         return;
                     }
-    
+
                     current = players.get(usernameKey);
-    
+
                     if (current != null)
                     {
                         dbg("Rejected duplicate username %s from %s because owned by %s\n",
@@ -650,17 +650,17 @@ public class WitcherServer
                     return;
                 }
             }
-    
+
             if (!players.containsKey(usernameKey))
             {
                 UsernameReservation reservation = reservedUsernames.get(usernameKey);
-    
+
                 if (reservation != null && now >= reservation.expiresAt)
                 {
                     reservedUsernames.remove(usernameKey, reservation);
                     reservation = null;
                 }
-    
+
                 if (reservation != null)
                 {
                     if (!reservation.ip.equals(senderIp))
@@ -670,17 +670,17 @@ public class WitcherServer
                         safeSend(socket, sender, "ERROR\tUSERNAME_TAKEN");
                         return;
                     }
-    
+
                     reservedUsernames.remove(usernameKey, reservation);
                     dbg("Restored reserved username %s for %s\n", username, sender);
                 }
-    
+
                 int playerIdToUse;
-    
+
                 if (packetPlayerId > 0)
                 {
                     PlayerSession idOwner = findPlayerById(packetPlayerId);
-    
+
                     if (idOwner != null && !normalizeUsernameKey(idOwner.username).equals(usernameKey))
                     {
                         dbg("Rejected username %s from %s because requested id=%d is already owned by %s\n",
@@ -688,11 +688,11 @@ public class WitcherServer
                                 sender,
                                 packetPlayerId,
                                 idOwner.username);
-    
+
                         safeSend(socket, sender, "ERROR\tID_TAKEN");
                         return;
                     }
-    
+
                     playerIdToUse = packetPlayerId;
                     bumpNextPlayerIdPast(playerIdToUse);
                 }
@@ -700,10 +700,10 @@ public class WitcherServer
                 {
                     playerIdToUse = allocateNewPlayerId();
                 }
-    
+
                 PlayerSession created = new PlayerSession(playerIdToUse, username, sender, now);
                 PlayerSession race = players.putIfAbsent(usernameKey, created);
-    
+
                 if (race == null)
                 {
                     current = created;
@@ -712,9 +712,9 @@ public class WitcherServer
                 else
                 {
                     current = race;
-    
+
                     String currentIp = normalizeIp(current.endpoint.address.getHostAddress());
-    
+
                     if (!currentIp.equals(senderIp) && !current.endpoint.equals(sender))
                     {
                         dbg("Rejected duplicate username %s from %s because owned by %s\n",
@@ -722,11 +722,11 @@ public class WitcherServer
                         safeSend(socket, sender, "ERROR\tUSERNAME_TAKEN");
                         return;
                     }
-    
+
                     current.endpoint = sender;
                 }
             }
-    
+
             current.lastSeen = now;
         }
 
@@ -741,76 +741,76 @@ public class WitcherServer
 
             List<String> fields = new ArrayList<>();
 
-        for (int i = fieldsStart; i < parts.length; i++)
-        {
-            fields.add(unescapeField(parts[i]));
-        }
-
-        List<String> frozenFields = Collections.unmodifiableList(fields);
-
-        if ("MOVE".equals(opcode))
-        {
-            if (frozenFields.size() < 8)
+            for (int i = fieldsStart; i < parts.length; i++)
             {
+                fields.add(unescapeField(parts[i]));
+            }
+
+            List<String> frozenFields = Collections.unmodifiableList(fields);
+
+            if ("MOVE".equals(opcode))
+            {
+                if (frozenFields.size() < 8)
+                {
+                    return;
+                }
+
+                int sent = broadcastChunk(socket, snapshotRecipients(), current, "MOVE", frozenFields);
+                totalPacketsSent.addAndGet(sent);
                 return;
             }
 
-            int sent = broadcastChunk(socket, snapshotRecipients(), current, "MOVE", frozenFields);
-            totalPacketsSent.addAndGet(sent);
-            return;
-        }
-
-        if ("COOP".equals(opcode))
-        {
-            String channel = frozenFields.isEmpty() ? "" : frozenFields.get(0);
-
-            // forwarded at once: a monster's attack shouldn't wait up to a broadcast tick (100 ms) to reach members
-            PlayerSession session = current;
-            int sent = session.forwardCoop(channel, frozenFields, MAX_COOP_CHANNELS,
-                    value -> broadcastChunk(socket, snapshotRecipients(), session, "COOP", value));
-
-            if (sent == PlayerSession.COOP_REFUSED)
+            if ("COOP".equals(opcode))
             {
-                // dropping it in silence reads like a mod that sends nothing: name it, once
-                if (!channel.isEmpty() && coopChannelsDropped.add(channel))
+                String channel = frozenFields.isEmpty() ? "" : frozenFields.get(0);
+
+                // forwarded at once: a monster's attack shouldn't wait up to a broadcast tick (100 ms) to reach members
+                PlayerSession session = current;
+                int sent = session.forwardCoop(channel, frozenFields, MAX_COOP_CHANNELS,
+                        value -> broadcastChunk(socket, snapshotRecipients(), session, "COOP", value));
+
+                if (sent == PlayerSession.COOP_REFUSED)
                 {
-                    dbg("Co-op channel %s dropped (%s): nobody will receive it\n", channel,
-                            channel.length() > 8
-                                    ? "a channel name may be 8 characters at most"
-                                    : session.coopChannelCount() + " channels already in use, the limit is " + MAX_COOP_CHANNELS);
+                    // dropping it in silence reads like a mod that sends nothing: name it, once
+                    if (!channel.isEmpty() && coopChannelsDropped.add(channel))
+                    {
+                        dbg("Co-op channel %s dropped (%s): nobody will receive it\n", channel,
+                                channel.length() > 8
+                                        ? "a channel name may be 8 characters at most"
+                                        : session.coopChannelCount() + " channels already in use, the limit is " + MAX_COOP_CHANNELS);
+                    }
                 }
+                else
+                {
+                    totalPacketsSent.addAndGet(sent);
+                }
+                return;
             }
-            else
-            {
-                totalPacketsSent.addAndGet(sent);
-            }
-            return;
-        }
 
-        if ("UPDATE1A".equals(opcode))
-        {
-            current.update1AFields = frozenFields;
-        }
-        else if ("UPDATE1B".equals(opcode))
-        {
-            current.update1BFields = frozenFields;
-        }
-        else if ("UPDATE2A".equals(opcode))
-        {
-            current.update2AFields = frozenFields;
-        }
-        else if ("UPDATE2B".equals(opcode))
-        {
-            current.update2BFields = frozenFields;
-        }
-        else if ("UPDATE3".equals(opcode))
-        {
-            current.update3Fields = frozenFields;
-        }
-        else if ("UPDATE4".equals(opcode))
-        {
-            current.update4Fields = frozenFields;
-        }
+            if ("UPDATE1A".equals(opcode))
+            {
+                current.update1AFields = frozenFields;
+            }
+            else if ("UPDATE1B".equals(opcode))
+            {
+                current.update1BFields = frozenFields;
+            }
+            else if ("UPDATE2A".equals(opcode))
+            {
+                current.update2AFields = frozenFields;
+            }
+            else if ("UPDATE2B".equals(opcode))
+            {
+                current.update2BFields = frozenFields;
+            }
+            else if ("UPDATE3".equals(opcode))
+            {
+                current.update3Fields = frozenFields;
+            }
+            else if ("UPDATE4".equals(opcode))
+            {
+                current.update4Fields = frozenFields;
+            }
         }
     }
 
@@ -1263,10 +1263,10 @@ public class WitcherServer
         synchronized (victim)
         {
             String usernameKey = normalizeUsernameKey(victim.username);
-    
+
             PlayerSession removed = players.remove(usernameKey);
             reservedUsernames.remove(usernameKey);
-    
+
             if (removed != null)
             {
                 safeSend(socket, removed.endpoint, kickText);
@@ -1943,19 +1943,19 @@ public class WitcherServer
             {
                 return false;
             }
-    
+
             String ip = normalizeIp(session.endpoint.address.getHostAddress());
             reservedUsernames.put(usernameKey, new UsernameReservation(
                     session.username,
                     ip,
                     now + USERNAME_HOLD_NANOS
             ));
-    
+
             dbg("Timed out player %s; reserving username for %d seconds to IP %s\n",
                     session.username,
                     USERNAME_HOLD_NANOS / 1_000_000_000L,
                     ip);
-    
+
             return true;
         }
     }
