@@ -82,6 +82,7 @@ statemachine class r_RemotePlayer
     public var carryJumps : int;       // ...times one frame of that went faster than its own travel explains
     public var carryFar : float;       // and the longest single frame of all that, m
     public var carryRun : float;       // the fastest it was carried over a quarter of a second, m/s
+    public var carryAnimStep : float;  // ...and the fastest one of its own animations moved it, m/s
     private var runStep : float;       // ...the window that is measured over
     private var runDt : float;
     private var runTold : float;
@@ -6518,7 +6519,11 @@ statemachine class r_RemotePlayer
         {
             body = horse;
         }
-        if(!body)
+        // Only the bodies this code drives. A passenger on another player's horse is carried by that horse, a
+        // sailor by a boat and a polymorph by its own entity, and none of them are steered towards the position
+        // this player's game sends - measuring them scored a passenger's ghost twelve metres out of place for
+        // riding where its driver took it.
+        if(!body || isRiding || isSailing || morphActive)
         {
             carryAt = 0;
             return;
@@ -6557,6 +6562,16 @@ statemachine class r_RemotePlayer
         {
             step = VecDistance(carryFrom, here);
             rate = step / dt;
+            // An animation of this player's own playing here moves the body by its own root motion - a dodge
+            // or a roll covers metres - which is that player's movement, not this world carrying its
+            // character about. So while one plays, the allowance rises to what root motion can account for.
+            // It is not a blanket excuse: the ghost is almost always playing something, idle loops included,
+            // and taking every such frame as the animation's work hid a twenty-metre put-back behind a
+            // reading of 590 m/s. Nothing animated covers a metre in a frame.
+            if(isAnimPlaying)
+            {
+                carryAnimStep = MaxF(carryAnimStep, rate);
+            }
             if(rate > carryStep)
             {
                 carryStep = rate;
@@ -6594,12 +6609,18 @@ statemachine class r_RemotePlayer
             if(jumped && (now - toldJumpAt > 2.0 || step > toldJumpFar * 1.5 + 1.0))
             {
                 carryJumps += 1;
+                // the window that held this frame has been answered for: left standing it reports the same
+                // lurch a second time when it closes, a frame or two later and with a step of nothing
+                runStep = 0;
+                runDt = 0;
+                runTold = 0;
                 theGame.r_getMultiplayerClient().getCoopEnemies().LogSync("RJ", carryJumps, 0,
                     FloatToStringPrec(step, 2) + "m/" + FloatToStringPrec(dt, 3) + "s=" + FloatToStringPrec(rate, 1)
                     + " over a quarter second=" + FloatToStringPrec(carryRun, 1)
                     + " allowed=" + FloatToStringPrec(CarryAllowed(), 1) + " mounted=" + isMounted
                     + " off=" + FloatToStringPrec(VecDistance(here, pos), 2)
                     + " ownSpeed=" + FloatToStringPrec(MaxF(speed, horseSpeed), 1)
+                    + " anim=" + NameToString(currentType)
                     + " told=" + FloatToStringPrec(VecDistance(carryTold, pos), 2)
                     + "/" + FloatToStringPrec(toldJumpFar, 1) + " " + FloatToStringPrec(now - toldJumpAt, 2) + "s ago"
                     + " heard=" + FloatToStringPrec(posPeriod, 3));
@@ -6619,9 +6640,14 @@ statemachine class r_RemotePlayer
 
     // The fastest a copy may be carried: twice what its player has lately been doing, and never less than a
     // brisk walk. Lately, not this instant - a horse reined in drops from a gallop to a trot between one
-    // frame and the next, while the copy still has the gallop's ground to make up.
+    // frame and the next, while the copy still has the gallop's ground to make up. While an animation of its
+    // own plays, root motion is on top of that: a roll or a charge carries a body several metres a second.
     public function CarryAllowed() : float
     {
+        if(isAnimPlaying)
+        {
+            return MaxF(carryOwn * 2.0, 10.0);
+        }
         return MaxF(carryOwn * 2.0, 6.0);
     }
 
@@ -6657,6 +6683,7 @@ statemachine class r_RemotePlayer
         carryJumps = 0;
         carryFar = 0;
         carryRun = 0;
+        carryAnimStep = 0;
         runStep = 0;
         runDt = 0;
         runTold = 0;
