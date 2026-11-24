@@ -1,0 +1,35 @@
+name: Session lock regression
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile full Java server and tests
+        run: |
+          mkdir -p server/build/test
+          javac -encoding UTF-8 -Xlint:all -d server/build/test server/src/*.java server/tests/*.java
+      - name: Run regressions
+        run: |
+          java -cp server/build/test SessionTimeoutTest
+          java -cp server/build/test CoopOrderingTest
+          java -cp server/build/test SessionLockScopeTest
+      - name: Exercise real server with three UDP clients
+        run: python3 server/tests/udp_review_test.py server/build/test
