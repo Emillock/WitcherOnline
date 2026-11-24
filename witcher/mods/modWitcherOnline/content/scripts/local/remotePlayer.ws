@@ -6514,16 +6514,27 @@ statemachine class r_RemotePlayer
         var jumped : bool;
 
         now = theGame.GetEngineTimeAsSeconds();
+        // Whichever body stands for this player here, since each of them is slid towards the position its game
+        // sends - the boat and the polymorph by moveBoat and moveMorph, which still do it the old way and
+        // which nothing in the harness can exercise (a boat's gear is changed by the engine from input, with
+        // no setter a script can reach), so the figures are here for a real session to answer with.
         body = ghost;
-        if(isMounted && horse)
+        if(morphActive && morph)
+        {
+            body = morph;
+        }
+        else if(isSailing && boat)
+        {
+            body = boat;
+        }
+        else if(isMounted && horse)
         {
             body = horse;
         }
-        // Only the bodies this code drives. A passenger on another player's horse is carried by that horse, a
-        // sailor by a boat and a polymorph by its own entity, and none of them are steered towards the position
-        // this player's game sends - measuring them scored a passenger's ghost twelve metres out of place for
-        // riding where its driver took it.
-        if(!body || isRiding || isSailing || morphActive)
+        // A passenger on another player's horse is the one exception: it is carried by that horse and steered
+        // nowhere by this code, and measuring it scored a ghost twelve metres out of place for riding where
+        // its driver took it.
+        if(!body || isRiding)
         {
             carryAt = 0;
             return;
